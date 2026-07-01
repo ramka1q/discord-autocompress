@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+.autoupdate
+version.txt
+discord-autocompress-setup.zip
+*.mp4
+*.mkv
+*.mov
+*.webm
+*_discord_*.mp4
+_d2p_passlog*
+.discord_overlay.json
+.discord_toolbox.json
+.discord_autowatch.json

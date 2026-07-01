@@ -1,0 +1,19 @@
+{
+  "files": [
+    "dc_core.py",
+    "discord_overlay.py",
+    "editor.py",
+    "discord_autowatch.py",
+    "discord_compressor.py",
+    "discord_toolbox.py",
+    "update.py",
+    "Update now.bat",
+    "autostart_enable.ps1",
+    "autostart_disable.ps1",
+    "Запустити фон (прихований).bat",
+    "Зупинити фон.bat",
+    "Налаштування.bat",
+    "Стиснути відео.bat",
+    "Авто-стиснення.bat"
+  ]
+}

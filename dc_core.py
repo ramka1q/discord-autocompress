@@ -1,0 +1,319 @@
+#!/usr/bin/env python3
+"""
+dc_core — спільне ядро стиснення відео під Discord (через ffmpeg).
+Використовується і ручним компресором (discord_compressor.py),
+і авто-вартовим (discord_autowatch.py).
+Тільки стандартна бібліотека + ffmpeg/ffprobe у PATH.
+"""
+import math
+import os
+import re
+import subprocess
+
+NO_WINDOW = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+TIME_RE = re.compile(r"out_time=(\d+):(\d+):(\d+\.\d+)")
+VIDEO_EXT = {".mp4", ".mkv", ".mov", ".avi", ".webm", ".flv", ".m4v", ".wmv", ".mpg", ".mpeg", ".ts"}
+
+
+def have_ffmpeg() -> bool:
+    try:
+        subprocess.run(["ffmpeg", "-version"], capture_output=True, creationflags=NO_WINDOW)
+        subprocess.run(["ffprobe", "-version"], capture_output=True, creationflags=NO_WINDOW)
+        return True
+    except FileNotFoundError:
+        return False
+
+
+def ffprobe_info(path: str) -> dict:
+    """{'duration','width','height','has_audio'}; кидає виняток при помилці."""
+    def probe(args):
+        out = subprocess.run(["ffprobe", "-v", "error", *args],
+                             capture_output=True, text=True, creationflags=NO_WINDOW)
+        return out.stdout.strip()
+
+    duration = float(probe(["-show_entries", "format=duration",
+                            "-of", "default=noprint_wrappers=1:nokey=1", path]) or 0)
+    wh = probe(["-select_streams", "v:0", "-show_entries", "stream=width,height",
+                "-of", "csv=s=x:p=0", path])
+    width = height = 0
+    if "x" in wh:
+        try:
+            width, height = (int(x) for x in wh.split("x")[:2])
+        except ValueError:
+            pass
+    acodec = probe(["-select_streams", "a:0", "-show_entries", "stream=codec_type",
+                    "-of", "default=noprint_wrappers=1:nokey=1", path])
+    return {"duration": duration, "width": width, "height": height,
+            "has_audio": acodec.strip() == "audio"}
+
+
+def target_ceiling(target_mb: float) -> float:
+    """Гарантована «стеля» розміру: трохи НИЖЧЕ ліміту, щоб Discord точно пропустив.
+    Напр. ліміт 10 -> 9.8, 25 -> 24.5, 50 -> 49, 500 -> 490.
+    Запас = максимум із 0.2 МБ та 2 % ліміту (2-прохідний x264 злегка перевищує бітрейт)."""
+    return max(0.5, target_mb - max(0.2, target_mb * 0.02))
+
+
+def calc_video_kbps(duration: float, target_mb: float, audio_kbps: int, has_audio: bool) -> int | None:
+    if duration <= 0:
+        return None
+    # цілимось у стелю (нижче ліміту), а не в сам ліміт — щоб гарантовано влізло
+    target_bits = target_ceiling(target_mb) * 8 * 1024 * 1024
+    audio_bits = audio_kbps * 1000 * duration if has_audio else 0
+    return int((target_bits - audio_bits) / duration / 1000)
+
+
+def pick_auto_scale(info: dict, target_mb: float, audio_kbps: int) -> int:
+    """Авто-підбір висоти кадру так, щоб бітрейт лишався пристойним.
+    0 = лишити оригінал. Повертає одне з: 0/1080/720/480/360."""
+    h = info["height"] or 9999
+    candidates = [0, 1080, 720, 480, 360]
+    for scale in candidates:
+        eff_h = h if scale == 0 else min(scale, h)
+        # орієнтовний «добрий» бітрейт ~ 2.2 kbps на рядок висоти (груба евристика)
+        good = eff_h * 2.2
+        v = calc_video_kbps(info["duration"], target_mb, audio_kbps, info["has_audio"]) or 0
+        if v >= good:
+            return scale
+    return 360  # навіть так замало — беремо найменший
+
+
+def _run_pass(cmd, duration, base_pct, span, progress_cb, should_cancel):
+    cmd = cmd + ["-progress", "pipe:1", "-nostats", "-loglevel", "error"]
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                            text=True, creationflags=NO_WINDOW)
+    for line in proc.stdout:
+        if should_cancel and should_cancel():
+            proc.terminate()
+            break
+        m = TIME_RE.search(line)
+        if m and duration > 0 and progress_cb:
+            hh, mn, ss = m.groups()
+            done = int(hh) * 3600 + int(mn) * 60 + float(ss)
+            progress_cb(base_pct + min(1.0, done / duration) * span)
+    proc.wait()
+    return proc.returncode
+
+
+def compress(path, out_path, target_mb, scale, audio_kbps, info,
+             progress_cb=None, should_cancel=None, start=None, dur=None):
+    """Двопрохідне H.264 з ГАРАНТІЄЮ розміру під ліміт Discord.
+    Цілиться у стелю (target_ceiling), а після кодування перевіряє реальний розмір і,
+    якщо трохи перевищив — знижує бітрейт і перекодовує (лише pass 2, лог pass 1 переюзуємо).
+    start/dur (сек) — необовʼязковий сегмент для обрізки.
+    Повертає (ok: bool, message: str, final_mb: float)."""
+    duration = dur if dur is not None else info["duration"]
+    has_audio = info["has_audio"] and audio_kbps > 0
+    ceiling_mb = target_ceiling(target_mb)
+    v_kbps = calc_video_kbps(duration, target_mb, audio_kbps, info["has_audio"])
+    if not v_kbps or v_kbps < 50:
+        return False, "Бітрейт занизький для цього розміру — збільш ліміт або зменш роздільність.", 0.0
+
+    inseek = []
+    if dur is not None:
+        inseek = ["-ss", f"{start or 0:.3f}", "-t", f"{dur:.3f}"]  # швидке вхідне перемотування
+    vf = ["-vf", f"scale=-2:{scale}"] if scale else []
+    passlog = os.path.join(os.path.dirname(out_path) or ".", "_d2p_passlog")
+
+    def venc(kbps):
+        return ["ffmpeg", "-y", *inseek, "-i", path, "-c:v", "libx264",
+                "-b:v", f"{kbps}k", "-preset", "medium", *vf]
+
+    try:
+        # ---- pass 1: аналіз складності (не залежить від бітрейту, робимо один раз) ----
+        rc = _run_pass(venc(v_kbps) + ["-pass", "1", "-passlogfile", passlog,
+                                       "-an", "-f", "null", os.devnull],
+                       duration, 0.0, 45.0, progress_cb, should_cancel)
+        if should_cancel and should_cancel():
+            return False, "Скасовано.", 0.0
+        if rc != 0:
+            return False, "Прохід 1 завершився з помилкою.", 0.0
+
+        audio_args = ["-c:a", "aac", "-b:a", f"{audio_kbps}k"] if has_audio else ["-an"]
+        # ---- pass 2 з перевіркою розміру: до 4 спроб, щоразу знижуючи бітрейт ----
+        final_mb = 0.0
+        for attempt in range(4):
+            rc = _run_pass(venc(v_kbps) + ["-pass", "2", "-passlogfile", passlog,
+                                           *audio_args, "-movflags", "+faststart", out_path],
+                           duration, 45.0, 55.0, progress_cb, should_cancel)
+            if should_cancel and should_cancel():
+                return False, "Скасовано.", 0.0
+            if rc != 0:
+                return False, "Прохід 2 завершився з помилкою.", 0.0
+
+            final_mb = os.path.getsize(out_path) / 1024 / 1024
+            if final_mb <= ceiling_mb or v_kbps <= 50:
+                break  # влізло у стелю (або бітрейт вже на мінімумі) — готово
+            # перевищили стелю -> знижуємо бітрейт пропорційно (з невеликим запасом) і повторюємо
+            v_kbps = max(50, int(v_kbps * (ceiling_mb / final_mb) * 0.97))
+        return True, "OK", final_mb
+    finally:
+        for ext in (".log", ".log.mbtree", "-0.log", "-0.log.mbtree"):
+            f = passlog + ext
+            if os.path.exists(f):
+                try:
+                    os.remove(f)
+                except OSError:
+                    pass
+
+
+def output_name(path: str, target_mb: float) -> str:
+    base, _ = os.path.splitext(path)
+    return f"{base}_discord_{int(target_mb)}mb.mp4"
+
+
+def compress_segments(path, out_path, target_mb, scale, audio_kbps, info, segments,
+                      progress_cb=None, should_cancel=None):
+    """Вирізає й склеює кілька сегментів [(start,end),...] (у заданому порядку)
+    в одне відео під target_mb. Повертає (ok, message, final_mb)."""
+    segs = [(float(s), float(e)) for s, e in segments if e > s]
+    if not segs:
+        return False, "Немає сегментів для збереження.", 0.0
+    total = sum(e - s for s, e in segs)
+    has_audio = info["has_audio"] and audio_kbps > 0
+    v_kbps = calc_video_kbps(total, target_mb, audio_kbps, info["has_audio"])
+    if not v_kbps or v_kbps < 50:
+        return False, "Загалом задовго для цього ліміту — прибери сегмент або підвищ ліміт.", 0.0
+
+    n = len(segs)
+
+    def build_graph(with_audio):
+        parts, labels = [], []
+        for i, (s, e) in enumerate(segs):
+            parts.append(f"[0:v]trim=start={s}:end={e},setpts=PTS-STARTPTS[v{i}]")
+            if with_audio:
+                parts.append(f"[0:a]atrim=start={s}:end={e},asetpts=PTS-STARTPTS[a{i}]")
+            labels.append(f"[v{i}]" + (f"[a{i}]" if with_audio else ""))
+        parts.append(f"{''.join(labels)}concat=n={n}:v=1:a={1 if with_audio else 0}[cv]"
+                     + ("[ca]" if with_audio else ""))
+        vout = "[cv]"
+        if scale:
+            parts.append(f"[cv]scale=-2:{scale}[sv]")
+            vout = "[sv]"
+        return ";".join(parts), vout
+
+    ceiling_mb = target_ceiling(target_mb)
+    passlog = os.path.join(os.path.dirname(out_path) or ".", "_d2p_passlog")
+    fc1, vout1 = build_graph(False)        # pass 1 — лише відео (без неприєднаного аудіо)
+    fc2, vout2 = build_graph(has_audio)
+
+    def common(kbps):
+        return ["-c:v", "libx264", "-b:v", f"{kbps}k", "-preset", "medium"]
+
+    try:
+        rc = _run_pass(["ffmpeg", "-y", "-i", path, "-filter_complex", fc1, "-map", vout1,
+                        *common(v_kbps), "-an", "-pass", "1", "-passlogfile", passlog, "-f", "null", os.devnull],
+                       total, 0.0, 45.0, progress_cb, should_cancel)
+        if should_cancel and should_cancel():
+            return False, "Скасовано.", 0.0
+        if rc != 0:
+            return False, "Прохід 1 з помилкою.", 0.0
+        a = (["-map", "[ca]", "-c:a", "aac", "-b:a", f"{audio_kbps}k"] if has_audio else ["-an"])
+        # pass 2 з гарантією розміру: до 4 спроб зі зниженням бітрейту
+        final_mb = 0.0
+        for attempt in range(4):
+            rc = _run_pass(["ffmpeg", "-y", "-i", path, "-filter_complex", fc2, "-map", vout2,
+                            *common(v_kbps), *a, "-pass", "2", "-passlogfile", passlog,
+                            "-movflags", "+faststart", out_path],
+                           total, 45.0, 55.0, progress_cb, should_cancel)
+            if should_cancel and should_cancel():
+                return False, "Скасовано.", 0.0
+            if rc != 0:
+                return False, "Прохід 2 з помилкою.", 0.0
+            final_mb = os.path.getsize(out_path) / 1024 / 1024
+            if final_mb <= ceiling_mb or v_kbps <= 50:
+                break
+            v_kbps = max(50, int(v_kbps * (ceiling_mb / final_mb) * 0.97))
+        return True, "OK", final_mb
+    finally:
+        for ext in (".log", ".log.mbtree", "-0.log", "-0.log.mbtree"):
+            f = passlog + ext
+            if os.path.exists(f):
+                try: os.remove(f)
+                except OSError: pass
+
+
+def extract_frame(path: str, t: float, out_png: str, width: int = 380) -> bool:
+    """Витягує один кадр на позиції t (сек) у PNG для прев'ю. True при успіху."""
+    r = subprocess.run(
+        ["ffmpeg", "-y", "-ss", f"{max(0, t):.2f}", "-i", path, "-frames:v", "1",
+         "-vf", f"scale={width}:-2", "-q:v", "3", out_png],
+        capture_output=True, creationflags=NO_WINDOW)
+    return r.returncode == 0 and os.path.exists(out_png)
+
+
+def max_seconds(target_mb: float, audio_kbps: int, video_kbps: int) -> float:
+    """Максимальна тривалість (сек), що влізе в target_mb при заданому відео-бітрейті."""
+    target_bits = target_ceiling(target_mb) * 8 * 1024 * 1024
+    per_sec = (video_kbps + audio_kbps) * 1000
+    return target_bits / per_sec if per_sec else 0.0
+
+
+def plan_parts(duration: float, target_mb: float, audio_kbps: int, has_audio: bool,
+               min_video_kbps: int = 700) -> int:
+    """Скільки частин потрібно, щоб КОЖНА влізла в ліміт із пристойною якістю
+    (відео ~min_video_kbps). Для довгого відео, яке не стиснути цілком."""
+    per_sec = (min_video_kbps + (audio_kbps if has_audio else 0)) * 1000
+    ceiling_bits = target_ceiling(target_mb) * 8 * 1024 * 1024
+    max_sec = ceiling_bits / per_sec if per_sec else duration
+    if max_sec <= 0:
+        return 1
+    return max(1, math.ceil(duration / max_sec))
+
+
+def plan_parts_balanced(duration: float, target_mb: float, audio_kbps: int, has_audio: bool) -> int:
+    """Компроміс «стиснути І поділити»: приблизно посередині між макс-якісним поділом
+    (багато частин, високий бітрейт) і мінімально можливою кількістю частин (сильніше стиснути).
+    Тобто частин менше, ніж при чистому поділі, зате кожна стискається агресивніше."""
+    hi = plan_parts(duration, target_mb, audio_kbps, has_audio, min_video_kbps=700)  # якість
+    lo = plan_parts(duration, target_mb, audio_kbps, has_audio, min_video_kbps=150)  # мінімум частин
+    return max(lo, round((hi + lo) / 2))
+
+
+def split_compress(path, target_mb, auto_scale, audio_kbps, info,
+                   progress_cb=None, should_cancel=None, part_cb=None, n_parts=None):
+    """Ділить довге відео на кілька частин і стискає КОЖНУ під ліміт Discord.
+    n_parts — явна кількість частин (напр. для режиму балансу); None = авто (за якістю).
+    progress_cb(pct) — загальний прогрес 0..100; part_cb(i, n) — сповіщення про поточну частину.
+    Повертає (ok: bool, message: str, outputs: list[str])."""
+    duration = info["duration"]
+    if duration <= 0:
+        return False, "Не вдалося визначити тривалість відео.", []
+    n = int(n_parts) if n_parts else plan_parts(duration, target_mb, audio_kbps, info["has_audio"])
+    if n <= 1:
+        n = 2  # якщо потрапили сюди — відео все одно не влізло цілим, ділимо хоча б навпіл
+    part_len = duration / n
+    base, _ = os.path.splitext(path)
+    outputs = []
+    for i in range(n):
+        if should_cancel and should_cancel():
+            _cleanup_outputs(outputs)
+            return False, "Скасовано.", []
+        if part_cb:
+            part_cb(i + 1, n)
+        s = i * part_len
+        d = (duration - s) if i == n - 1 else part_len
+        out_i = f"{base}_discord_{int(target_mb)}mb_part{i + 1}.mp4"
+        scale = pick_auto_scale(info, target_mb, audio_kbps) if auto_scale else 0
+
+        def seg_progress(p, i=i):
+            if progress_cb:
+                progress_cb((i + p / 100.0) / n * 100.0)
+
+        ok, msg, mb = compress(path, out_i, target_mb, scale, audio_kbps, info,
+                               progress_cb=seg_progress, should_cancel=should_cancel,
+                               start=s, dur=d)
+        if not ok:
+            _cleanup_outputs(outputs)
+            return False, f"Частина {i + 1}: {msg}", []
+        outputs.append(out_i)
+    return True, "OK", outputs
+
+
+def _cleanup_outputs(paths):
+    for p in paths:
+        try:
+            if os.path.exists(p):
+                os.remove(p)
+        except OSError:
+            pass
