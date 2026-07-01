@@ -46,7 +46,45 @@ class SettingsApp:
         self.win.after(300, lambda: self.win.attributes("-topmost", False))
         self.win.bind("<Map>", self._on_map)
 
+        self._init_vars()      # усі змінні — ОДИН раз (щоб стан не губився між вкладками)
         self._build()
+
+    def _init_vars(self):
+        """Створює всі змінні налаштувань один раз. Віджети вкладок лише прив'язуються
+        до них — тож перемикання вкладок НІКОЛИ не скидає вибране. Кожна зміна —
+        авто-збереження (не треба тиснути «Зберегти»)."""
+        c, w = self.cfg, self.win
+        self.v_target = tk.IntVar(w, c.get("target_mb", 10))
+        self.v_auto = tk.BooleanVar(w, c.get("auto_scale", True))
+        self.v_block = tk.BooleanVar(w, c.get("block_paste", True))
+        self.v_paste = tk.BooleanVar(w, c.get("auto_paste", True))
+        self.v_audio = tk.IntVar(w, c.get("audio_kbps", 128))
+        self.v_cv = tk.BooleanVar(w, c.get("compress_video", True))
+        self.v_ci = tk.BooleanVar(w, c.get("compress_images", True))
+        self.v_ca = tk.BooleanVar(w, c.get("compress_audio", True))
+        self.v_keep = tk.StringVar(w, c.get("keep_local", "ask"))
+        self.v_theme = tk.StringVar(w, c.get("theme", "discord"))
+        self.v_lang = tk.StringVar(w, c.get("lang", "uk"))
+        for v in (self.v_target, self.v_auto, self.v_block, self.v_paste, self.v_audio,
+                  self.v_cv, self.v_ci, self.v_ca, self.v_keep):
+            v.trace_add("write", lambda *a: self._autosave())
+
+    def _autosave(self):
+        self.cfg = self._collect()
+        try:
+            self.on_save(self.cfg)
+        except Exception:
+            pass
+        self._flash_saved()
+
+    def _flash_saved(self):
+        try:
+            self.status.config(text=self.T("saved"))
+            if getattr(self, "_flash_after", None):
+                self.win.after_cancel(self._flash_after)
+            self._flash_after = self.win.after(1500, lambda: self.status.config(text=""))
+        except (tk.TclError, AttributeError):
+            pass
 
     # ---------- вікно ----------
     def _center(self):
@@ -65,6 +103,10 @@ class SettingsApp:
             self._or_active = True
 
     def _close(self):
+        try:
+            self._autosave()      # нічого не губимо навіть якщо не тиснув «Зберегти»
+        except Exception:
+            pass
         if self.on_close_cb:
             self.on_close_cb()
         else:
@@ -144,9 +186,11 @@ class SettingsApp:
         footer = tk.Frame(self.win, bg=P["title_bg"], height=52)
         footer.pack(fill="x", side="bottom")
         footer.pack_propagate(False)
+        tk.Label(footer, text=self.T("autosave_hint"), bg=P["title_bg"], fg=P["muted"],
+                 font=(themes.FONT, 9)).pack(side="left", padx=16)
         self.status = tk.Label(footer, text="", bg=P["title_bg"], fg=P["green"],
                                font=(themes.FONT, 10, "bold"))
-        self.status.pack(side="left", padx=16)
+        self.status.pack(side="left")
         self._btn(footer, self.T("save"), self._save).pack(side="right", padx=16, pady=8)
 
         self._show_tab(self._active_tab)
@@ -206,61 +250,54 @@ class SettingsApp:
                        selectcolor=P["dark"], activebackground=P["bg"], activeforeground=P["text"],
                        font=(themes.FONT, 11), anchor="w").pack(anchor="w", pady=3)
 
+    def _radio(self, parent, text, var, value):
+        P = self.P
+        tk.Radiobutton(parent, text=text, variable=var, value=value,
+                       bg=P["bg"], fg=P["text"], selectcolor=P["dark"],
+                       activebackground=P["bg"], activeforeground=P["text"],
+                       font=(themes.FONT, 11)).pack(anchor="w", padx=6, pady=2)
+
     def _tab_general(self):
         f = self._pad()
         self._header(f, self.T("limit_title"))
-        self.v_target = tk.IntVar(value=self.cfg.get("target_mb", 10))
         for tkey, mb in (("limit_10", 10), ("limit_25", 25), ("limit_50", 50), ("limit_500", 500)):
-            tk.Radiobutton(f, text=self.T(tkey), variable=self.v_target, value=mb,
-                           bg=self.P["bg"], fg=self.P["text"], selectcolor=self.P["dark"],
-                           activebackground=self.P["bg"], activeforeground=self.P["text"],
-                           font=(themes.FONT, 11)).pack(anchor="w", padx=6, pady=2)
+            self._radio(f, self.T(tkey), self.v_target, mb)
 
         tk.Frame(f, bg=self.P["bg"], height=12).pack()
-        self.v_auto = tk.BooleanVar(value=self.cfg.get("auto_scale", True))
-        self.v_block = tk.BooleanVar(value=self.cfg.get("block_paste", True))
-        self.v_paste = tk.BooleanVar(value=self.cfg.get("auto_paste", True))
         self._check(f, self.T("opt_autoscale"), self.v_auto)
         self._check(f, self.T("opt_block"), self.v_block)
         self._check(f, self.T("opt_paste"), self.v_paste)
 
         row = tk.Frame(f, bg=self.P["bg"]); row.pack(anchor="w", pady=(12, 0))
         self._lbl(row, self.T("audio_kbps")).pack(side="left")
-        self.v_audio = tk.IntVar(value=self.cfg.get("audio_kbps", 128))
         tk.Spinbox(row, from_=0, to=320, increment=32, width=6, textvariable=self.v_audio,
                    font=(themes.FONT, 11)).pack(side="left", padx=8)
 
     def _tab_media(self):
         f = self._pad()
         self._header(f, self.T("media_title"))
-        self.v_cv = tk.BooleanVar(value=self.cfg.get("compress_video", True))
-        self.v_ci = tk.BooleanVar(value=self.cfg.get("compress_images", True))
-        self.v_ca = tk.BooleanVar(value=self.cfg.get("compress_audio", True))
         self._check(f, self.T("media_video"), self.v_cv)
         self._check(f, self.T("media_image"), self.v_ci)
         self._check(f, self.T("media_audio"), self.v_ca)
 
         tk.Frame(f, bg=self.P["bg"], height=16).pack()
         self._lbl(f, self.T("keep_title"), size=12, bold=True).pack(anchor="w", pady=(0, 6))
-        self.v_keep = tk.StringVar(value=self.cfg.get("keep_local", "ask"))
         for tkey, val in (("keep_ask", "ask"), ("keep_always", "always"), ("keep_never", "never")):
-            tk.Radiobutton(f, text=self.T(tkey), variable=self.v_keep, value=val,
-                           bg=self.P["bg"], fg=self.P["text"], selectcolor=self.P["dark"],
-                           activebackground=self.P["bg"], activeforeground=self.P["text"],
-                           font=(themes.FONT, 11)).pack(anchor="w", padx=6, pady=2)
+            self._radio(f, self.T(tkey), self.v_keep, val)
 
     def _tab_appearance(self):
         f = self._pad()
         self._header(f, self.T("theme_title"))
-        self.v_theme = tk.StringVar(value=self.cfg.get("theme", "discord"))
         trow = tk.Frame(f, bg=self.P["bg"]); trow.pack(anchor="w", pady=(0, 6))
         for name in themes.order():
             pal = themes.palette(name)
+            sel = name == self.v_theme.get()
             card = tk.Frame(trow, bg=pal["bg"], highlightthickness=3, cursor="hand2",
-                            highlightbackground=(self.P["accent"] if name == self.v_theme.get()
-                                                 else pal["dark"]))
+                            highlightbackground=(self.P["accent"] if sel else pal["dark"]),
+                            highlightcolor=(self.P["accent"] if sel else pal["dark"]))
             card.pack(side="left", padx=8)
-            tk.Label(card, text=pal["name"], bg=pal["bg"], fg=pal["text"],
+            mark = "  ✓" if sel else ""
+            tk.Label(card, text=pal["name"] + mark, bg=pal["bg"], fg=pal["text"],
                      font=(themes.FONT, 11, "bold")).pack(padx=16, pady=(12, 4))
             sw = tk.Frame(card, bg=pal["bg"]); sw.pack(pady=(0, 12))
             for c in ("accent", "green", "warn", "red"):
@@ -270,7 +307,6 @@ class SettingsApp:
 
         tk.Frame(f, bg=self.P["bg"], height=18).pack()
         self._lbl(f, self.T("lang_title"), size=12, bold=True).pack(anchor="w", pady=(0, 6))
-        self.v_lang = tk.StringVar(value=self.lang)
         for code in i18n.LANGS:
             tk.Radiobutton(f, text=i18n.LANG_NAMES[code], variable=self.v_lang, value=code,
                            command=lambda c=code: self._pick_lang(c),
@@ -280,14 +316,18 @@ class SettingsApp:
 
     def _pick_theme(self, name):
         self.cfg["theme"] = name
+        self.v_theme.set(name)
         self.P = themes.palette(name)
-        self._apply_live()
         self.win.configure(bg=self.P["dark"])
+        self._autosave()       # зберегти + застосувати (overlay/трей)
+        self._apply_live()
         self._build()
 
     def _pick_lang(self, code):
         self.cfg["lang"] = code
         self.lang = code
+        self.v_lang.set(code)
+        self._autosave()
         self._apply_live()
         self._build()
 
@@ -472,31 +512,24 @@ class SettingsApp:
 
     # ---------- збереження ----------
     def _collect(self):
+        # усі змінні існують від __init__, тож читаємо напряму (без hasattr-пасток)
         c = dict(self.cfg)
-        if hasattr(self, "v_target"):
+        try:
             c.update(target_mb=self.v_target.get(), auto_scale=self.v_auto.get(),
                      block_paste=self.v_block.get(), auto_paste=self.v_paste.get(),
-                     audio_kbps=self.v_audio.get())
-        if hasattr(self, "v_cv"):
-            c.update(compress_video=self.v_cv.get(), compress_images=self.v_ci.get(),
+                     audio_kbps=self.v_audio.get(),
+                     compress_video=self.v_cv.get(), compress_images=self.v_ci.get(),
                      compress_audio=self.v_ca.get(), keep_local=self.v_keep.get())
+        except (tk.TclError, AttributeError):
+            pass
         c["theme"] = self.cfg.get("theme", "discord")
         c["lang"] = self.cfg.get("lang", "uk")
         return c
 
     def _save(self):
-        self.cfg = self._collect()
-        try:
-            self.on_save(self.cfg)
-        except Exception:
-            pass
-        if self.on_apply:
-            self._apply_live()
-        try:
-            self.status.config(text=self.T("saved"))
-            self.win.after(2000, lambda: self.status.config(text=""))
-        except tk.TclError:
-            pass
+        # усе й так зберігається саме; кнопка лишається як явне підтвердження
+        self._autosave()
+        self._apply_live()
 
     def mainloop(self):
         self.win.mainloop()

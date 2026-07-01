@@ -39,6 +39,7 @@ STR = {
 
     "save":             {"uk": "Зберегти",      "ru": "Сохранить",     "en": "Save"},
     "saved":            {"uk": "Збережено ✓",   "ru": "Сохранено ✓",   "en": "Saved ✓"},
+    "autosave_hint":    {"uk": "Зміни зберігаються автоматично", "ru": "Изменения сохраняются автоматически", "en": "Changes are saved automatically"},
     "close":            {"uk": "Закрити",       "ru": "Закрыть",       "en": "Close"},
     "minimize":         {"uk": "Згорнути",      "ru": "Свернуть",      "en": "Minimize"},
 
