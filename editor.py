@@ -278,6 +278,10 @@ class VideoEditor(tk.Toplevel):
                 h = self.video.winfo_height() or self.VH
                 _u32.MoveWindow(hwnd, 0, 0, w, h, True)
                 self._embedded = hwnd
+                # РЕСИНХ годинника: ffplay щойно показав перший кадр (=_play_start).
+                # Раніше t0 ставили при запуску, до появи вікна -> плейхед забігав уперед
+                # на затримку старту ffplay, і ножиці різали «трохи далі». Скидаємо тут.
+                self._play_t0 = time.monotonic()
                 return
         except Exception:
             pass
@@ -330,6 +334,8 @@ class VideoEditor(tk.Toplevel):
 
     # --------------------------------------------------------- ножиці ------ #
     def _cut_here(self):
+        if self.playing:
+            self._pause()          # спершу пауза -> ріжемо рівно по кадру, який ВИДНО (не по годиннику)
         self._cut_at(self.cur)
 
     def _cut_at(self, t):
@@ -625,6 +631,8 @@ class VideoEditor(tk.Toplevel):
             return
         # 2) клік по кліпу: вибрати; всередині вибраного — перемістити плейхед
         self._drag = None
+        self._active = None        # клік по тілу кліпа -> стрілки рухають ПЛЕЙХЕД (для ножиць)
+        self._tip_t = None
         for slot, ix, cx1, cx2 in self._clip_rects:
             if cx1 - 2 <= ev.x <= cx2 + 2:
                 s, e = self.pieces[ix]
