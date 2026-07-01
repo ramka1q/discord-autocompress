@@ -25,6 +25,7 @@ import threading
 from ctypes import wintypes
 
 import tkinter as tk
+import tkinter.font as tkfont
 
 import dc_core
 import themes
@@ -38,6 +39,7 @@ C_BG, C_BG2, C_DARK = "#313338", "#2b2d31", "#1e1f22"
 C_BLURPLE, C_BLURPLE_H = "#5865f2", "#4752c4"
 C_TEXT, C_MUTED, C_GREEN = "#f2f3f5", "#b5bac1", "#23a55a"
 C_RED = "#ed4245"
+C_WARN = "#faa61a"
 C_KEY = "#010203"
 FONT = "Segoe UI"
 LANG = "uk"
@@ -45,12 +47,13 @@ LANG = "uk"
 
 def apply_theme(name: str):
     """Перемикає глобальні кольори overlay на палітру теми (нові вікна беруть нові кольори)."""
-    global C_BG, C_BG2, C_DARK, C_BLURPLE, C_BLURPLE_H, C_TEXT, C_MUTED, C_GREEN, C_RED
+    global C_BG, C_BG2, C_DARK, C_BLURPLE, C_BLURPLE_H, C_TEXT, C_MUTED, C_GREEN, C_RED, C_WARN
     p = themes.palette(name)
     C_BG, C_BG2, C_DARK = p["bg"], p["panel"], p["dark"]
     C_BLURPLE, C_BLURPLE_H = p["accent"], p["accent_h"]
     C_TEXT, C_MUTED, C_GREEN = p["text"], p["muted"], p["green"]
     C_RED = p["red"]
+    C_WARN = p.get("warn", "#faa61a")
 
 
 def L(key, **kw):
@@ -209,7 +212,7 @@ def _rr_pts(x1, y1, x2, y2, r):
 
 
 class Overlay(tk.Toplevel):
-    W, H = 480, 348
+    W, H = 480, 372
 
     def __init__(self, master, file_path, size_mb, cfg, discord_hwnd, on_close,
                  watcher=None, kind="video"):
@@ -230,12 +233,10 @@ class Overlay(tk.Toplevel):
         sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
         self.geometry(f"{self.W}x{self.H}+{(sw - self.W) // 2}+{int(sh * 0.30)}")
 
+        self._btn_seq = 0
         self.canvas = tk.Canvas(self, width=self.W, height=self.H, bg=C_KEY, highlightthickness=0)
         self.canvas.pack(fill="both", expand=True)
-        self.canvas.create_polygon(_rr_pts(2, 2, self.W - 2, self.H - 2, 22),
-                                   smooth=True, fill=C_BG, outline="")
-        self.canvas.create_polygon(_rr_pts(2, 2, self.W - 2, 8, 22),
-                                   smooth=True, fill=C_BLURPLE, outline="")
+        self._draw_card()
         self.canvas.bind("<Button-1>", lambda e: setattr(self, "_d", (e.x, e.y)))
         self.canvas.bind("<B1-Motion>", self._drag)
 
@@ -288,6 +289,37 @@ class Overlay(tk.Toplevel):
         if self._alive:
             self._vis_after = self.after(300, self._visibility_tick)
 
+    # ---------------------------------------------------------------- #
+    #  Дизайн-система: рамка-картка, значок-бейдж, кнопки-пігулки
+    #  (усе малюється на Canvas — тому вигляд однаковий на всіх мовах,
+    #   а фіксована ширина кнопок гарантує симетрію)
+    # ---------------------------------------------------------------- #
+    MARGIN = 40          # відступ картки з боків
+    BTN_H = 42           # висота кнопки-пігулки
+    ROW = 48             # крок між кнопками по вертикалі
+
+    def _ink(self, hexbg):
+        """Білий чи темний текст — залежно від яскравості тла (щоб контраст на будь-якій темі)."""
+        try:
+            h = hexbg.lstrip("#")
+            r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+            return "#10121a" if (0.299 * r + 0.587 * g + 0.114 * b) > 150 else "#ffffff"
+        except Exception:
+            return C_TEXT
+
+    def _draw_card(self):
+        """Статична підложка вікна (не чиститься _clear): заокруглена картка,
+        тонка акцентна рамка зверху та «хапалка» для перетягування — фірмова деталь."""
+        self.canvas.delete("card")
+        self.canvas.create_polygon(_rr_pts(2, 2, self.W - 2, self.H - 2, 24),
+                                   smooth=True, fill=C_BG, outline=C_DARK, width=1, tags="card")
+        # тонкий акцентний «німб» уздовж верху картки
+        self.canvas.create_polygon(_rr_pts(2, 2, self.W - 2, 6, 24),
+                                   smooth=True, fill=C_BLURPLE, outline="", tags="card")
+        # хапалка-пігулка по центру вгорі — натяк, що вікно можна тягнути
+        self.canvas.create_polygon(_rr_pts(self.W // 2 - 20, 12, self.W // 2 + 20, 17, 2),
+                                   smooth=True, fill=C_DARK, outline="", tags="card")
+
     def _clear(self):
         for w in self._widgets:
             w.destroy()
@@ -302,7 +334,72 @@ class Overlay(tk.Toplevel):
         return tk.Label(self.canvas, text=text, bg=C_BG, fg=color,
                         font=(FONT, size, "bold" if bold else "normal"))
 
-    def _button(self, text, cmd, primary=True):
+    def _text(self, text, y, size, color, bold=True, x=None):
+        """Текст просто на канвасі (без tk.Label) — легше й чіткіше."""
+        self.canvas.create_text(self.W // 2 if x is None else x, y, text=text, fill=color,
+                                 font=(FONT, size, "bold" if bold else "normal"),
+                                 tags="dyn", width=self.W - 2 * self.MARGIN)
+
+    def _badge(self, icon, y, color=None):
+        """Фірмова деталь: значок у м'якому кольоровому кружку з акцентним кільцем."""
+        color = color or C_BLURPLE
+        R = 30
+        cx = self.W // 2
+        self.canvas.create_oval(cx - R - 5, y - R - 5, cx + R + 5, y + R + 5,
+                                fill="", outline=color, width=2, tags="dyn")
+        self.canvas.create_oval(cx - R, y - R, cx + R, y + R,
+                                fill=C_BG2, outline="", tags="dyn")
+        self.canvas.create_text(cx, y + 1, text=icon, font=(FONT, 26), tags="dyn")
+
+    def _fit(self, text, maxw, base):
+        """Найбільший розмір шрифту, за якого текст влазить у ширину кнопки (мовно-стійко)."""
+        try:
+            for s in range(base, 8, -1):
+                if tkfont.Font(family=FONT, size=s, weight="bold").measure(text) <= maxw:
+                    return s
+        except Exception:
+            pass
+        return 9
+
+    def _cbutton(self, text, cmd, cx, cy, w, primary=True):
+        """Кнопка-пігулка на канвасі: фіксована ширина -> ідеальна симетрія на будь-якій мові."""
+        tag = f"b{self._btn_seq}"
+        self._btn_seq += 1
+        fill = C_BLURPLE if primary else C_BG2
+        hov = C_BLURPLE_H if primary else C_DARK
+        r = self.BTN_H // 2
+        x1, y1, x2, y2 = cx - w / 2, cy - self.BTN_H / 2, cx + w / 2, cy + self.BTN_H / 2
+        poly = self.canvas.create_polygon(_rr_pts(x1, y1, x2, y2, r), smooth=True, fill=fill,
+                                          outline="" if primary else C_DARK,
+                                          width=0 if primary else 1, tags=("dyn", tag))
+        fg = self._ink(C_BLURPLE) if primary else C_TEXT
+        fs = self._fit(text, w - 24, 11)
+        self.canvas.create_text(cx, cy, text=text, fill=fg, font=(FONT, fs, "bold"),
+                                tags=("dyn", tag))
+        self.canvas.tag_bind(tag, "<Enter>",
+                             lambda e: (self.canvas.itemconfig(poly, fill=hov),
+                                        self.canvas.config(cursor="hand2")))
+        self.canvas.tag_bind(tag, "<Leave>",
+                             lambda e: (self.canvas.itemconfig(poly, fill=fill),
+                                        self.canvas.config(cursor="")))
+        self.canvas.tag_bind(tag, "<Button-1>", lambda e: cmd())
+        return tag
+
+    def _full_w(self):
+        return self.W - 2 * self.MARGIN
+
+    def _btn_full(self, text, cmd, y, primary=True):
+        """Кнопка на всю ширину картки, по центру."""
+        self._cbutton(text, cmd, self.W // 2, y, self._full_w(), primary)
+
+    def _btn_pair(self, lt, lc, rt, rc, y, left_primary=False, right_primary=True):
+        """Дві РІВНІ половинки з однаковим проміжком -> симетрично незалежно від довжини тексту."""
+        gutter = 14
+        w = (self._full_w() - gutter) / 2
+        self._cbutton(lt, lc, self.W // 2 - gutter / 2 - w / 2, y, w, left_primary)
+        self._cbutton(rt, rc, self.W // 2 + gutter / 2 + w / 2, y, w, right_primary)
+
+    def _button(self, text, cmd, primary=True):  # legacy — лишено для сумісності
         bg, hover = (C_BLURPLE, C_BLURPLE_H) if primary else (C_BG2, C_DARK)
         b = tk.Button(self.canvas, text=text, command=cmd, bg=bg, fg=C_TEXT,
                       activebackground=hover, activeforeground=C_TEXT, relief="flat",
@@ -319,78 +416,71 @@ class Overlay(tk.Toplevel):
         icon = {"video": "🎬", "image": "🖼", "audio": "🎵", "shrink": "🗜"}.get(self.kind, "🎬")
         big = {"video": "ov_video_big", "image": "ov_image_big",
                "audio": "ov_audio_big", "shrink": "ov_shrink_q"}.get(self.kind, "ov_video_big")
-        self._place(self._label(icon, 30, C_TEXT), self.W // 2, 40)
-        self._place(self._label(L(big), 14, C_TEXT, bold=True), self.W // 2, 78)
-        self._place(self._label(name, 10, C_MUTED), self.W // 2, 100)
+        self._badge(icon, 56)
+        self._text(L(big), 100, 14, C_TEXT)
+        self._text(name, 122, 10, C_MUTED, bold=False)
+        u = L("unit_mb")
         if self.kind == "shrink":
-            self._place(self._label(f"{self.size_mb:.1f} МБ", 11, C_BLURPLE, bold=True), self.W // 2, 124)
-            self._place(self._button(L("ov_shrink_smaller"), self._shrink_input), self.W // 2, 170)
-            self._place(self._button(L("ov_trim"), self._open_trim, primary=False), self.W // 2, 212)
-            self._place(self._button(L("close"), self._close, primary=False), self.W // 2, 256)
+            self._text(f"{self.size_mb:.1f} {u}", 146, 11, C_BLURPLE)
+            self._btn_full(L("ov_shrink_smaller"), self._shrink_input, 190)
+            self._btn_full(L("ov_trim"), self._open_trim, 238, primary=False)
+            self._btn_full(L("close"), self._close, 286, primary=False)
             return
-        self._place(self._label(f"{self.size_mb:.1f} МБ  →  ≈{self.cfg['target_mb']} МБ",
-                                11, C_BLURPLE, bold=True), self.W // 2, 124)
+        self._text(f"{self.size_mb:.1f} {u}   →   ≈{self.cfg['target_mb']} {u}", 146, 11, C_BLURPLE)
         if self.kind == "video":
-            self._place(self._button(L("ov_compress"), self._start), self.W // 2, 164)
-            self._place(self._button(L("ov_split"),
-                                     lambda: self._start_split(balanced=False), primary=False),
-                        self.W // 2, 204)
-            self._place(self._button(L("ov_split_bal"),
-                                     lambda: self._start_split(balanced=True), primary=False),
-                        self.W // 2, 244)
-            self._place(self._button(L("ov_trim"), self._open_trim, primary=False),
-                        self.W // 2 - 8, 292, "e")
-            self._place(self._button(L("close"), self._close, primary=False),
-                        self.W // 2 + 8, 292, "w")
+            self._btn_full(L("ov_compress"), self._start, 190)
+            self._btn_full(L("ov_split"), lambda: self._start_split(balanced=False), 238, primary=False)
+            self._btn_full(L("ov_split_bal"), lambda: self._start_split(balanced=True), 286, primary=False)
+            self._btn_pair(L("ov_trim"), self._open_trim, L("close"), self._close, 334,
+                           left_primary=False, right_primary=False)
         else:
             start = self._start_image if self.kind == "image" else self._start_audio
-            self._place(self._button(L("ov_compress"), start), self.W // 2, 190)
-            self._place(self._button(L("close"), self._close, primary=False), self.W // 2, 240)
+            self._btn_full(L("ov_compress"), start, 202)
+            self._btn_full(L("close"), self._close, 250, primary=False)
 
-    def _show_progress(self, title="Стискаю відео…"):
+    def _show_progress(self, title=None):
         self._clear()
-        self._place(self._label(title, 14, C_TEXT, bold=True), self.W // 2, 64)
+        self._badge("⚡", 74)
+        self._text(title or L("ov_working"), 132, 14, C_TEXT)
         self.sub = self._label("", 10, C_MUTED)
-        self._place(self.sub, self.W // 2, 88)
-        self.pct = self._label("0%", 26, C_BLURPLE, bold=True)
-        self._place(self.pct, self.W // 2, 124)
-        self.bx1, self.bx2, self.by = 70, self.W - 70, 165
+        self._place(self.sub, self.W // 2, 156)
+        self.pct = self._label("0%", 30, C_BLURPLE, bold=True)
+        self._place(self.pct, self.W // 2, 196)
+        self.bx1, self.bx2, self.by = 70, self.W - 70, 236
         self.canvas.create_polygon(_rr_pts(self.bx1, self.by, self.bx2, self.by + 12, 6),
                                    smooth=True, fill=C_DARK, outline="", tags="dyn")
         self.fill = self.canvas.create_polygon(_rr_pts(self.bx1, self.by, self.bx1 + 1, self.by + 12, 6),
                                                smooth=True, fill=C_BLURPLE, outline="", tags="dyn")
-        self._place(self._button("Скасувати", lambda: self.cancel.update(flag=True), primary=False),
-                    self.W // 2, 210)
+        self._btn_full(L("ov_cancel"), lambda: self.cancel.update(flag=True), 292, primary=False)
 
     def _show_done(self, final_mb, fits, pasted):
         self._clear()
-        col = C_GREEN if fits else "#faa61a"
-        self._place(self._label("✓", 40, col, bold=True), self.W // 2, 56)
-        self._place(self._label(L("ov_done"), 15, C_TEXT, bold=True), self.W // 2, 98)
-        self._place(self._label(f"{final_mb:.2f} МБ", 11, C_MUTED), self.W // 2, 120)
+        col = C_GREEN if fits else C_WARN
+        self._badge("✓", 70, color=col)
+        self._text(L("ov_done"), 122, 16, C_TEXT)
+        self._text(f"{final_mb:.2f} {L('unit_mb')}", 146, 11, C_MUTED, bold=False)
         msg = L("ov_pasted") if pasted else L("ov_in_clip")
-        self._place(self._label(msg, 12, C_BLURPLE, bold=True), self.W // 2, 146)
+        self._text(msg, 172, 12, C_BLURPLE)
 
         policy = self.cfg.get("keep_local", "ask")
         if policy == "ask" and self.out_path:
             # питаємо, чи лишати стиснуту копію на ПК (видалення відкладене — Discord ще читає файл)
-            self._place(self._label(L("ov_keep_q"), 11, C_TEXT, bold=True), self.W // 2, 182)
-            self._place(self._button(L("ov_keep"), self._keep_yes, primary=False),
-                        self.W // 2 - 8, 220, "e")
-            self._place(self._button(L("ov_delete"), self._keep_no), self.W // 2 + 8, 220, "w")
+            self._text(L("ov_keep_q"), 212, 11, C_TEXT)
+            self._btn_pair(L("ov_keep"), self._keep_yes, L("ov_delete"), self._keep_no, 258,
+                           left_primary=False, right_primary=True)
         else:
             if policy == "never":
                 self._schedule_delete([self.out_path] if self.out_path else [])
-            self._place(self._button(L("ov_done"), self._close), self.W // 2, 206)
+            self._btn_full(L("ov_done"), self._close, 230)
             self.after(6000, self._close)
 
     def _keep_yes(self):
-        self._place(self._label(L("ov_kept"), 10, C_GREEN), self.W // 2, 258)
+        self._text(L("ov_kept"), 306, 10, C_GREEN, bold=False)
         self.after(1600, self._close)
 
     def _keep_no(self):
         self._schedule_delete([self.out_path] if self.out_path else [])
-        self._place(self._label(L("ov_deleted"), 10, C_MUTED), self.W // 2, 258)
+        self._text(L("ov_deleted"), 306, 10, C_MUTED, bold=False)
         self.after(1600, self._close)
 
     def _schedule_delete(self, paths):
@@ -452,39 +542,36 @@ class Overlay(tk.Toplevel):
             except Exception as e:
                 import traceback
                 dc_core.dlog("media worker EXCEPTION: " + repr(e) + "\n" + traceback.format_exc())
-                return self.after(0, lambda: self._show_error(f"Помилка:\n{str(e)[:70]}"))
+                return self.after(0, lambda: self._show_error(f'{L("ov_err_prefix")}\n{str(e)[:70]}'))
             self.after(0, lambda: self._after(ok, out_path, mb, target, msg))
 
         threading.Thread(target=worker, daemon=True).start()
 
     def _show_error(self, msg, allow_split=True, allow_trim=True):
         self._clear()
-        self._place(self._label("⚠", 30, "#faa61a", bold=True), self.W // 2, 40)
-        self._place(self._label("Не вдалося стиснути", 14, C_TEXT, bold=True), self.W // 2, 78)
+        self._badge("⚠", 56, color=C_WARN)
+        self._text(L("ov_fail"), 100, 14, C_TEXT)
         lines = msg.split("\n")
         for i, line in enumerate(lines):
-            self._place(self._label(line, 10, C_MUTED), self.W // 2, 102 + i * 17)
+            self._text(line, 126 + i * 17, 10, C_MUTED, bold=False)
         # для довгих відео: поділ на частини (якісний) або «стиснути і поділити» (менше файлів)
         y = 196
         if allow_split:
-            self._place(self._button("Поділити на частини  ⧉",
-                                     lambda: self._start_split(balanced=False)), self.W // 2, y)
-            self._place(self._button("Стиснути і поділити  ⚖",
-                                     lambda: self._start_split(balanced=True), primary=False),
-                        self.W // 2, y + 40)
-            y += 80
+            self._btn_full(L("ov_split"), lambda: self._start_split(balanced=False), y)
+            self._btn_full(L("ov_split_bal"), lambda: self._start_split(balanced=True), y + 48,
+                           primary=False)
+            y += 96
         if allow_trim:
-            self._place(self._button("Обрізати момент ✂", self._open_trim, primary=False),
-                        self.W // 2 - 8, y + 8, "e")
-            self._place(self._button("Закрити", self._close, primary=False), self.W // 2 + 8, y + 8, "w")
+            self._btn_pair(L("ov_trim"), self._open_trim, L("close"), self._close, y + 8,
+                           left_primary=False, right_primary=False)
         else:
-            self._place(self._button("Закрити", self._close, primary=False), self.W // 2, y + 8)
+            self._btn_full(L("close"), self._close, y + 8, primary=False)
 
     def _open_trim(self):
         try:
             info = dc_core.ffprobe_info(self.file_path)
         except Exception:
-            return self._show_error("Не вдалося прочитати відео.", allow_split=False, allow_trim=False)
+            return self._show_error(L("ov_read_fail"), allow_split=False, allow_trim=False)
         self._suspend_vis = True   # редактор має «Discord» у заголовку — не смикаємо оверлей
         self.withdraw()
         self._visible = False
@@ -504,19 +591,23 @@ class Overlay(tk.Toplevel):
     def _shrink_input(self):
         """Екран, де юзер ВВОДИТЬ бажаний розмір у МБ (не більше за саме відео)."""
         self._clear()
-        self._place(self._label("🗜", 30, C_TEXT), self.W // 2, 46)
-        self._place(self._label(L("ov_shrink_type", max=f"{self.size_mb:.1f}"), 12, C_TEXT, bold=True),
-                    self.W // 2, 92)
-        self.mb_entry = tk.Entry(self.canvas, width=7, font=(FONT, 18, "bold"), justify="center",
-                                 bg=C_DARK, fg=C_TEXT, insertbackground=C_TEXT, relief="flat")
+        self._badge("🗜", 62)
+        self._text(L("ov_shrink_type", max=f"{self.size_mb:.1f}"), 116, 12, C_TEXT)
+        # поле вводу в темній заокругленій «капсулі»
+        cx, cy = self.W // 2, 158
+        self.canvas.create_polygon(_rr_pts(cx - 74, cy - 22, cx + 74, cy + 22, 12),
+                                   smooth=True, fill=C_DARK, outline=C_BLURPLE, width=1, tags="dyn")
+        self.mb_entry = tk.Entry(self.canvas, width=6, font=(FONT, 18, "bold"), justify="center",
+                                 bg=C_DARK, fg=C_TEXT, insertbackground=C_TEXT, relief="flat",
+                                 highlightthickness=0, bd=0)
         self.mb_entry.insert(0, str(max(1, int(self.size_mb * 0.6))))
-        self._place(self.mb_entry, self.W // 2 - 26, 132)
-        self._place(self._label("МБ", 13, C_MUTED), self.W // 2 + 34, 132)
+        self._place(self.mb_entry, cx - 18, cy)
+        self._text(L("unit_mb"), cy, 13, C_MUTED, bold=False, x=cx + 42)
         self.shrink_err = self._label("", 9, C_RED)
-        self._place(self.shrink_err, self.W // 2, 160)
+        self._place(self.shrink_err, cx, 194)
         self.mb_entry.bind("<Return>", lambda e: self._do_shrink_typed())
-        self._place(self._button(L("ov_compress"), self._do_shrink_typed), self.W // 2, 198)
-        self._place(self._button(L("close"), self._close, primary=False), self.W // 2, 242)
+        self._btn_full(L("ov_compress"), self._do_shrink_typed, 236)
+        self._btn_full(L("close"), self._close, 284, primary=False)
         try:
             self.focus_force()
             self.mb_entry.focus_set()
@@ -540,16 +631,13 @@ class Overlay(tk.Toplevel):
         try:
             info = dc_core.ffprobe_info(self.file_path)
         except Exception:
-            return self._show_error("Не вдалося прочитати відео.\nМожливо, файл пошкоджений.",
-                                    allow_split=False, allow_trim=False)
+            return self._show_error(L("ov_read_fail"), allow_split=False, allow_trim=False)
         target = float(target_override) if target_override else float(self.cfg["target_mb"])
         # перевірка здійсненності: навіть якщо ВЕСЬ бюджет віддати відео — чи вистачить?
         best = dc_core.calc_video_kbps(info["duration"], target, 0, False)
         if not best or best < 50:
             mins = info["duration"] / 60
-            return self._show_error(
-                f"Відео завелике для {target:g} МБ ({mins:.0f} хв).\n"
-                f"Підвищ ліміт у Налаштуваннях (Nitro)\nабо спершу обріж відео коротше.")
+            return self._show_error(L("ov_too_big", mb=f"{target:g}", mins=f"{mins:.0f}"))
         scale = (dc_core.pick_auto_scale(info, target, self.cfg["audio_kbps"])
                  if self.cfg.get("auto_scale", True) else 0)
         out_path = dc_core.output_name(self.file_path, target)
@@ -564,7 +652,7 @@ class Overlay(tk.Toplevel):
             except Exception as e:
                 import traceback
                 dc_core.dlog("compress worker EXCEPTION: " + repr(e) + "\n" + traceback.format_exc())
-                return self.after(0, lambda: self._show_error(f"Помилка:\n{str(e)[:70]}"))
+                return self.after(0, lambda: self._show_error(f'{L("ov_err_prefix")}\n{str(e)[:70]}'))
             self.after(0, lambda: self._after(ok, out_path, mb, target, msg))
 
         threading.Thread(target=worker, daemon=True).start()
@@ -602,13 +690,13 @@ class Overlay(tk.Toplevel):
         try:
             info = dc_core.ffprobe_info(self.file_path)
         except Exception:
-            return self._show_error("Не вдалося прочитати відео.", allow_split=False, allow_trim=False)
+            return self._show_error(L("ov_read_fail"), allow_split=False, allow_trim=False)
         target = float(self.cfg["target_mb"])
         # balanced=True -> «стиснути і поділити»: менше частин, зате кожна стискається сильніше
         n_parts = (dc_core.plan_parts_balanced(info["duration"], target, self.cfg["audio_kbps"],
                                                info["has_audio"]) if balanced else None)
         self.cancel["flag"] = False
-        self._show_progress(title="Стискаю і ділю…" if balanced else "Ділю на частини…")
+        self._show_progress(title=L("ov_comp_split") if balanced else L("ov_splitting"))
         dc_core.dlog(f"_start_split: balanced={balanced} n_parts={n_parts} target={target}")
 
         def worker():
@@ -624,7 +712,7 @@ class Overlay(tk.Toplevel):
                 import traceback
                 dc_core.dlog("split worker EXCEPTION: " + repr(e) + "\n" + traceback.format_exc())
                 return self.after(0, lambda: self._show_error(
-                    f"Помилка ділення:\n{str(e)[:70]}", allow_trim=False))
+                    f'{L("ov_err_prefix")}\n{str(e)[:70]}', allow_trim=False))
             self.after(0, lambda: self._after_split(ok, outs, msg))
 
         threading.Thread(target=worker, daemon=True).start()
@@ -636,7 +724,7 @@ class Overlay(tk.Toplevel):
                 except OSError: pass
             return self._close()
         if not ok or not outs:
-            return self._show_error(msg or "Не вдалося розділити відео.", allow_trim=False)
+            return self._show_error(msg or L("ov_split_fail"), allow_trim=False)
         self._set(100)
         self.out_paths = outs
         # Discord бере МАКС 10 вкладень за раз -> >10 файлів шлемо пачками по 10
@@ -655,30 +743,27 @@ class Overlay(tk.Toplevel):
         total = len(self.out_paths)
         b = self._batch_i
         lo, hi = b * 10 + 1, min(total, (b + 1) * 10)
-        self._place(self._label("✓", 32, C_GREEN, bold=True), self.W // 2, 42)
+        self._badge("✓", 60, color=C_GREEN)
         key = "ov_batch_in" if pasted else "ov_batch_clip"
-        self._place(self._label(L(key, a=lo, b=hi, total=total), 12, C_TEXT, bold=True),
-                    self.W // 2, 82)
+        self._text(L(key, a=lo, b=hi, total=total), 108, 12, C_TEXT)
         if b + 1 < len(self._batches):
-            self._place(self._label(L("ov_batch_hint"), 10, C_MUTED), self.W // 2, 108)
+            self._text(L("ov_batch_hint"), 134, 10, C_MUTED, bold=False)
             nlo, nhi = (b + 1) * 10 + 1, min(total, (b + 2) * 10)
-            self._place(self._button(L("ov_batch_next", a=nlo, b=nhi), self._next_batch),
-                        self.W // 2, 152)
-            self._place(self._button(L("close"), self._close, primary=False), self.W // 2, 198)
+            self._btn_full(L("ov_batch_next", a=nlo, b=nhi), self._next_batch, 184)
+            self._btn_full(L("close"), self._close, 232, primary=False)
         else:
             # усі пачки надіслано -> питаємо про копію на ПК / завершуємо
-            self._place(self._label(L("ov_done"), 13, C_GREEN, bold=True), self.W // 2, 110)
+            self._text(L("ov_done"), 140, 13, C_GREEN)
             policy = self.cfg.get("keep_local", "ask")
             if policy == "ask":
-                self._place(self._label(L("ov_keep_q"), 11, C_TEXT, bold=True), self.W // 2, 150)
-                self._place(self._button(L("ov_keep"), lambda: self._keep_parts(True), primary=False),
-                            self.W // 2 - 8, 190, "e")
-                self._place(self._button(L("ov_delete"), lambda: self._keep_parts(False)),
-                            self.W // 2 + 8, 190, "w")
+                self._text(L("ov_keep_q"), 180, 11, C_TEXT)
+                self._btn_pair(L("ov_keep"), lambda: self._keep_parts(True),
+                               L("ov_delete"), lambda: self._keep_parts(False), 224,
+                               left_primary=False, right_primary=True)
             else:
                 if policy == "never":
                     self._schedule_delete(self.out_paths)
-                self._place(self._button(L("ov_done"), self._close), self.W // 2, 176)
+                self._btn_full(L("ov_done"), self._close, 200)
                 self.after(9000, self._close)
 
     def _next_batch(self):
@@ -688,38 +773,36 @@ class Overlay(tk.Toplevel):
 
     def _show_done_split(self, n, pasted):
         self._clear()
-        self._place(self._label("✓", 38, C_GREEN, bold=True), self.W // 2, 48)
-        self._place(self._label(L("ov_done_parts", n=n), 15, C_TEXT, bold=True), self.W // 2, 90)
+        self._badge("✓", 64, color=C_GREEN)
+        self._text(L("ov_done_parts", n=n), 116, 15, C_TEXT)
         if pasted:
             msg = L("ov_pasted")
         elif n > 10:
-            msg = "Усі в буфері · Ctrl+V (Discord бере до 10 за раз)"
+            msg = L("ov_all_clip")
         else:
             msg = L("ov_in_clip")
-        self._place(self._label(msg, 11, C_BLURPLE, bold=True), self.W // 2, 118)
-        self._place(self._label("…_part1, _part2 … поруч з оригіналом", 9, C_MUTED),
-                    self.W // 2, 140)
+        self._text(msg, 142, 11, C_BLURPLE)
+        self._text(L("ov_parts_near"), 164, 9, C_MUTED, bold=False)
 
         outs = getattr(self, "out_paths", [])
         policy = self.cfg.get("keep_local", "ask")
         if policy == "ask" and outs:
-            self._place(self._label(L("ov_keep_q"), 11, C_TEXT, bold=True), self.W // 2, 172)
-            self._place(self._button(L("ov_keep"), lambda: self._keep_parts(True), primary=False),
-                        self.W // 2 - 8, 210, "e")
-            self._place(self._button(L("ov_delete"), lambda: self._keep_parts(False)),
-                        self.W // 2 + 8, 210, "w")
+            self._text(L("ov_keep_q"), 202, 11, C_TEXT)
+            self._btn_pair(L("ov_keep"), lambda: self._keep_parts(True),
+                           L("ov_delete"), lambda: self._keep_parts(False), 246,
+                           left_primary=False, right_primary=True)
         else:
             if policy == "never":
                 self._schedule_delete(outs)
-            self._place(self._button(L("ov_done"), self._close), self.W // 2, 196)
+            self._btn_full(L("ov_done"), self._close, 224)
             self.after(9000, self._close)
 
     def _keep_parts(self, keep):
         if not keep:
             self._schedule_delete(getattr(self, "out_paths", []))
-            self._place(self._label(L("ov_deleted"), 10, C_MUTED), self.W // 2, 248)
+            self._text(L("ov_deleted"), 300, 10, C_MUTED, bold=False)
         else:
-            self._place(self._label(L("ov_kept"), 10, C_GREEN), self.W // 2, 248)
+            self._text(L("ov_kept"), 300, 10, C_GREEN, bold=False)
         self.after(1800, self._close)
 
     def _close(self):
