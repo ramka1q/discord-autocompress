@@ -11,6 +11,7 @@
     "optimize_test.py",
     "deps.py",
     "editor.py",
+    "jokes.py",
     "discord_autowatch.py",
     "discord_compressor.py",
     "discord_toolbox.py",

@@ -30,6 +30,7 @@ import dc_core
 import themes
 import media
 import i18n
+import jokes
 
 CONFIG_PATH = os.path.join(os.path.expanduser("~"), ".discord_overlay.json")
 
@@ -452,18 +453,35 @@ class Overlay(tk.Toplevel):
 
     def _show_progress(self, title=None):
         self._clear()
-        self._badge("⚡", 74)
-        self._text(title or L("ov_working"), 132, 14, C_TEXT)
+        self._badge("⚡", 58)
+        self._text(title or L("ov_working"), 102, 14, C_TEXT)
         self.sub = self._label("", 10, C_MUTED)
-        self._place(self.sub, self.W // 2, 156)
-        self.pct = self._label("0%", 30, C_BLURPLE, bold=True)
-        self._place(self.pct, self.W // 2, 196)
-        self.bx1, self.bx2, self.by = 70, self.W - 70, 236
+        self._place(self.sub, self.W // 2, 124)
+        self.pct = self._label("0%", 28, C_BLURPLE, bold=True)
+        self._place(self.pct, self.W // 2, 160)
+        self.bx1, self.bx2, self.by = 70, self.W - 70, 194
         self.canvas.create_polygon(_rr_pts(self.bx1, self.by, self.bx2, self.by + 12, 6),
                                    smooth=True, fill=C_DARK, outline="", tags="dyn")
         self.fill = self.canvas.create_polygon(_rr_pts(self.bx1, self.by, self.bx1 + 1, self.by + 12, 6),
                                                smooth=True, fill=C_BLURPLE, outline="", tags="dyn")
-        self._btn_full(L("ov_cancel"), lambda: self.cancel.update(flag=True), 292, primary=False)
+        # жарт про навоз і Дениса — щоб скоротати час завантаження
+        self.joke_lbl = tk.Label(self.canvas, text="", bg=C_BG, fg=C_MUTED, font=(FONT, 9),
+                                 wraplength=self.W - 84, justify="center")
+        self._place(self.joke_lbl, self.W // 2, 250)
+        self._joke_i = kernel32.GetTickCount() % max(1, jokes.count())   # старт «випадковий» (без random)
+        self._rotate_joke()
+        self._btn_full(L("ov_cancel"), lambda: self.cancel.update(flag=True), 316, primary=False)
+
+    def _rotate_joke(self):
+        """Крутить жарти кожні ~4.5с, поки видно екран стиснення."""
+        try:
+            if not self.joke_lbl.winfo_exists():
+                return
+            self.joke_lbl.config(text="🐮  " + jokes.joke_at(self._joke_i))
+            self._joke_i += 1
+        except (tk.TclError, AttributeError):
+            return
+        self._joke_after = self.after(4500, self._rotate_joke)
 
     def _show_done(self, final_mb, fits, pasted):
         self._clear()
