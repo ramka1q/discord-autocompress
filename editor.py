@@ -3,30 +3,47 @@
 Video Editor для Discord Auto-Compress
 ======================================
 Міні-редактор:
-  • справжнє відтворення зі звуком (ffpyplayer) — кнопка «Грати»;
+  • відтворення ЗІ ЗВУКОМ у окремому вікні через ffplay (кнопка «Грати») — стабільно, без ffpyplayer;
   • прев'ю/перемотка кадру (ffmpeg→PNG) — миттєво при кліку на таймлайн;
   • ножиці: розрізати відео на кілька шматків (клік «✂ Розрізати тут»);
   • перевпорядкування / видалення / перегляд кожного шматка;
   • експорт: склейка вибраних шматків у порядку та стиснення під ліміт Discord.
 
-Гібрид: прев'ю — через перевірений extract_frame, плавне відтворення — ffpyplayer.
+Кадрове прев'ю — через перевірений extract_frame (ffmpeg→PNG); звук — через ffplay-процес.
 Імпортується ліниво з discord_overlay.
 """
-import base64
+import ctypes
 import os
 import shutil
+import subprocess
 import tempfile
 import threading
+import time
 
 import tkinter as tk
 
 import dc_core
 import discord_overlay as host
 
-try:                                    # плеєр потрібен лише для «Грати»; превʼю/нарізка/експорт
-    from ffpyplayer.player import MediaPlayer   # працюють і без нього
-except Exception:
-    MediaPlayer = None
+# ---- WinAPI для вбудовування вікна ffplay у наш відео-екран (SetParent) ----
+_u32 = ctypes.windll.user32
+_u32.FindWindowW.restype = ctypes.c_void_p
+_u32.FindWindowW.argtypes = [ctypes.c_wchar_p, ctypes.c_wchar_p]
+_u32.SetParent.restype = ctypes.c_void_p
+_u32.SetParent.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+_u32.MoveWindow.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_int,
+                            ctypes.c_int, ctypes.c_int, ctypes.c_bool]
+try:                                    # 64-біт: SetWindowLongPtrW
+    _SetWinLong = _u32.SetWindowLongPtrW
+    _SetWinLong.restype = ctypes.c_void_p
+    _SetWinLong.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p]
+except AttributeError:                  # 32-біт
+    _SetWinLong = _u32.SetWindowLongW
+    _SetWinLong.restype = ctypes.c_long
+    _SetWinLong.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_long]
+_GWL_STYLE = -16
+_WS_CHILD = 0x40000000
+_WS_VISIBLE = 0x10000000
 
 C_BG, C_BG2, C_DARK = host.C_BG, host.C_BG2, host.C_DARK
 C_BLURPLE, C_BLURPLE_H = host.C_BLURPLE, host.C_BLURPLE_H
@@ -53,10 +70,15 @@ class VideoEditor(tk.Toplevel):
         self.order = [0]
         self.sel = 0
 
-        self.player = None
         self.playing = False
         self.cur = 0.0
         self.play_until = None
+        self._ffplay = None
+        self._embedded = None
+        self._play_start = 0.0
+        self._play_end = 0.0
+        self._play_t0 = 0.0
+        self._embed_title = ""
         self._img = None
         self._tick_id = None
         self._prev_after = None
@@ -64,10 +86,6 @@ class VideoEditor(tk.Toplevel):
         self.busy = False
         self._tmp = tempfile.mkdtemp(prefix="dedit_")
         self._frames = [os.path.join(self._tmp, "a.png"), os.path.join(self._tmp, "b.png")]
-
-        vw, vh = info["width"] or 16, info["height"] or 9
-        self._ph = (self.VW * vh // vw) or self.VH
-        self._ph -= self._ph % 2
 
         self.title("✂ Редактор відео — Discord Auto-Compress")
         self.configure(bg=C_BG)
@@ -157,94 +175,109 @@ class VideoEditor(tk.Toplevel):
         except tk.TclError:
             pass
 
-    # ------------------------------------------- ВІДТВОРЕННЯ (ffpyplayer) -- #
-    def _ensure_player(self):
-        if self.player is not None:
-            return True
-        if MediaPlayer is None:
-            self.info_lbl.config(
-                text="Відтворення недоступне (нема ffpyplayer) — превʼю й нарізка працюють", fg=C_RED)
-            return False
-        try:
-            self.player = MediaPlayer(self.file_path, ff_opts={"paused": True, "out_fmt": "rgb24"})
-            self.player.set_size(self.VW, self._ph)
-            return True
-        except Exception as e:
-            self.info_lbl.config(text=f"Плеєр недоступний: {str(e)[:40]}", fg=C_RED)
-            return False
-
+    # -------------- ВБУДОВАНЕ ВІДТВОРЕННЯ ЗІ ЗВУКОМ (ffplay через SetParent) ---- #
+    # ffplay-процес запускаємо БЕЗ рамки і його вікно «вклеюємо» в наш відео-екран
+    # через WinAPI SetParent -> відео зі звуком просто в редакторі (як у капкуті),
+    # без крихкого рендерингу в самому Python (той давав segfault).
     def _toggle_play(self):
         if self.playing:
             self._pause()
         else:
-            self.play_until = None
-            self._play(self.cur)
+            self._launch(self.cur, None)
 
-    def _play(self, from_t):
-        if not self._ensure_player():
+    def _play_segment(self):
+        s, e = self.pieces[self.order[self.sel]]
+        self._launch(s, e - s)
+
+    def _launch(self, start, dur):
+        self._pause()
+        start = max(0.0, min(self.dur, start))
+        self._play_start = start
+        self._play_end = min(self.dur, start + dur) if dur else self.dur
+        w = self.video.winfo_width() or self.VW
+        h = self.video.winfo_height() or self.VH
+        self._embed_title = f"dac_play_{os.getpid()}_{int(start * 1000)}"
+        cmd = ["ffplay", "-hide_banner", "-loglevel", "error", "-noborder", "-autoexit",
+               "-left", "32000", "-top", "32000",   # спавн за межами екрана — без спалаху
+               "-x", str(w), "-y", str(h), "-ss", f"{start:.3f}"]
+        if dur is not None:
+            cmd += ["-t", f"{max(0.1, dur):.3f}"]
+        cmd += ["-window_title", self._embed_title, "-i", self.file_path]
+        try:
+            self._ffplay = subprocess.Popen(cmd, creationflags=dc_core.NO_WINDOW)
+        except FileNotFoundError:
+            self.info_lbl.config(text="ffplay не знайдено — онови ffmpeg", fg=C_RED)
+            return
+        self.playing = True
+        self._embedded = None
+        self._play_t0 = time.monotonic()
+        try:
+            self.play_btn.config(text="⏸ Стоп")
+        except tk.TclError:
+            pass
+        self._embed_try(0)
+        self._play_progress()
+
+    def _embed_try(self, n):
+        """Знаходимо вікно ffplay за заголовком і вклеюємо його в наш відео-екран."""
+        if not self.playing or self._embedded:
             return
         try:
-            self.player.seek(max(0, from_t), relative=False, accurate=True)
+            hwnd = _u32.FindWindowW(None, self._embed_title)
+            if hwnd:
+                parent = self.video.winfo_id()
+                _SetWinLong(hwnd, _GWL_STYLE, _WS_CHILD | _WS_VISIBLE)
+                _u32.SetParent(hwnd, parent)
+                w = self.video.winfo_width() or self.VW
+                h = self.video.winfo_height() or self.VH
+                _u32.MoveWindow(hwnd, 0, 0, w, h, True)
+                self._embedded = hwnd
+                return
         except Exception:
             pass
-        self.player.set_pause(False)
-        self.playing = True
-        self.play_btn.config(text="⏸ Пауза")
-        if not self._tick_id:
-            self._tick()
+        if n < 80:  # ffplay може створювати вікно кілька сотень мс
+            self.after(50, lambda: self._embed_try(n + 1))
+
+    def _play_progress(self):
+        """Рухаємо playhead за годинником + стежимо, чи не завершилось відтворення."""
+        if not self.playing:
+            return
+        p = getattr(self, "_ffplay", None)
+        if p is None or p.poll() is not None:
+            return self._pause()
+        pos = self._play_start + (time.monotonic() - self._play_t0)
+        if pos >= self._play_end:
+            return self._pause()
+        self.cur = min(self.dur, pos)
+        self._update_time()
+        self._draw_timeline()
+        self._tick_id = self.after(80, self._play_progress)
 
     def _pause(self):
         self.playing = False
         self.play_until = None
-        self.play_btn.config(text="▶ Грати")
-        if self.player:
-            try: self.player.set_pause(True)
+        p = getattr(self, "_ffplay", None)
+        if p is not None and p.poll() is None:
+            try: p.terminate()
             except Exception: pass
+        self._ffplay = None
+        self._embedded = None
         if self._tick_id:
             try: self.after_cancel(self._tick_id)
             except Exception: pass
             self._tick_id = None
-        self._show_poster(self.cur)
-
-    def _tick(self):
-        self._tick_id = None
-        if not (self.player and self.playing):
-            return
-        frame, val = self.player.get_frame()
-        if val == "eof":
-            self._pause(); self._seek(0.0); return
-        if frame is not None:
-            self._draw_pl(frame[0])
-            self.cur = frame[1]
-            self._update_time()
-            self._draw_timeline()
-            if self.play_until is not None and self.cur >= self.play_until:
-                self._pause(); return
-        delay = 1 if not val else min(60, int(val * 1000))
-        self._tick_id = self.after(max(1, delay), self._tick)
-
-    def _draw_pl(self, img):
         try:
-            w, h = img.get_size()
-            ls = img.get_linesizes()[0]
-            buf = bytes(img.to_bytearray()[0])
-            row = w * 3
-            data = buf if ls == row else b"".join(buf[r * ls:r * ls + row] for r in range(h))
-            ppm = b"P6\n%d %d\n255\n" % (w, h) + data
-            self._img = tk.PhotoImage(data=base64.b64encode(ppm).decode("ascii"))
-            self.video.delete("frame")
-            self.video.create_image(self.VW // 2, self.VH // 2, image=self._img, tags="frame")
-        except Exception:
-            pass
+            self.play_btn.config(text="▶ Грати")
+        except tk.TclError:
+            return
+        self._show_poster(self.cur)   # повертаємо статичний кадр на екран
 
     def _seek(self, t):
+        if self.playing:
+            self._pause()             # почали перемотувати — зупиняємо відтворення
         t = max(0, min(self.dur, t))
         self.cur = t
-        if self.playing and self.player:
-            try: self.player.seek(t, relative=False, accurate=True)
-            except Exception: pass
-        else:
-            self._show_poster(t)
+        self._show_poster(t)
         self._redraw()
 
     def _to_start(self):
@@ -278,11 +311,6 @@ class VideoEditor(tk.Toplevel):
             del self.order[self.sel]
             self.sel = min(self.sel, len(self.order) - 1)
             self._redraw()
-
-    def _play_segment(self):
-        s, e = self.pieces[self.order[self.sel]]
-        self.play_until = e
-        self._play(s)
 
     # --------------------------------------------------------- малювання --- #
     def _redraw(self):
@@ -388,12 +416,7 @@ class VideoEditor(tk.Toplevel):
         self.after(2600, self._close)
 
     def _close(self):
-        try: self._pause()
-        except Exception: pass
-        if self.player:
-            try: self.player.close_player()
-            except Exception: pass
-            self.player = None
+        self._pause()                  # зупиняємо ffplay і його опитування
         shutil.rmtree(self._tmp, ignore_errors=True)
         try:
             self.destroy()

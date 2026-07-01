@@ -25,9 +25,6 @@ echo [*] Downloading the program from GitHub...
 python update.py --install
 if errorlevel 1 goto :dlfail
 
-echo [*] Installing dependency for the editor...
-python -m pip install --disable-pip-version-check --quiet ffpyplayer
-
 echo [*] Enabling background autostart...
 powershell -NoProfile -ExecutionPolicy Bypass -File "autostart_enable.ps1"
 

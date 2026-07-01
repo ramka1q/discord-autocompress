@@ -68,6 +68,8 @@ user32.IsIconic.argtypes = [ctypes.c_void_p]
 user32.IsIconic.restype = ctypes.c_int
 user32.IsWindowVisible.argtypes = [ctypes.c_void_p]
 user32.IsWindowVisible.restype = ctypes.c_int
+user32.GetWindowThreadProcessId.argtypes = [ctypes.c_void_p, ctypes.POINTER(wintypes.DWORD)]
+user32.GetWindowThreadProcessId.restype = wintypes.DWORD
 kernel32.GlobalAlloc.restype = ctypes.c_void_p
 kernel32.GlobalAlloc.argtypes = [wintypes.UINT, ctypes.c_size_t]
 kernel32.GlobalLock.restype = ctypes.c_void_p
@@ -217,11 +219,16 @@ class Overlay(tk.Toplevel):
         self._suspend_vis = False
         self._vis_after = self.after(400, self._visibility_tick)
 
-    def _own_hwnd(self):
+    def _fg_is_own_process(self, fg):
+        """Чи належить активне вікно НАШОМУ процесу (оверлей, редактор тощо)."""
+        if not fg:
+            return False
         try:
-            return int(self.winfo_id())
+            pid = wintypes.DWORD()
+            user32.GetWindowThreadProcessId(fg, ctypes.byref(pid))
+            return pid.value == os.getpid()
         except Exception:
-            return 0
+            return False
 
     def _visibility_tick(self):
         self._vis_after = None
@@ -232,11 +239,13 @@ class Overlay(tk.Toplevel):
             return
         try:
             fg, title = foreground_title()
-            own = self._own_hwnd()
-            # показуємо, лише коли активне вікно — Discord (або сам наш оверлей)
-            show = ("discord" in title.lower()) or (own and fg == own)
-            if self.discord_hwnd and user32.IsIconic(self.discord_hwnd):
-                show = False  # Discord згорнутий
+            if self._fg_is_own_process(fg):
+                show = True            # клікнули по НАШОМУ вікну — не ховаємось (виняток)
+            elif "discord" in title.lower() and not (
+                    self.discord_hwnd and user32.IsIconic(self.discord_hwnd)):
+                show = True            # активний Discord і він не згорнутий
+            else:
+                show = False           # згорнули Discord або перейшли в іншу програму
             if show and not self._visible:
                 self.deiconify()
                 self.attributes("-topmost", True)
