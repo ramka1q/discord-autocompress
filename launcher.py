@@ -24,6 +24,7 @@ import tkinter.ttk        # noqa: F401
 import tkinter.messagebox as _mb
 import tkinter.filedialog     # noqa: F401
 import tkinter.colorchooser   # noqa: F401
+import tkinter.font           # noqa: F401  (щоб майбутній ребілд exe бандлив підмодуль)
 import ctypes             # noqa: F401
 import ctypes.wintypes    # noqa: F401
 import subprocess         # noqa: F401

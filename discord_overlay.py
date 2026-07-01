@@ -25,7 +25,6 @@ import threading
 from ctypes import wintypes
 
 import tkinter as tk
-import tkinter.font as tkfont
 
 import dc_core
 import themes
@@ -352,10 +351,12 @@ class Overlay(tk.Toplevel):
         self.canvas.create_text(cx, y + 1, text=icon, font=(FONT, 26), tags="dyn")
 
     def _fit(self, text, maxw, base):
-        """Найбільший розмір шрифту, за якого текст влазить у ширину кнопки (мовно-стійко)."""
+        """Найбільший розмір шрифту, за якого текст влазить у ширину кнопки (мовно-стійко).
+        Міряємо через Tcl `font measure` — БЕЗ `import tkinter.font`, бо старий exe
+        цей підмодуль не бандлить (launcher force-import його не має) -> інакше краш."""
         try:
             for s in range(base, 8, -1):
-                if tkfont.Font(family=FONT, size=s, weight="bold").measure(text) <= maxw:
+                if int(self.tk.call("font", "measure", (FONT, s, "bold"), text)) <= maxw:
                     return s
         except Exception:
             pass
