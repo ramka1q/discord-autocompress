@@ -981,9 +981,22 @@ class ShrinkPill(tk.Toplevel):
         self.lift()
         self.attributes("-topmost", True)
         self.update_idletasks()
+        self._force_top()                              # win32: реально виносимо поверх Discord
         self._alive = True
         self._after = self.after(8000, self._close)    # само зникає, якщо не чіпати
         self.after(600, self._tick)                    # закриваємось, якщо юзер пішов з Discord
+
+    def _force_top(self):
+        """Виносимо вікно у топ-бенд Windows БЕЗ крадіжки фокуса в Discord.
+        `overrideredirect`+Tk `-topmost` виставлений ДО мапінгу вікна часто «не
+        приклеюється» (вікно ховається за Discord після його перемалювання), тому
+        дублюємо через SetWindowPos(HWND_TOPMOST) — його треба переставляти щотіка."""
+        try:
+            hwnd = user32.GetAncestor(self.winfo_id(), 2)  # GA_ROOT
+            # HWND_TOPMOST=-1; SWP_NOSIZE|SWP_NOMOVE|SWP_NOACTIVATE|SWP_SHOWWINDOW
+            user32.SetWindowPos(hwnd, -1, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010 | 0x0040)
+        except Exception:
+            pass
 
     def _tick(self):
         if not self._alive:
@@ -995,6 +1008,9 @@ class ShrinkPill(tk.Toplevel):
             own = pid.value == os.getpid()             # клік по самій пілюлі — не ховаємось
             if not own and "discord" not in title.lower():
                 return self._close()                    # передумали / пішли -> прибираємо значок
+            # Discord перемальовує себе й «топить» пілюлю — щоразу піднімаємо назад
+            self.attributes("-topmost", True)
+            self._force_top()
         except Exception:
             pass
         self.after(600, self._tick)
