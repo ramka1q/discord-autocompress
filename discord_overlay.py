@@ -981,7 +981,23 @@ class ShrinkPill(tk.Toplevel):
         self.lift()
         self.attributes("-topmost", True)
         self.update_idletasks()
-        self._after = self.after(12000, self._close)   # само зникає, якщо не чіпати
+        self._alive = True
+        self._after = self.after(8000, self._close)    # само зникає, якщо не чіпати
+        self.after(600, self._tick)                    # закриваємось, якщо юзер пішов з Discord
+
+    def _tick(self):
+        if not self._alive:
+            return
+        try:
+            fg, title = foreground_title()
+            pid = wintypes.DWORD()
+            user32.GetWindowThreadProcessId(fg, ctypes.byref(pid))
+            own = pid.value == os.getpid()             # клік по самій пілюлі — не ховаємось
+            if not own and "discord" not in title.lower():
+                return self._close()                    # передумали / пішли -> прибираємо значок
+        except Exception:
+            pass
+        self.after(600, self._tick)
 
     def _place_near_discord(self):
         # ПО СЕРЕДИНІ ЕКРАНА (як просив юзер)
@@ -1008,6 +1024,7 @@ class ShrinkPill(tk.Toplevel):
             pass
 
     def _close(self):
+        self._alive = False
         self._cancel()
         try:
             self.destroy()
@@ -1090,7 +1107,10 @@ class Watcher:
             env = {k: v for k, v in os.environ.items()
                    if k not in ("_MEIPASS2", "_MEIPASS", "_PYI_APPLICATION_HOME_DIR",
                                 "_PYIBootstrap", "TCL_LIBRARY", "TK_LIBRARY", "TKPATH")}
-            subprocess.Popen(["cmd", "/c", full], creationflags=0x08000000, env=env)
+            # shell=True з РЯДКОМ (не списком!) — інакше вкладені лапки ламаються
+            # й Windows бачить '\' як команду («Windows cannot find '\'»).
+            subprocess.Popen(full, shell=True, creationflags=0x08000000, env=env)
+            dc_core.dlog("restart launching: " + full)
         except Exception as e:
             dc_core.dlog("restart launch failed: " + repr(e))
         # ВАЖЛИВО: не руйнуємо root просто зараз (ми всередині обробки кліку кнопки —
