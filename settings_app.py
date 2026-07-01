@@ -21,13 +21,15 @@ APP_VERSION = "2.0"
 class SettingsApp:
     W, H = 760, 560
 
-    def __init__(self, master, cfg, on_save, on_apply=None, on_close=None):
+    def __init__(self, master, cfg, on_save, on_apply=None, on_close=None, on_restart=None):
         """cfg — робоча копія конфіга; on_save(cfg) — зберегти; on_apply(cfg) —
-        миттєво застосувати тему/мову (overlay+трей); on_close() — закрити."""
+        миттєво застосувати тему/мову (overlay+трей); on_close() — закрити;
+        on_restart() — перезапустити всю програму (для кнопки після оновлення)."""
         self.cfg = dict(cfg)
         self.on_save = on_save
         self.on_apply = on_apply
         self.on_close_cb = on_close
+        self.on_restart = on_restart
         self.lang = self.cfg.get("lang", "uk")
         self.P = themes.palette(self.cfg.get("theme", "discord"))
         self._or_active = True
@@ -341,6 +343,7 @@ class SettingsApp:
                 pass
 
     def _tab_updates(self):
+        self._restart_btn = None
         f = self._pad()
         self._header(f, self.T("tab_updates"))
         self._lbl(f, self.T("update_hint"), muted=True).pack(anchor="w", pady=(0, 14))
@@ -369,10 +372,19 @@ class SettingsApp:
                 self.upd_status.config(text=self.T("update_fail"), fg=self.P["red"])
             elif changed > 0:
                 self.upd_status.config(text=self.T("updated_n", n=changed), fg=self.P["green"])
+                # знайшли оновлення -> пропонуємо перезапуск (щоб застосувати свіжий код)
+                if self.on_restart and not getattr(self, "_restart_btn", None):
+                    self._restart_btn = self._btn(self.upd_btn.master, self.T("restart_now"),
+                                                  self._do_restart)
+                    self._restart_btn.pack(anchor="w", pady=(10, 0))
             else:
                 self.upd_status.config(text=self.T("up_to_date"), fg=self.P["green"])
         except tk.TclError:
             pass
+
+    def _do_restart(self):
+        if self.on_restart:
+            self.on_restart()
 
     def _tab_performance(self):
         f = self._pad()

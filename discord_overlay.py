@@ -1057,6 +1057,20 @@ class Watcher:
         except Exception:
             pass
 
+    def restart_app(self):
+        """Закриває поточну копію й запускає свіжу (із затримкою, щоб трей встиг звільнитись)."""
+        try:
+            if getattr(sys, "frozen", False):
+                cmd = 'ping 127.0.0.1 -n 3 >nul & start "" "%s"' % sys.executable
+            else:
+                argv = " ".join('"%s"' % a for a in [sys.executable] + sys.argv)
+                cmd = 'ping 127.0.0.1 -n 3 >nul & start "" %s' % argv
+            import subprocess
+            subprocess.Popen("cmd /c " + cmd, shell=True, creationflags=0x08000000)
+        except Exception:
+            pass
+        self.quit_app()
+
     # ---- меню налаштувань ----
     def open_settings(self):
         if self.settings_win is not None:
@@ -1080,7 +1094,7 @@ class Watcher:
 
         self.settings_win = settings_app.SettingsApp(
             self.root, self.cfg, on_save=self._on_settings_save,
-            on_apply=self._on_settings_apply, on_close=_closed)
+            on_apply=self._on_settings_apply, on_close=_closed, on_restart=self.restart_app)
 
     def _on_settings_save(self, cfg):
         self.cfg = cfg
@@ -1111,8 +1125,14 @@ class Watcher:
         enabled = {"video": self.cfg.get("compress_video", True),
                    "image": self.cfg.get("compress_images", True),
                    "audio": self.cfg.get("compress_audio", True)}
+        files = clipboard_files()
+        vids = [p for p in files if os.path.isfile(p) and media.kind_of(p) == "video"]
+        if vids:
+            dc_core.dlog("paste@discord vids=" + str([(os.path.basename(v),
+                         round(os.path.getsize(v) / 1048576, 2)) for v in vids])
+                         + f" limit={self.cfg['target_mb']}MB offer_shrink={self.cfg.get('offer_shrink', True)}")
         small_hit = None
-        for path in clipboard_files():
+        for path in files:
             if "_discord_" in os.path.basename(path) or not os.path.isfile(path):
                 continue
             kind = media.kind_of(path)
