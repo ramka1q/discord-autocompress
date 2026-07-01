@@ -85,7 +85,7 @@ def run(quiet: bool = True) -> bool:
 
     if not quiet:
         print(f"[OK] Оновлено файлів: {changed}." if changed else "[OK] Уже остання версія.")
-    return changed > 0
+    return True   # успіх (навіть якщо нічого не змінилось); помилки повертають False вище
 
 
 def auto():
@@ -104,4 +104,5 @@ if __name__ == "__main__":
             open(MARKER, "w").close()
         except OSError:
             pass
-    run(quiet="--quiet" in sys.argv)
+    ok = run(quiet="--quiet" in sys.argv)
+    sys.exit(0 if ok else 1)   # ненульовий код -> інсталятор побачить збій

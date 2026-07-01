@@ -12,3 +12,6 @@ _d2p_passlog*
 .discord_overlay.json
 .discord_toolbox.json
 .discord_autowatch.json
+build_pyi/
+dist/
+*.spec

@@ -1,6 +1,7 @@
 @echo off
 chcp 65001 >nul
 cd /d "%~dp0"
+setlocal
 title Discord Auto-Compress - install
 
 echo ==================================================
@@ -8,9 +9,20 @@ echo    Discord Auto-Compress - automatic install
 echo ==================================================
 echo.
 
-rem ---------- Python ----------
-where python >nul 2>nul
-if errorlevel 1 goto :nopython
+rem ---------- Find REAL Python (skip the Microsoft Store stub) ----------
+set "PYCMD="
+py -3 --version >nul 2>nul
+if not errorlevel 1 set "PYCMD=py -3"
+if defined PYCMD goto :havepy
+python --version >nul 2>nul
+if not errorlevel 1 set "PYCMD=python"
+if defined PYCMD goto :havepy
+goto :nopython
+
+:havepy
+echo [*] Python: %PYCMD%
+set "PYW=pythonw"
+for /f "delims=" %%i in ('%PYCMD% -c "import sys,os;print(os.path.join(os.path.dirname(sys.executable),'pythonw.exe'))" 2^>nul') do set "PYW=%%i"
 
 rem ---------- ffmpeg ----------
 where ffmpeg >nul 2>nul
@@ -22,14 +34,14 @@ echo [i] If you see an ffmpeg error later, just run this file again.
 :getprog
 echo.
 echo [*] Downloading the program from GitHub...
-python update.py --install
+%PYCMD% update.py --install
 if errorlevel 1 goto :dlfail
 
 echo [*] Enabling background autostart...
 powershell -NoProfile -ExecutionPolicy Bypass -File "autostart_enable.ps1"
 
 echo [*] Starting the program...
-start "" pythonw discord_overlay.py
+start "" "%PYW%" discord_overlay.py
 
 echo.
 echo ==================================================
@@ -41,16 +53,20 @@ echo ==================================================
 goto :end
 
 :nopython
-echo [*] Python not found. Installing via winget...
+echo [*] Real Python not found (only the Microsoft Store stub, or nothing).
+echo     Installing Python via winget...
 winget install -e --id Python.Python.3.12 --silent --accept-package-agreements --accept-source-agreements
 echo.
-echo [!] Python installed. Windows does not see it in this window yet.
-echo     CLOSE this window and run this file again.
+echo [!] Python installed. Windows does not see it in THIS window yet.
+echo     CLOSE this window and run Install.bat again.
 goto :end
 
 :dlfail
 echo [!] Download from GitHub failed.
-echo     Check the internet and the REPO_RAW address inside update.py
+echo     The repo is public and reachable, so this is usually:
+echo       - no internet / a VPN or firewall blocking github;
+echo       - or Python could not run update.py.
+echo     Check the connection and run Install.bat again.
 
 :end
 echo.
