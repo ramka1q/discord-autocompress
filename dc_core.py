@@ -347,6 +347,18 @@ def export_gif(path, out_path, segments, fps=14, width=480, progress_cb=None, sh
         shutil.rmtree(tmpd, ignore_errors=True)
 
 
+def prepare_sound(src, out_wav) -> bool:
+    """Конвертує будь-який аудіо/відео у короткий .wav (макс 8с) для звуку «готово».
+    PlaySound грає лише .wav, тож приводимо все до нього. True при успіху."""
+    try:
+        rc = subprocess.run(
+            ["ffmpeg", "-y", "-i", src, "-t", "8", "-ac", "2", "-ar", "44100",
+             "-vn", out_wav], capture_output=True, creationflags=NO_WINDOW).returncode
+        return rc == 0 and os.path.exists(out_wav)
+    except Exception:
+        return False
+
+
 def waveform_png(path, out_png, width=596, height=42, color="6a7bf0") -> bool:
     """Малює аудіо-хвилю всього відео у PNG (showwavespic). True при успіху."""
     rc = subprocess.run(

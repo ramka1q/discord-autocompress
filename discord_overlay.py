@@ -61,13 +61,22 @@ def L(key, **kw):
     return i18n.tr(LANG, key, **kw)
 
 
+SOUND_WAV = os.path.join(os.path.expanduser("~"), ".discord_done_sound.wav")
+
+
 def play_done_sound(cfg):
-    """Один м'який системний «дінь» після стиснення (async, без файлу, лише ctypes -> онлайн)."""
+    """Звук після стиснення (async, ctypes -> онлайн). Свій .wav, якщо заданий,
+    інакше — системний звук Windows."""
     if not cfg.get("sound_done", True):
         return
     try:
-        # SND_ALIAS(0x10000) | SND_ASYNC(0x1) | SND_NODEFAULT(0x2)
-        ctypes.windll.winmm.PlaySoundW(ctypes.c_wchar_p("SystemAsterisk"), None, 0x00010003)
+        f = cfg.get("sound_file", "")
+        if f and os.path.isfile(f):
+            # SND_FILENAME(0x20000) | SND_ASYNC(0x1) | SND_NODEFAULT(0x2)
+            ctypes.windll.winmm.PlaySoundW(ctypes.c_wchar_p(f), None, 0x00020003)
+        else:
+            # SND_ALIAS(0x10000) | SND_ASYNC(0x1) | SND_NODEFAULT(0x2) — звук Windows
+            ctypes.windll.winmm.PlaySoundW(ctypes.c_wchar_p("SystemAsterisk"), None, 0x00010003)
     except Exception:
         pass
 
@@ -198,7 +207,7 @@ def load_config() -> dict:
            "lang": "uk", "theme": "discord",
            "compress_video": True, "compress_images": True, "compress_audio": True,
            "keep_local": "ask", "offer_shrink": True, "sound_done": True,
-           "custom_jokes": [], "hidden_jokes": []}
+           "sound_file": "", "custom_jokes": []}
     try:
         with open(CONFIG_PATH, encoding="utf-8") as f:
             cfg.update(json.load(f))

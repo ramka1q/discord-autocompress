@@ -6,11 +6,16 @@ settings_app.py — красиве меню налаштувань у стилі
 Відкривається як Toplevel на прихованому root вартового (або як окреме вікно).
 Тільки стандартна бібліотека Tk.
 """
+import ctypes
+import os
+import shutil
 import threading
 
 import tkinter as tk
+import tkinter.filedialog as filedialog
 
 import appicon
+import dc_core
 import deps
 import i18n
 import jokes
@@ -68,8 +73,8 @@ class SettingsApp:
         self.v_keep = tk.StringVar(w, c.get("keep_local", "ask"))
         self.v_shrink = tk.BooleanVar(w, c.get("offer_shrink", True))
         self.v_sound = tk.BooleanVar(w, c.get("sound_done", True))
-        self._custom = list(c.get("custom_jokes", []) or [])      # свої жарти
-        self._hidden = set(c.get("hidden_jokes", []) or [])       # приховані (текст жарту)
+        self._sound_file = c.get("sound_file", "")                # свій .wav звук (пусто = звук Windows)
+        self._custom = list(c.get("custom_jokes", []) or [])      # свої жарти (вбудовані видаляти НЕ можна)
         self.v_theme = tk.StringVar(w, c.get("theme", "discord"))
         self.v_lang = tk.StringVar(w, c.get("lang", "uk"))
         for v in (self.v_target, self.v_auto, self.v_block, self.v_paste, self.v_audio,
@@ -289,6 +294,12 @@ class SettingsApp:
         self._check(f, self.T("media_audio"), self.v_ca)
         self._check(f, self.T("opt_shrink"), self.v_shrink)
         self._check(f, self.T("opt_sound"), self.v_sound)
+        srow = tk.Frame(f, bg=self.P["bg"]); srow.pack(anchor="w", fill="x", pady=(2, 0))
+        self._btn(srow, self.T("sound_pick"), self._pick_sound, primary=False, small=True).pack(side="left")
+        self._btn(srow, self.T("sound_win"), self._reset_sound, primary=False, small=True).pack(side="left", padx=6)
+        self._sound_lbl = self._lbl(srow, "", size=9, muted=True)
+        self._sound_lbl.pack(side="left", padx=8)
+        self._refresh_sound_lbl()
 
         tk.Frame(f, bg=self.P["bg"], height=16).pack()
         self._lbl(f, self.T("keep_title"), size=12, bold=True).pack(anchor="w", pady=(0, 6))
@@ -457,17 +468,15 @@ class SettingsApp:
         self._btn(row2, self.T("jokes_del"), self._joke_del, primary=False).pack(side="left")
         self._joke_refresh()
 
-    def _joke_eff(self):
-        return jokes.effective({"custom_jokes": self._custom, "hidden_jokes": list(self._hidden)})
-
     def _joke_refresh(self):
+        # у списку — ЛИШЕ свої жарти (вбудовані видаляти не можна)
         lb = self._joke_list
         lb.delete(0, "end")
-        self._joke_view = self._joke_eff()
-        for j in self._joke_view:
+        for j in self._custom:
             lb.insert("end", j)
         try:
-            self._joke_count_lbl.config(text=self.T("jokes_count", n=len(self._joke_view)))
+            self._joke_count_lbl.config(
+                text=self.T("jokes_count", builtin=jokes.count(), custom=len(self._custom)))
         except Exception:
             pass
 
@@ -482,15 +491,51 @@ class SettingsApp:
 
     def _joke_del(self):
         sel = self._joke_list.curselection()
-        if not sel:
+        if not sel or sel[0] >= len(self._custom):
             return
-        j = self._joke_view[sel[0]]
-        if j in self._custom:
-            self._custom.remove(j)
-        else:
-            self._hidden.add(j)          # приховати вбудований жарт
+        del self._custom[sel[0]]      # видаляємо лише СВІЙ жарт
         self._joke_refresh()
         self._autosave()
+
+    # ---- свій звук «готово» ----
+    def _refresh_sound_lbl(self):
+        try:
+            has = bool(self._sound_file) and os.path.isfile(self._sound_file)
+            self._sound_lbl.config(text=self.T("sound_custom") if has else self.T("sound_windows"))
+        except Exception:
+            pass
+
+    def _pick_sound(self):
+        p = filedialog.askopenfilename(
+            title=self.T("sound_pick"),
+            filetypes=[("Audio", "*.wav *.mp3 *.m4a *.ogg *.aac *.flac *.wma"), ("*", "*.*")])
+        if not p:
+            return
+        wav = os.path.join(os.path.expanduser("~"), ".discord_done_sound.wav")
+        ok = False
+        try:
+            if p.lower().endswith(".wav"):
+                shutil.copyfile(p, wav); ok = os.path.isfile(wav)
+            else:
+                ok = dc_core.prepare_sound(p, wav)   # конвертуємо будь-що у .wav через ffmpeg
+        except Exception:
+            ok = False
+        if ok:
+            self._sound_file = wav
+            self._autosave()
+            self._play_preview(wav)
+        self._refresh_sound_lbl()
+
+    def _reset_sound(self):
+        self._sound_file = ""
+        self._autosave()
+        self._refresh_sound_lbl()
+
+    def _play_preview(self, wav):
+        try:
+            ctypes.windll.winmm.PlaySoundW(ctypes.c_wchar_p(wav), None, 0x00020003)
+        except Exception:
+            pass
 
     def _tab_setup(self):
         f = self._pad()
@@ -601,7 +646,7 @@ class SettingsApp:
                      compress_video=self.v_cv.get(), compress_images=self.v_ci.get(),
                      compress_audio=self.v_ca.get(), keep_local=self.v_keep.get(),
                      offer_shrink=self.v_shrink.get(), sound_done=self.v_sound.get(),
-                     custom_jokes=list(self._custom), hidden_jokes=sorted(self._hidden))
+                     sound_file=self._sound_file, custom_jokes=list(self._custom))
         except (tk.TclError, AttributeError):
             pass
         c["theme"] = self.cfg.get("theme", "discord")
