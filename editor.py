@@ -383,19 +383,23 @@ class VideoEditor(tk.Toplevel):
     # ---- кіно-стрічка (кадри) — по одному набору на все відео, ділиться між кліпами ----
     def _gen_filmstrip(self):
         n = 24
+        # кожен кадр стрічки прив'язаний до КОНКРЕТНОГО часу — і саме на цей час його й
+        # витягуємо (окремий -ss на кадр). Раніше один fps-фільтр давав кадри в трохи
+        # інших моментах, ніж мітки _strip_times -> для довгих відео мініатюра «їхала»
+        # на пару секунд від свого часу, і обрізка по картинці була неточною.
         self._strip_times = [(i + 0.5) / n * self.dur for i in range(n)]
 
         def work():
             # ffmpeg — у фоні; PhotoImage створюємо вже в головному потоці Tk (інакше краш)
-            pat = os.path.join(self._tmp, "strip_%02d.png")
-            try:
-                subprocess.run(
-                    ["ffmpeg", "-y", "-i", self.file_path,
-                     "-vf", f"fps={n}/{self.dur:.3f},scale={THUMB_W}:{TLH - 6}",
-                     "-frames:v", str(n), pat],
-                    capture_output=True, creationflags=dc_core.NO_WINDOW)
-            except Exception:
-                return
+            for i, t in enumerate(self._strip_times):
+                p = os.path.join(self._tmp, "strip_%02d.png" % (i + 1))
+                try:
+                    subprocess.run(
+                        ["ffmpeg", "-y", "-ss", f"{t:.3f}", "-i", self.file_path,
+                         "-frames:v", "1", "-vf", f"scale={THUMB_W}:{TLH - 6}", p],
+                        capture_output=True, creationflags=dc_core.NO_WINDOW)
+                except Exception:
+                    pass
             self.after(0, lambda: self._load_filmstrip(n))
         threading.Thread(target=work, daemon=True).start()
 
