@@ -13,9 +13,27 @@ TOOLS = ["ffmpeg", "ffprobe", "ffplay"]
 WINGET_ID = "Gyan.FFmpeg"
 
 
+def _winget_ffmpeg_dirs():
+    """Тека bin ffmpeg, куди winget кладе Gyan.FFmpeg (пошук лише через os — без залежностей).
+    Дає запасний варіант, якщо реєстр недоступний."""
+    dirs = []
+    base = os.path.join(os.environ.get("LOCALAPPDATA", ""), "Microsoft", "WinGet", "Packages")
+    try:
+        for name in os.listdir(base):
+            if not name.lower().startswith("gyan.ffmpeg"):
+                continue
+            for root, _dirs, files in os.walk(os.path.join(base, name)):
+                if "ffmpeg.exe" in files and os.path.basename(root).lower() == "bin":
+                    dirs.append(root)
+    except Exception:
+        pass
+    return dirs
+
+
 def refresh_path():
-    """Перечитує PATH із реєстру (машинний + користувацький) у поточний процес —
-    щоб щойно встановлений ffmpeg став видимим БЕЗ перезапуску програми."""
+    """Робить щойно встановлений ffmpeg видимим БЕЗ перезапуску програми:
+    1) перечитує PATH із реєстру (машинний + користувацький);
+    2) запасний шлях — власна тека ffmpeg від winget (працює навіть без winreg)."""
     try:
         import winreg
         parts = []
@@ -35,6 +53,12 @@ def refresh_path():
             os.environ["PATH"] = os.pathsep.join(parts) + os.pathsep + os.environ.get("PATH", "")
     except Exception:
         pass
+    # запасний варіант: додаємо теку ffmpeg від winget напряму
+    cur = os.environ.get("PATH", "")
+    for d in _winget_ffmpeg_dirs():
+        if d not in cur:
+            os.environ["PATH"] = d + os.pathsep + cur
+            cur = os.environ["PATH"]
 
 
 def check(refresh=False) -> dict:
