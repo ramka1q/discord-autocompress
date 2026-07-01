@@ -31,7 +31,6 @@ import themes
 import media
 import i18n
 import jokes
-import sounds
 
 CONFIG_PATH = os.path.join(os.path.expanduser("~"), ".discord_overlay.json")
 
@@ -63,21 +62,12 @@ def L(key, **kw):
 
 
 def play_done_sound(cfg):
-    """Випадкова мелодія «готово» (140+ варіантів) через kernel32.Beep у фон-треді.
-    Без файлів і без random -> йде онлайн. Вибір за лічильником тіків."""
+    """Один м'який системний «дінь» після стиснення (async, без файлу, лише ctypes -> онлайн)."""
     if not cfg.get("sound_done", True):
         return
     try:
-        i = kernel32.GetTickCount() % max(1, sounds.count())
-        mel = sounds.melody(i)
-
-        def _play():
-            try:
-                for f, d in mel:
-                    kernel32.Beep(int(f), int(d))
-            except Exception:
-                pass
-        threading.Thread(target=_play, daemon=True).start()
+        # SND_ALIAS(0x10000) | SND_ASYNC(0x1) | SND_NODEFAULT(0x2)
+        ctypes.windll.winmm.PlaySoundW(ctypes.c_wchar_p("SystemAsterisk"), None, 0x00010003)
     except Exception:
         pass
 
