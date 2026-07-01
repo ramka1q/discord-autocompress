@@ -1062,15 +1062,21 @@ class Watcher:
         """Закриває поточну копію й запускає свіжу (із затримкою, щоб трей встиг звільнитись)."""
         try:
             if getattr(sys, "frozen", False):
-                cmd = 'ping 127.0.0.1 -n 3 >nul & start "" "%s"' % sys.executable
+                inner = 'start "" "%s"' % sys.executable
             else:
-                argv = " ".join('"%s"' % a for a in [sys.executable] + sys.argv)
-                cmd = 'ping 127.0.0.1 -n 3 >nul & start "" %s' % argv
+                parts = " ".join('"%s"' % a for a in [sys.executable] + sys.argv)
+                inner = 'start "" %s' % parts
+            full = 'ping 127.0.0.1 -n 3 >nul & ' + inner
             import subprocess
-            subprocess.Popen("cmd /c " + cmd, shell=True, creationflags=0x08000000)
+            subprocess.Popen(["cmd", "/c", full], creationflags=0x08000000)   # без shell=True (не подвійний cmd)
+        except Exception as e:
+            dc_core.dlog("restart launch failed: " + repr(e))
+        # ВАЖЛИВО: не руйнуємо root просто зараз (ми всередині обробки кліку кнопки —
+        # це давало помилку «application has been destroyed»). Виходимо трохи згодом.
+        try:
+            self.root.after(250, self.quit_app)
         except Exception:
-            pass
-        self.quit_app()
+            self.quit_app()
 
     # ---- меню налаштувань ----
     def open_settings(self):
@@ -1134,8 +1140,11 @@ class Watcher:
                          + f" limit={self.cfg['target_mb']}MB offer_shrink={self.cfg.get('offer_shrink', True)}")
         small_hit = None
         for path in files:
-            if "_discord_" in os.path.basename(path) or not os.path.isfile(path):
+            if not os.path.isfile(path):
                 continue
+            # раніше пропускали наші «_discord_» файли; тепер їх ТЕЖ беремо
+            # (щоб можна було стиснути дрібніше вже стиснуте). Від само-циклу боронить
+            # cooldown + ігнор ін'єктованого Ctrl+V (наша авто-вставка не тригерить хук).
             kind = media.kind_of(path)
             if not kind or not enabled.get(kind):
                 continue
