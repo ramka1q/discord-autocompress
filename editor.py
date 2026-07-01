@@ -94,6 +94,12 @@ class VideoEditor(tk.Toplevel):
         self._frame_idx = 0
         self.busy = False
         self._drag = None            # 'L'/'R' — тягнемо ручку обрізки; None — ні
+        self._active = None          # 'L'/'R' — остання чіпана ручка (для стрілок-нуджу)
+        self._fps = float(info.get("fps", 30) or 30)
+        self._tip_t = None           # час над ручкою під час обрізки (як у CapCut, тимчасово)
+        self._tip_after = None
+        self._nudge_active = False   # щоб серія стрілок була ОДНИМ кроком undo
+        self._playhead_x = 0
         self._strip_imgs = None      # кадри кіно-стрічки (готуються у фоні)
         self._strip_times = []       # час кожного кадру стрічки у джерелі (сек)
         self._sel_xs = self._sel_xe = 0
@@ -139,6 +145,21 @@ class VideoEditor(tk.Toplevel):
         self.tl.bind("<ButtonRelease-1>", self._tl_release)
         self.tl.bind("<Control-MouseWheel>", self._on_zoom)   # Ctrl+колесо = зум
         self.tl.bind("<MouseWheel>", self._on_scroll)          # колесо = горизонтальний скрол (коли зумнуто)
+        # кнопки зуму (Ctrl+колесо неочевидне) + точне підлаштування стрілками
+        zc = tk.Frame(self, bg=C_BG); zc.pack(pady=(0, 2))
+        self._btn(zc, "🔍−", lambda: self._zoom_step(0.8), primary=False).pack(side="left", padx=3)
+        self._btn(zc, "🔍+", lambda: self._zoom_step(1.25)).pack(side="left", padx=3)
+        tk.Label(zc, text="◀ ▶ стрілки — точно по кадру (Shift = 1с)", bg=C_BG, fg=C_MUTED,
+                 font=(FONT, 8)).pack(side="left", padx=8)
+        # стрілки клавіатури -> зсув активної ручки обрізки по кадру (точність як у CapCut)
+        self.bind("<Left>", lambda e: self._nudge(-1, big=False))
+        self.bind("<Right>", lambda e: self._nudge(1, big=False))
+        self.bind("<Shift-Left>", lambda e: self._nudge(-1, big=True))
+        self.bind("<Shift-Right>", lambda e: self._nudge(1, big=True))
+        try:
+            self.focus_set()
+        except tk.TclError:
+            pass
 
         sc = tk.Frame(self, bg=C_BG); sc.pack(pady=2)
         self._btn(sc, "◀ Пересунути", lambda: self._move(-1), primary=False).pack(side="left", padx=3)
@@ -438,13 +459,15 @@ class VideoEditor(tk.Toplevel):
             if im:
                 c.create_image(int(xx), 3, image=im, anchor="nw")
 
-    def _draw_handle(self, c, x, left):
-        """Біла ручка-хендл обрізки з вертикальною рискою (як у CapCut)."""
-        w = 8
+    def _draw_handle(self, c, x, left, active=False):
+        """Біла ручка-хендл обрізки з вертикальною рискою (як у CapCut).
+        Активну (яку рухають стрілки) підсвічуємо кольором плейхеда."""
+        w = 10 if active else 8
         x1, x2 = (x, x + w) if left else (x - w, x)
-        c.create_polygon(host._rr_pts(x1, 2, x2, TLH - 2, 4), smooth=True, fill=C_HANDLE, outline="")
+        col = C_PLAY if active else C_HANDLE
+        c.create_polygon(host._rr_pts(x1, 2, x2, TLH - 2, 4), smooth=True, fill=col, outline="")
         cx = (x1 + x2) / 2
-        c.create_line(cx, TLH * 0.34, cx, TLH * 0.66, fill=C_DARK, width=2)
+        c.create_line(cx, TLH * 0.30, cx, TLH * 0.70, fill=C_DARK, width=2)
 
     # ---- ЄДИНА доріжка: кліпи в порядку монтажу, фіксований масштаб (px/сек) ----
     # ---- масштаб/скрол доріжки (Ctrl+колесо приближає біля плейхеда) ----
@@ -479,16 +502,65 @@ class VideoEditor(tk.Toplevel):
     def _clamp_scroll(self, pps):
         self._scroll = max(0.0, min(self._scroll, max(0.0, self._content_width(pps) - self.TW)))
 
-    def _on_zoom(self, ev):
+    def _apply_zoom(self, factor):
         old = self._pps()
         ft = self._playhead_montage_t()
         screen_x = self._content_x_of(ft, old) - self._scroll     # тримаємо плейхед на місці
-        self._zoom = min(24.0, max(1.0, self._zoom * (1.25 if ev.delta > 0 else 0.8)))
+        self._zoom = min(60.0, max(1.0, self._zoom * factor))     # до 60x -> точний різ на довгих відео
         new = self._pps()
         self._scroll = self._content_x_of(ft, new) - screen_x
         self._clamp_scroll(new)
         self._draw_track()
+
+    def _on_zoom(self, ev):
+        self._apply_zoom(1.25 if ev.delta > 0 else 0.8)
         return "break"
+
+    def _zoom_step(self, factor):
+        self._apply_zoom(factor)
+
+    # ---- точне підлаштування обрізки стрілками (по кадру) + час-підказка ----
+    def _fmt_tt(self, t):
+        t = max(0.0, t); m = int(t // 60)
+        return f"{m}:{t - m * 60:04.1f}"
+
+    def _nudge(self, direction, big=False):
+        if self.busy:
+            return "break"
+        if self.playing:
+            self._pause()
+        step = 1.0 if big else 1.0 / self._fps
+        eps = 1.0 / self._fps
+        pi = self.order[self.sel]
+        s, e = self.pieces[pi]
+        lo = self.pieces[pi - 1][1] if pi > 0 else 0.0
+        hi = self.pieces[pi + 1][0] if pi < len(self.pieces) - 1 else self.dur
+        if not self._nudge_active:      # уся серія стрілок = один крок undo
+            self._push_undo(); self._nudge_active = True
+        if self._active == "L":
+            ns = min(max(lo, s + direction * step), e - eps)
+            self.pieces[pi] = (ns, e); self.cur = self._tip_t = ns
+        elif self._active == "R":
+            ne = max(min(hi, e + direction * step), s + eps)
+            self.pieces[pi] = (s, ne); self.cur = self._tip_t = ne
+        else:                           # нема активної ручки -> рухаємо плейхед
+            self.cur = self._tip_t = min(max(s, self.cur + direction * step), e)
+        self._show_poster(self.cur)
+        self._redraw()
+        self._update_info()
+        self._schedule_tip_clear()
+        return "break"
+
+    def _schedule_tip_clear(self):
+        if self._tip_after:
+            try: self.after_cancel(self._tip_after)
+            except Exception: pass
+        self._tip_after = self.after(1500, self._clear_tip)
+
+    def _clear_tip(self):
+        self._tip_t = None; self._nudge_active = False; self._tip_after = None
+        try: self._redraw()
+        except Exception: pass
 
     def _on_scroll(self, ev):
         if self._zoom <= 1.0:
@@ -518,15 +590,23 @@ class VideoEditor(tk.Toplevel):
                                outline=C_HANDLE if sel else C_DARK, width=2 if sel else 1)
             if sel:
                 self._sel_xs, self._sel_xe = cx1, cx2
-                self._draw_handle(c, cx1, left=True)
-                self._draw_handle(c, cx2, left=False)
+                self._draw_handle(c, cx1, left=True, active=self._active == "L")
+                self._draw_handle(c, cx2, left=False, active=self._active == "R")
                 if e > s:
                     xh = cx1 + (self.cur - s) / (e - s) * (cx2 - cx1)
                     xh = min(max(cx1, xh), cx2)
+                    self._playhead_x = xh
                     c.create_line(xh, 3, xh, TLH, fill=C_PLAY, width=2)
                     c.create_polygon(xh - 5, 0, xh + 5, 0, xh, 7, fill=C_PLAY, outline="")
             self._clip_rects.append((slot, ix, cx1, cx2))
             x = cx2 + gap
+        # час-підказка над активною ручкою/плейхедом (з'являється лише під час обрізки)
+        if self._tip_t is not None:
+            tx = (self._sel_xe if self._active == "R"
+                  else self._sel_xs if self._active == "L" else self._playhead_x)
+            tx = min(max(30, tx), W - 30)
+            c.create_rectangle(tx - 30, 0, tx + 30, 16, fill=C_DARK, outline=C_PLAY)
+            c.create_text(tx, 8, text=self._fmt_tt(self._tip_t), fill="#ffffff", font=(FONT, 8, "bold"))
 
     # ---- взаємодія на одній доріжці: ручки / вибір кліпа / плейхед ----
     def _tl_press(self, ev):
@@ -536,8 +616,12 @@ class VideoEditor(tk.Toplevel):
             s, e = self.pieces[pi]
             self._push_undo()
             self._drag = "L" if abs(ev.x - self._sel_xs) <= 11 else "R"
+            self._active = self._drag        # ця ручка тепер «активна» для стрілок
+            self._nudge_active = True         # drag уже штовхнув undo -> стрілки не дублюють
+            self._tip_t = s if self._drag == "L" else e
             self._d0 = {"x0": ev.x, "s0": s, "e0": e,
                         "pps": (self._sel_xe - self._sel_xs) / max(0.001, e - s)}
+            self._redraw()
             return
         # 2) клік по кліпу: вибрати; всередині вибраного — перемістити плейхед
         self._drag = None
@@ -567,15 +651,17 @@ class VideoEditor(tk.Toplevel):
         hi = self.pieces[pi + 1][0] if pi < len(self.pieces) - 1 else self.dur
         if self._drag == "L":
             ns = max(lo, min(d0["s0"] + dsrc, d0["e0"] - 0.1))
-            self.pieces[pi] = (ns, d0["e0"]); self.cur = ns
+            self.pieces[pi] = (ns, d0["e0"]); self.cur = self._tip_t = ns
         else:
             ne = min(hi, max(d0["e0"] + dsrc, d0["s0"] + 0.1))
-            self.pieces[pi] = (d0["s0"], ne); self.cur = ne
+            self.pieces[pi] = (d0["s0"], ne); self.cur = self._tip_t = ne
         self._show_poster(self.cur)
         self._redraw()
 
     def _tl_release(self, _ev):
         self._drag = None
+        if self._tip_t is not None:      # лишаємо час-підказку на мить, тоді ховаємо
+            self._schedule_tip_clear()
 
     def _update_info(self):
         total = sum(self.pieces[ix][1] - self.pieces[ix][0] for ix in self.order)

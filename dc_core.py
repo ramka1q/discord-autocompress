@@ -72,8 +72,21 @@ def ffprobe_info(path: str) -> dict:
             pass
     acodec = probe(["-select_streams", "a:0", "-show_entries", "stream=codec_type",
                     "-of", "default=noprint_wrappers=1:nokey=1", path])
+    rfr = probe(["-select_streams", "v:0", "-show_entries", "stream=r_frame_rate",
+                 "-of", "default=noprint_wrappers=1:nokey=1", path])
+    fps = 30.0
+    try:
+        num, den = rfr.split("/")
+        fps = float(num) / float(den) if float(den) else float(num)
+    except (ValueError, ZeroDivisionError):
+        try:
+            fps = float(rfr)
+        except ValueError:
+            pass
+    if fps <= 0 or fps > 240:
+        fps = 30.0
     return {"duration": duration, "width": width, "height": height,
-            "has_audio": acodec.strip() == "audio"}
+            "has_audio": acodec.strip() == "audio", "fps": fps}
 
 
 def target_ceiling(target_mb: float) -> float:
