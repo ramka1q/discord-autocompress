@@ -530,7 +530,7 @@ class Overlay(tk.Toplevel):
     # ---- розділення довгого відео на кілька частин ----
     def _set_part(self, i, n):
         try:
-            self.sub.config(text=f"частина {i} з {n}")
+            self.sub.config(text=f"готово {i} з {n} частин (паралельно)")
         except (tk.TclError, AttributeError):
             pass
 

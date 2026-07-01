@@ -113,7 +113,9 @@ def compress(path, out_path, target_mb, scale, audio_kbps, info,
     if dur is not None:
         inseek = ["-ss", f"{start or 0:.3f}", "-t", f"{dur:.3f}"]  # швидке вхідне перемотування
     vf = ["-vf", f"scale=-2:{scale}"] if scale else []
-    passlog = os.path.join(os.path.dirname(out_path) or ".", "_d2p_passlog")
+    # унікальний passlog на кожен вихідний файл -> безпечно для ПАРАЛЕЛЬНОГО кодування частин
+    passlog = os.path.join(os.path.dirname(out_path) or ".",
+                           "_d2p_" + os.path.splitext(os.path.basename(out_path))[0])
 
     def venc(kbps):
         return ["ffmpeg", "-y", *inseek, "-i", path, "-c:v", "libx264",
@@ -193,7 +195,8 @@ def compress_segments(path, out_path, target_mb, scale, audio_kbps, info, segmen
         return ";".join(parts), vout
 
     ceiling_mb = target_ceiling(target_mb)
-    passlog = os.path.join(os.path.dirname(out_path) or ".", "_d2p_passlog")
+    passlog = os.path.join(os.path.dirname(out_path) or ".",
+                           "_d2p_" + os.path.splitext(os.path.basename(out_path))[0])
     fc1, vout1 = build_graph(False)        # pass 1 — лише відео (без неприєднаного аудіо)
     fc2, vout2 = build_graph(has_audio)
 
@@ -270,12 +273,25 @@ def plan_parts_balanced(duration: float, target_mb: float, audio_kbps: int, has_
     return max(lo, round((hi + lo) / 2))
 
 
+def auto_workers(n: int) -> int:
+    """Скільки частин стискати ПАРАЛЕЛЬНО, щоб не перевантажити CPU.
+    x264 і так багатопотоковий, тож даємо кожному кодуванню ~2 ядра
+    (напр. 6 ядер -> 3 паралельні частини). Мінімум 1, максимум = n."""
+    cpu = os.cpu_count() or 2
+    return max(1, min(n, max(2, cpu // 2)))
+
+
 def split_compress(path, target_mb, auto_scale, audio_kbps, info,
-                   progress_cb=None, should_cancel=None, part_cb=None, n_parts=None):
-    """Ділить довге відео на кілька частин і стискає КОЖНУ під ліміт Discord.
-    n_parts — явна кількість частин (напр. для режиму балансу); None = авто (за якістю).
-    progress_cb(pct) — загальний прогрес 0..100; part_cb(i, n) — сповіщення про поточну частину.
+                   progress_cb=None, should_cancel=None, part_cb=None, n_parts=None,
+                   workers=None):
+    """Ділить довге відео на частини і стискає їх ПАРАЛЕЛЬНО під ліміт Discord.
+    n_parts — явна кількість частин; None = авто (за якістю). workers — скільки частин
+    кодувати одночасно (None = авто за кількістю ядер).
+    progress_cb(pct) — загальний прогрес 0..100; part_cb(done, n) — скільки частин готово.
     Повертає (ok: bool, message: str, outputs: list[str])."""
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
     duration = info["duration"]
     if duration <= 0:
         return False, "Не вдалося визначити тривалість відео.", []
@@ -284,30 +300,59 @@ def split_compress(path, target_mb, auto_scale, audio_kbps, info,
         n = 2  # якщо потрапили сюди — відео все одно не влізло цілим, ділимо хоча б навпіл
     part_len = duration / n
     base, _ = os.path.splitext(path)
-    outputs = []
+    scale = pick_auto_scale(info, target_mb, audio_kbps) if auto_scale else 0
+    if workers is None:
+        workers = auto_workers(n)
+
+    # план: (індекс, старт, тривалість, вихідний файл)
+    tasks = []
     for i in range(n):
-        if should_cancel and should_cancel():
-            _cleanup_outputs(outputs)
-            return False, "Скасовано.", []
-        if part_cb:
-            part_cb(i + 1, n)
         s = i * part_len
         d = (duration - s) if i == n - 1 else part_len
-        out_i = f"{base}_discord_{int(target_mb)}mb_part{i + 1}.mp4"
-        scale = pick_auto_scale(info, target_mb, audio_kbps) if auto_scale else 0
+        tasks.append((i, s, d, f"{base}_discord_{int(target_mb)}mb_part{i + 1}.mp4"))
 
-        def seg_progress(p, i=i):
-            if progress_cb:
-                progress_cb((i + p / 100.0) / n * 100.0)
+    outputs = [None] * n
+    prog = [0.0] * n
+    done = [0]
+    fail = [None]
+    cancelled = [False]
+    lock = threading.Lock()
 
-        ok, msg, mb = compress(path, out_i, target_mb, scale, audio_kbps, info,
-                               progress_cb=seg_progress, should_cancel=should_cancel,
-                               start=s, dur=d)
-        if not ok:
-            _cleanup_outputs(outputs)
-            return False, f"Частина {i + 1}: {msg}", []
-        outputs.append(out_i)
-    return True, "OK", outputs
+    def sc():
+        return cancelled[0] or bool(should_cancel and should_cancel())
+
+    def make_prog(i):
+        def cb(p):
+            with lock:
+                prog[i] = p
+                if progress_cb:
+                    progress_cb(sum(prog) / n)   # загальний прогрес = середнє по всіх частинах
+        return cb
+
+    def work(task):
+        i, s, d, out_i = task
+        if sc():
+            return i, False, "Скасовано.", out_i
+        ok, msg, _mb = compress(path, out_i, target_mb, scale, audio_kbps, info,
+                                progress_cb=make_prog(i), should_cancel=sc, start=s, dur=d)
+        with lock:
+            done[0] += 1
+            if part_cb:
+                part_cb(done[0], n)
+        return i, ok, msg, out_i
+
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        for i, ok, msg, out_i in [f.result() for f in [ex.submit(work, t) for t in tasks]]:
+            if ok:
+                outputs[i] = out_i
+            elif fail[0] is None and msg != "Скасовано.":
+                fail[0] = f"Частина {i + 1}: {msg}"
+                cancelled[0] = True     # одна впала -> зупиняємо решту
+
+    if fail[0] or sc():
+        _cleanup_outputs([t[3] for t in tasks])   # прибираємо всі (навіть недороблені) файли
+        return False, fail[0] or "Скасовано.", []
+    return True, "OK", [o for o in outputs if o]
 
 
 def _cleanup_outputs(paths):
