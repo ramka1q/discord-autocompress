@@ -1067,7 +1067,7 @@ class ShrinkPill(tk.Toplevel):
         self.update_idletasks()
         self._force_top()                              # win32: реально виносимо поверх Discord
         self._alive = True
-        self._after = self.after(8000, self._close)    # само зникає, якщо не чіпати
+        self._after = self.after(3000, self._close)    # само зникає через 3с, якщо не чіпати
         self.after(600, self._tick)                    # закриваємось, якщо юзер пішов з Discord
 
     def _force_top(self):

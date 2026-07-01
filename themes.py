@@ -3,7 +3,7 @@
 themes.py — кольорові палітри інтерфейсу.
 Одна палітра = звичайний dict із ключами, які юзають overlay і settings_app.
 Три теми: Discord (темна фіолетова), Doki Doki (рожева пастель),
-Vrutik Aero (скляна блакитна, як Windows 7 Aero Glass).
+Frutiger Aero (скляна блакитна, як Windows 7 Aero Glass).
 Тільки стандартна бібліотека — жодних залежностей.
 """
 
@@ -39,8 +39,8 @@ THEMES = {
         "green": "#7ee0a2", "red": "#ff5c6c", "warn": "#ffcf6b",
         "header": "#ff5aa8", "sidebar": "#4a2f40", "title_bg": "#2a1b25",
     },
-    "vrutik_aero": {
-        "name": "Vrutik Aero",
+    "vrutik_aero": {   # внутрішній ключ лишаємо (у збережених конфігах), назва — Frutiger Aero
+        "name": "Frutiger Aero",
         "bg": "#dbeafe", "panel": "#c3ddf7", "dark": "#a9cbef",
         "accent": "#2f80ed", "accent_h": "#1f66c9",
         "text": "#0b2545", "muted": "#3d5a80",
