@@ -2,6 +2,13 @@
   "files": [
     "dc_core.py",
     "discord_overlay.py",
+    "themes.py",
+    "i18n.py",
+    "appicon.py",
+    "media.py",
+    "tray.py",
+    "settings_app.py",
+    "optimize_test.py",
     "editor.py",
     "discord_autowatch.py",
     "discord_compressor.py",

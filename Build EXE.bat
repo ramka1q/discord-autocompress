@@ -26,8 +26,11 @@ echo [*] Installing PyInstaller...
 if errorlevel 1 goto :pipfail
 
 :build
+echo [*] Generating app icon...
+%PYCMD% -c "import appicon,shutil; shutil.copy(appicon.ico_path(),'appicon.ico')" >nul 2>nul
+
 echo [*] Building DiscordAutoCompress.exe (this takes a minute)...
-%PYCMD% -m PyInstaller --onefile --noconsole --name DiscordAutoCompress --distpath dist --workpath build_pyi --noconfirm launcher.py
+%PYCMD% -m PyInstaller --onefile --noconsole --icon appicon.ico --name DiscordAutoCompress --distpath dist --workpath build_pyi --noconfirm launcher.py
 if errorlevel 1 goto :buildfail
 
 echo.

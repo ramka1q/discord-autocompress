@@ -15,3 +15,6 @@ _d2p_passlog*
 build_pyi/
 dist/
 *.spec
+appicon.ico
+*_discord_*.webp
+*_discord_*.mp3

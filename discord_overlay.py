@@ -27,16 +27,35 @@ from ctypes import wintypes
 import tkinter as tk
 
 import dc_core
+import themes
+import media
+import i18n
 
 CONFIG_PATH = os.path.join(os.path.expanduser("~"), ".discord_overlay.json")
 
-# ---- кольори Discord ----
+# ---- кольори теми (заповнюються apply_theme; імена лишаються C_* для сумісності) ----
 C_BG, C_BG2, C_DARK = "#313338", "#2b2d31", "#1e1f22"
 C_BLURPLE, C_BLURPLE_H = "#5865f2", "#4752c4"
 C_TEXT, C_MUTED, C_GREEN = "#f2f3f5", "#b5bac1", "#23a55a"
 C_RED = "#ed4245"
 C_KEY = "#010203"
 FONT = "Segoe UI"
+LANG = "uk"
+
+
+def apply_theme(name: str):
+    """Перемикає глобальні кольори overlay на палітру теми (нові вікна беруть нові кольори)."""
+    global C_BG, C_BG2, C_DARK, C_BLURPLE, C_BLURPLE_H, C_TEXT, C_MUTED, C_GREEN, C_RED
+    p = themes.palette(name)
+    C_BG, C_BG2, C_DARK = p["bg"], p["panel"], p["dark"]
+    C_BLURPLE, C_BLURPLE_H = p["accent"], p["accent_h"]
+    C_TEXT, C_MUTED, C_GREEN = p["text"], p["muted"], p["green"]
+    C_RED = p["red"]
+
+
+def L(key, **kw):
+    """Коротко: переклад рядка overlay поточною мовою."""
+    return i18n.tr(LANG, key, **kw)
 
 # --------------------------------------------------------------------------- #
 #  WinAPI
@@ -156,7 +175,10 @@ def send_ctrl_v():
 # --------------------------------------------------------------------------- #
 def load_config() -> dict:
     cfg = {"target_mb": 10, "audio_kbps": 128, "auto_scale": True,
-           "block_paste": True, "auto_paste": True}
+           "block_paste": True, "auto_paste": True,
+           "lang": "uk", "theme": "discord",
+           "compress_video": True, "compress_images": True, "compress_audio": True,
+           "keep_local": "ask"}
     try:
         with open(CONFIG_PATH, encoding="utf-8") as f:
             cfg.update(json.load(f))
@@ -184,10 +206,13 @@ def _rr_pts(x1, y1, x2, y2, r):
 class Overlay(tk.Toplevel):
     W, H = 480, 348
 
-    def __init__(self, master, file_path, size_mb, cfg, discord_hwnd, on_close, watcher=None):
+    def __init__(self, master, file_path, size_mb, cfg, discord_hwnd, on_close,
+                 watcher=None, kind="video"):
         super().__init__(master)
         self.file_path, self.size_mb, self.cfg = file_path, size_mb, cfg
         self.discord_hwnd, self.on_close, self.watcher = discord_hwnd, on_close, watcher
+        self.kind = kind                 # "video" | "image" | "audio"
+        self.out_path = None             # шлях стиснутого файла (для «лишити/видалити»)
         self.cancel = {"flag": False}
 
         self.overrideredirect(True)
@@ -286,21 +311,30 @@ class Overlay(tk.Toplevel):
         name = os.path.basename(self.file_path)
         if len(name) > 42:
             name = name[:39] + "…"
-        self._place(self._label("🎬", 30, C_TEXT), self.W // 2, 40)
-        self._place(self._label("Це відео завелике для Discord", 14, C_TEXT, bold=True), self.W // 2, 78)
+        icon = {"video": "🎬", "image": "🖼", "audio": "🎵"}.get(self.kind, "🎬")
+        big = {"video": "ov_video_big", "image": "ov_image_big",
+               "audio": "ov_audio_big"}.get(self.kind, "ov_video_big")
+        self._place(self._label(icon, 30, C_TEXT), self.W // 2, 40)
+        self._place(self._label(L(big), 14, C_TEXT, bold=True), self.W // 2, 78)
         self._place(self._label(name, 10, C_MUTED), self.W // 2, 100)
         self._place(self._label(f"{self.size_mb:.1f} МБ  →  ≈{self.cfg['target_mb']} МБ",
                                 11, C_BLURPLE, bold=True), self.W // 2, 124)
-        self._place(self._button("Стиснути і вставити  ▶", self._start), self.W // 2, 164)
-        self._place(self._button("Поділити на частини  ⧉",
-                                 lambda: self._start_split(balanced=False), primary=False),
-                    self.W // 2, 204)
-        self._place(self._button("Стиснути і поділити  ⚖",
-                                 lambda: self._start_split(balanced=True), primary=False),
-                    self.W // 2, 244)
-        self._place(self._button("Обрізати момент ✂", self._open_trim, primary=False),
-                    self.W // 2 - 8, 292, "e")
-        self._place(self._button("Закрити", self._close, primary=False), self.W // 2 + 8, 292, "w")
+        if self.kind == "video":
+            self._place(self._button(L("ov_compress"), self._start), self.W // 2, 164)
+            self._place(self._button(L("ov_split"),
+                                     lambda: self._start_split(balanced=False), primary=False),
+                        self.W // 2, 204)
+            self._place(self._button(L("ov_split_bal"),
+                                     lambda: self._start_split(balanced=True), primary=False),
+                        self.W // 2, 244)
+            self._place(self._button(L("ov_trim"), self._open_trim, primary=False),
+                        self.W // 2 - 8, 292, "e")
+            self._place(self._button(L("close"), self._close, primary=False),
+                        self.W // 2 + 8, 292, "w")
+        else:
+            start = self._start_image if self.kind == "image" else self._start_audio
+            self._place(self._button(L("ov_compress"), start), self.W // 2, 190)
+            self._place(self._button(L("close"), self._close, primary=False), self.W // 2, 240)
 
     def _show_progress(self, title="Стискаю відео…"):
         self._clear()
@@ -320,13 +354,87 @@ class Overlay(tk.Toplevel):
     def _show_done(self, final_mb, fits, pasted):
         self._clear()
         col = C_GREEN if fits else "#faa61a"
-        self._place(self._label("✓", 40, col, bold=True), self.W // 2, 62)
-        self._place(self._label("Готово!", 15, C_TEXT, bold=True), self.W // 2, 106)
-        self._place(self._label(f"{final_mb:.2f} МБ", 11, C_MUTED), self.W // 2, 130)
-        msg = "Вставлено в Discord ✓" if pasted else "У буфері — натисни Ctrl+V у Discord"
-        self._place(self._label(msg, 12, C_BLURPLE, bold=True), self.W // 2, 158)
-        self._place(self._button("Готово", self._close), self.W // 2, 206)
-        self.after(5000, self._close)
+        self._place(self._label("✓", 40, col, bold=True), self.W // 2, 56)
+        self._place(self._label(L("ov_done"), 15, C_TEXT, bold=True), self.W // 2, 98)
+        self._place(self._label(f"{final_mb:.2f} МБ", 11, C_MUTED), self.W // 2, 120)
+        msg = L("ov_pasted") if pasted else L("ov_in_clip")
+        self._place(self._label(msg, 12, C_BLURPLE, bold=True), self.W // 2, 146)
+
+        policy = self.cfg.get("keep_local", "ask")
+        if policy == "ask" and self.out_path:
+            # питаємо, чи лишати стиснуту копію на ПК (видалення відкладене — Discord ще читає файл)
+            self._place(self._label(L("ov_keep_q"), 11, C_TEXT, bold=True), self.W // 2, 182)
+            self._place(self._button(L("ov_keep"), self._keep_yes, primary=False),
+                        self.W // 2 - 8, 220, "e")
+            self._place(self._button(L("ov_delete"), self._keep_no), self.W // 2 + 8, 220, "w")
+        else:
+            if policy == "never":
+                self._schedule_delete([self.out_path] if self.out_path else [])
+            self._place(self._button(L("ov_done"), self._close), self.W // 2, 206)
+            self.after(6000, self._close)
+
+    def _keep_yes(self):
+        self._place(self._label(L("ov_kept"), 10, C_GREEN), self.W // 2, 258)
+        self.after(1600, self._close)
+
+    def _keep_no(self):
+        self._schedule_delete([self.out_path] if self.out_path else [])
+        self._place(self._label(L("ov_deleted"), 10, C_MUTED), self.W // 2, 258)
+        self.after(1600, self._close)
+
+    def _schedule_delete(self, paths):
+        """Видаляє файли з невеликою затримкою (Discord встигає прочитати перед видаленням)."""
+        paths = [p for p in paths if p]
+
+        def _rm():
+            for p in paths:
+                try:
+                    if os.path.exists(p):
+                        os.remove(p)
+                except OSError:
+                    pass
+        try:
+            self.after(9000, _rm)
+        except tk.TclError:
+            _rm()
+
+    def _paste_files(self, paths):
+        try:
+            set_clipboard_files(paths)
+            if self.watcher:
+                self.watcher.mark_self_clipboard()
+        except Exception:
+            pass
+        if self.cfg.get("auto_paste", True) and self.discord_hwnd and len(paths) <= 10:
+            try:
+                user32.SetForegroundWindow(self.discord_hwnd)
+                self.after(180, send_ctrl_v)
+                return True
+            except Exception:
+                return False
+        return False
+
+    # ---- фото / звук ----
+    def _start_image(self):
+        out_path = media.image_out_name(self.file_path, float(self.cfg["target_mb"]))
+        self._run_media(media.compress_image, out_path)
+
+    def _start_audio(self):
+        out_path = media.audio_out_name(self.file_path, float(self.cfg["target_mb"]))
+        self._run_media(media.compress_audio, out_path)
+
+    def _run_media(self, fn, out_path):
+        target = float(self.cfg["target_mb"])
+        self.cancel["flag"] = False
+        self._show_progress(title=L("ov_working"))
+
+        def worker():
+            ok, msg, mb = fn(self.file_path, out_path, target,
+                             progress_cb=lambda p: self.after(0, lambda: self._set(p)),
+                             should_cancel=lambda: self.cancel["flag"])
+            self.after(0, lambda: self._after(ok, out_path, mb, target, msg))
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _show_error(self, msg, allow_split=True, allow_trim=True):
         self._clear()
@@ -412,22 +520,11 @@ class Overlay(tk.Toplevel):
                 except OSError: pass
             if self.cancel["flag"]:
                 return self._close()
-            return self._show_error(msg or "Не вдалося стиснути відео.")
+            allow = self.kind == "video"
+            return self._show_error(msg or L("ov_fail"), allow_split=allow, allow_trim=allow)
         self._set(100)  # довести смужку до кінця
-        try:
-            set_clipboard_files([out_path])
-            if self.watcher:
-                self.watcher.mark_self_clipboard()
-        except Exception:
-            pass
-        pasted = False
-        if self.cfg.get("auto_paste", True) and self.discord_hwnd:
-            try:
-                user32.SetForegroundWindow(self.discord_hwnd)
-                self.after(180, send_ctrl_v)
-                pasted = True
-            except Exception:
-                pasted = False
+        self.out_path = out_path
+        pasted = self._paste_files([out_path])
         self._show_done(final_mb, final_mb <= target, pasted)
 
     # ---- розділення довгого відео на кілька частин ----
@@ -470,38 +567,45 @@ class Overlay(tk.Toplevel):
         if not ok or not outs:
             return self._show_error(msg or "Не вдалося розділити відео.", allow_trim=False)
         self._set(100)
-        try:
-            set_clipboard_files(outs)
-            if self.watcher:
-                self.watcher.mark_self_clipboard()
-        except Exception:
-            pass
-        # авто-вставка лише якщо частин не більше за ліміт Discord (10 вкладень за раз)
-        pasted = False
-        if self.cfg.get("auto_paste", True) and self.discord_hwnd and len(outs) <= 10:
-            try:
-                user32.SetForegroundWindow(self.discord_hwnd)
-                self.after(180, send_ctrl_v)
-                pasted = True
-            except Exception:
-                pasted = False
+        self.out_paths = outs
+        pasted = self._paste_files(outs)
         self._show_done_split(len(outs), pasted)
 
     def _show_done_split(self, n, pasted):
         self._clear()
-        self._place(self._label("✓", 38, C_GREEN, bold=True), self.W // 2, 54)
-        self._place(self._label(f"Готово — {n} частин", 15, C_TEXT, bold=True), self.W // 2, 98)
+        self._place(self._label("✓", 38, C_GREEN, bold=True), self.W // 2, 48)
+        self._place(self._label(L("ov_done_parts", n=n), 15, C_TEXT, bold=True), self.W // 2, 90)
         if pasted:
-            msg = "Вставлено в Discord ✓"
+            msg = L("ov_pasted")
         elif n > 10:
             msg = "Усі в буфері · Ctrl+V (Discord бере до 10 за раз)"
         else:
-            msg = "Усі в буфері — натисни Ctrl+V у Discord"
-        self._place(self._label(msg, 11, C_BLURPLE, bold=True), self.W // 2, 128)
-        self._place(self._label("Файли поруч з оригіналом: …_part1, _part2 …", 9, C_MUTED),
-                    self.W // 2, 152)
-        self._place(self._button("Готово", self._close), self.W // 2, 200)
-        self.after(9000, self._close)
+            msg = L("ov_in_clip")
+        self._place(self._label(msg, 11, C_BLURPLE, bold=True), self.W // 2, 118)
+        self._place(self._label("…_part1, _part2 … поруч з оригіналом", 9, C_MUTED),
+                    self.W // 2, 140)
+
+        outs = getattr(self, "out_paths", [])
+        policy = self.cfg.get("keep_local", "ask")
+        if policy == "ask" and outs:
+            self._place(self._label(L("ov_keep_q"), 11, C_TEXT, bold=True), self.W // 2, 172)
+            self._place(self._button(L("ov_keep"), lambda: self._keep_parts(True), primary=False),
+                        self.W // 2 - 8, 210, "e")
+            self._place(self._button(L("ov_delete"), lambda: self._keep_parts(False)),
+                        self.W // 2 + 8, 210, "w")
+        else:
+            if policy == "never":
+                self._schedule_delete(outs)
+            self._place(self._button(L("ov_done"), self._close), self.W // 2, 196)
+            self.after(9000, self._close)
+
+    def _keep_parts(self, keep):
+        if not keep:
+            self._schedule_delete(getattr(self, "out_paths", []))
+            self._place(self._label(L("ov_deleted"), 10, C_MUTED), self.W // 2, 248)
+        else:
+            self._place(self._label(L("ov_kept"), 10, C_GREEN), self.W // 2, 248)
+        self.after(1800, self._close)
 
     def _close(self):
         self._alive = False
@@ -747,17 +851,92 @@ def _autoupdate_bg():
 
 
 class Watcher:
-    def __init__(self):
+    def __init__(self, open_settings=False):
+        global LANG
         self.cfg = load_config()
+        LANG = self.cfg.get("lang", "uk")
+        apply_theme(self.cfg.get("theme", "discord"))
         threading.Thread(target=_autoupdate_bg, daemon=True).start()
         self.root = tk.Tk()
         self.root.withdraw()
         self.q = queue.Queue()
         self.overlay_open = False
+        self.settings_win = None
         self.last_seq_self = 0
         self._cooldown_until = 0
         threading.Thread(target=self._hook_thread, daemon=True).start()
         self.root.after(120, self._poll_queue)
+        self._start_tray()
+        if open_settings:
+            self.root.after(200, self.open_settings)
+
+    # ---- системний трей ----
+    def _tray_texts(self):
+        return (i18n.tr(LANG, "tray_open"), i18n.tr(LANG, "tray_quit"), i18n.tr(LANG, "tray_tip"))
+
+    def _start_tray(self):
+        try:
+            import tray
+            self.tray = tray.Tray(
+                on_open=lambda: self.root.after(0, self.open_settings),
+                on_quit=lambda: self.root.after(0, self.quit_app),
+                texts=self._tray_texts())
+            self.tray.start()
+        except Exception:
+            self.tray = None
+
+    def quit_app(self):
+        try:
+            if self.tray:
+                self.tray.stop()
+        except Exception:
+            pass
+        try:
+            self.root.quit()
+            self.root.destroy()
+        except Exception:
+            pass
+
+    # ---- меню налаштувань ----
+    def open_settings(self):
+        if self.settings_win is not None:
+            try:
+                self.settings_win.win.deiconify()
+                self.settings_win.win.lift()
+                self.settings_win.win.attributes("-topmost", True)
+                self.settings_win.win.after(300,
+                    lambda: self.settings_win.win.attributes("-topmost", False))
+                return
+            except Exception:
+                self.settings_win = None
+        import settings_app
+
+        def _closed():
+            try:
+                self.settings_win.win.destroy()
+            except Exception:
+                pass
+            self.settings_win = None
+
+        self.settings_win = settings_app.SettingsApp(
+            self.root, self.cfg, on_save=self._on_settings_save,
+            on_apply=self._on_settings_apply, on_close=_closed)
+
+    def _on_settings_save(self, cfg):
+        self.cfg = cfg
+        save_config(cfg)
+        self._on_settings_apply(cfg)
+
+    def _on_settings_apply(self, cfg):
+        global LANG
+        self.cfg = cfg
+        LANG = cfg.get("lang", "uk")
+        apply_theme(cfg.get("theme", "discord"))
+        try:
+            if self.tray:
+                self.tray.update_texts(self._tray_texts())
+        except Exception:
+            pass
 
     def mark_self_clipboard(self):
         # ми самі поклали файл — стартуємо коротку «паузу», щоб не зреагувати на свою ж вставку
@@ -769,17 +948,21 @@ class Watcher:
         if "discord" not in title.lower():
             return None
         limit = self.cfg["target_mb"] * 1024 * 1024
+        enabled = {"video": self.cfg.get("compress_video", True),
+                   "image": self.cfg.get("compress_images", True),
+                   "audio": self.cfg.get("compress_audio", True)}
         for path in clipboard_files():
-            if os.path.splitext(path)[1].lower() not in dc_core.VIDEO_EXT:
-                continue
             if "_discord_" in os.path.basename(path) or not os.path.isfile(path):
+                continue
+            kind = media.kind_of(path)
+            if not kind or not enabled.get(kind):
                 continue
             try:
                 size = os.path.getsize(path)
             except OSError:
                 continue
             if size > limit:
-                return (hwnd, path, size)
+                return (hwnd, path, size, kind)
         return None
 
     # ---- LL keyboard hook ----
@@ -814,10 +997,10 @@ class Watcher:
     def _poll_queue(self):
         try:
             while not self.overlay_open:
-                hwnd, path, size = self.q.get_nowait()
+                hwnd, path, size, kind = self.q.get_nowait()
                 self.overlay_open = True
                 Overlay(self.root, path, size / 1024 / 1024, self.cfg, hwnd,
-                        on_close=self._closed, watcher=self)
+                        on_close=self._closed, watcher=self, kind=kind)
         except queue.Empty:
             pass
         self.root.after(120, self._poll_queue)
@@ -832,55 +1015,25 @@ class Watcher:
 # --------------------------------------------------------------------------- #
 #  Налаштування
 # --------------------------------------------------------------------------- #
+def run_app(open_settings=True):
+    """Єдина точка входу. Якщо копія вже працює — просимо її відкрити меню й виходимо
+    (не плодимо другий трей/хук). Інакше запускаємо фон + (за потреби) меню."""
+    try:
+        import tray
+        if tray.find_existing():
+            if open_settings:
+                tray.signal_open()
+            return
+    except Exception:
+        pass
+    Watcher(open_settings=open_settings).run()
+
+
 def settings_window():
-    cfg = load_config()
-    root = tk.Tk()
-    root.title("Налаштування Auto-Compress")
-    root.geometry("400x380")
-    root.configure(bg=C_BG)
-
-    def L(t, **kw):
-        return tk.Label(root, text=t, bg=C_BG, fg=C_TEXT, **kw)
-
-    L("Ідеальний розмір (ліміт Discord)", font=(FONT, 11, "bold")).pack(pady=(16, 6))
-    target = tk.IntVar(value=cfg["target_mb"])
-    for t, mb in (("10 МБ (без Nitro)", 10), ("25 МБ", 25),
-                  ("50 МБ (Nitro Basic)", 50), ("500 МБ (Nitro)", 500)):
-        tk.Radiobutton(root, text=t, variable=target, value=mb, bg=C_BG, fg=C_TEXT,
-                       selectcolor=C_DARK, activebackground=C_BG, activeforeground=C_TEXT,
-                       font=(FONT, 10)).pack(anchor="w", padx=46)
-
-    auto = tk.BooleanVar(value=cfg.get("auto_scale", True))
-    block = tk.BooleanVar(value=cfg.get("block_paste", True))
-    paste = tk.BooleanVar(value=cfg.get("auto_paste", True))
-
-    def C(t, v):
-        tk.Checkbutton(root, text=t, variable=v, bg=C_BG, fg=C_TEXT, selectcolor=C_DARK,
-                       activebackground=C_BG, activeforeground=C_TEXT,
-                       font=(FONT, 10)).pack(anchor="w", padx=46)
-    C("Авто-підбір роздільності", auto)
-    C("Блокувати «завелику» вставку в Discord", block)
-    C("Сам вставляти стиснутий файл у Discord", paste)
-
-    arow = tk.Frame(root, bg=C_BG); arow.pack(anchor="w", padx=46, pady=6)
-    tk.Label(arow, text="Аудіо kbps:", bg=C_BG, fg=C_TEXT, font=(FONT, 10)).pack(side="left")
-    audio = tk.IntVar(value=cfg.get("audio_kbps", 128))
-    tk.Spinbox(arow, from_=0, to=320, increment=32, width=6, textvariable=audio).pack(side="left", padx=6)
-
-    def save():
-        save_config({"target_mb": target.get(), "audio_kbps": audio.get(),
-                     "auto_scale": auto.get(), "block_paste": block.get(),
-                     "auto_paste": paste.get()})
-        root.destroy()
-
-    tk.Button(root, text="Зберегти", command=save, bg=C_BLURPLE, fg=C_TEXT,
-              activebackground=C_BLURPLE_H, relief="flat", font=(FONT, 11, "bold"),
-              padx=20, pady=8, cursor="hand2").pack(pady=14)
-    root.mainloop()
+    """Запускає програму з одразу відкритим меню налаштувань (для «--settings»)."""
+    run_app(open_settings=True)
 
 
 if __name__ == "__main__":
-    if "--settings" in sys.argv:
-        settings_window()
-    else:
-        Watcher().run()
+    # --background -> тихий автозапуск (без меню); решта -> фон + відкрите меню
+    run_app(open_settings="--background" not in sys.argv)

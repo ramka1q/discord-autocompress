@@ -35,6 +35,7 @@ import time               # noqa: F401
 import re                 # noqa: F401
 import math               # noqa: F401
 import datetime           # noqa: F401
+import struct             # noqa: F401  (appicon малює .ico)
 
 APP_TITLE = "Discord Auto-Compress"
 REPO_RAW = os.environ.get(
@@ -79,20 +80,25 @@ def sync_code():
 
 
 def ensure_autostart():
-    """Ярлик на сам .exe у теці Startup (лише для зібраного .exe, ідемпотентно)."""
+    """Ярлик на сам .exe у теці Startup (лише для зібраного .exe).
+    ЗАВЖДИ переписує ярлик на ПОТОЧНИЙ exe з '--background' — тож при переїзді на новий
+    exe автозапуск САМ виправляється (старий ярлик на стару копію більше не заважає)."""
     if not getattr(sys, "frozen", False):
         return
     try:
         startup = os.path.join(os.environ["APPDATA"],
                                r"Microsoft\Windows\Start Menu\Programs\Startup")
         lnk = os.path.join(startup, "Discord Auto-Compress.lnk")
-        if os.path.exists(lnk):
-            return
         exe = sys.executable
-        ps = ("$s=(New-Object -ComObject WScript.Shell).CreateShortcut('%s');"
-              "$s.TargetPath='%s';$s.WorkingDirectory='%s';$s.WindowStyle=7;"
-              "$s.Description='Discord Auto-Compress';$s.Save()"
-              % (lnk, exe, os.path.dirname(exe)))
+        # якщо ярлик уже вказує на цей самий exe з --background — не чіпаємо (щоб не смикати диск)
+        ps = ("$p='%s';"
+              "$sh=New-Object -ComObject WScript.Shell;"
+              "$cur=if(Test-Path $p){$s=$sh.CreateShortcut($p);$s.TargetPath+'|'+$s.Arguments}else{''};"
+              "if($cur -ne '%s|--background'){"
+              "$s=$sh.CreateShortcut($p);$s.TargetPath='%s';$s.Arguments='--background';"
+              "$s.WorkingDirectory='%s';$s.WindowStyle=7;"
+              "$s.Description='Discord Auto-Compress';$s.Save()}"
+              % (lnk, exe, exe, os.path.dirname(exe)))
         subprocess.run(["powershell", "-NoProfile", "-Command", ps],
                        creationflags=0x08000000)  # CREATE_NO_WINDOW
     except Exception:
@@ -130,10 +136,8 @@ def main():
     sys.path.insert(0, APPDIR)
     os.chdir(APPDIR)
     import discord_overlay
-    if "--settings" in sys.argv:
-        discord_overlay.settings_window()
-    else:
-        discord_overlay.Watcher().run()
+    # єдина точка входу з захистом від другої копії (див. discord_overlay.run_app)
+    discord_overlay.run_app(open_settings="--background" not in sys.argv)
 
 
 if __name__ == "__main__":
@@ -158,7 +162,14 @@ if __name__ == "__main__":
             import discord_overlay    # noqa: F401
             import editor             # noqa: F401
             import update             # noqa: F401
-            print("IMPORTTEST OK: dc_core, discord_overlay, editor, update")
+            import themes             # noqa: F401
+            import i18n               # noqa: F401
+            import appicon            # noqa: F401
+            import media              # noqa: F401
+            import tray               # noqa: F401
+            import settings_app       # noqa: F401
+            import optimize_test      # noqa: F401
+            print("IMPORTTEST OK: core + themes/i18n/appicon/media/tray/settings_app/optimize_test")
             sys.exit(0)
         except Exception as e:
             print("IMPORTTEST FAIL:", repr(e))

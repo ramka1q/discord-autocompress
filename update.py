@@ -45,18 +45,19 @@ def _fetch(rel: str) -> bytes:
         return r.read()
 
 
-def run(quiet: bool = True) -> bool:
-    """Тягне manifest і оновлює всі змінені файли. True, якщо щось оновилось."""
+def _sync(quiet: bool = True):
+    """Ядро оновлення. Повертає (ok: bool, changed: int).
+    ok=False -> збій (мережа/репо); changed = скільки файлів реально замінено."""
     if "USERNAME/REPO" in REPO_RAW:
         if not quiet:
             print("[!] Спершу впиши адресу репозиторію у REPO_RAW (update.py).")
-        return False
+        return False, 0
     try:
         manifest = json.loads(_fetch("manifest.json").decode("utf-8"))
     except Exception as e:
         if not quiet:
             print("[!] Не вдалося перевірити оновлення:", e)
-        return False
+        return False, 0
 
     files = manifest.get("files", [])
     fresh = {}
@@ -66,7 +67,7 @@ def run(quiet: bool = True) -> bool:
         except Exception as e:
             if not quiet:
                 print("[!] Помилка завантаження", rel, "—", e)
-            return False  # усе-або-нічого: не залишаємо напів-оновлений стан
+            return False, 0  # усе-або-нічого: не залишаємо напів-оновлений стан
 
     changed = 0
     for rel, data in fresh.items():
@@ -85,7 +86,18 @@ def run(quiet: bool = True) -> bool:
 
     if not quiet:
         print(f"[OK] Оновлено файлів: {changed}." if changed else "[OK] Уже остання версія.")
-    return True   # успіх (навіть якщо нічого не змінилось); помилки повертають False вище
+    return True, changed
+
+
+def run(quiet: bool = True) -> bool:
+    """Тягне manifest і оновлює всі змінені файли. True при успіху (навіть 0 змін)."""
+    ok, _ = _sync(quiet)
+    return ok
+
+
+def check(quiet: bool = True):
+    """Примусова перевірка з меню (ігнорує маркер .autoupdate). Повертає (ok, changed)."""
+    return _sync(quiet)
 
 
 def auto():
