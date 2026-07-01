@@ -128,13 +128,17 @@ def compress(path, out_path, target_mb, scale, audio_kbps, info,
     # як було, коли -t стояв перед -i — саме звідси й бралася різниця в тривалості).
     inss = ["-ss", f"{start or 0:.3f}"] if dur is not None else []
     outdur = ["-t", f"{dur:.3f}"] if dur is not None else []
+    # При ОБРІЗЦІ примусово робимо постійний фреймрейт (CFR). Відео з телефона/запису
+    # екрана часто VFR — там «час кадру» плаває, і вибраний на таймлайні момент не
+    # збігається з реальним -> здавалося, що експорт починається/кінчається пізніше.
+    cfr = ["-vsync", "cfr"] if dur is not None else []
     vf = ["-vf", f"scale=-2:{scale}"] if scale else []
     # унікальний passlog на кожен вихідний файл -> безпечно для ПАРАЛЕЛЬНОГО кодування частин
     passlog = os.path.join(os.path.dirname(out_path) or ".",
                            "_d2p_" + os.path.splitext(os.path.basename(out_path))[0])
 
     def venc(kbps):
-        return ["ffmpeg", "-y", *inss, "-i", path, *outdur, "-c:v", "libx264",
+        return ["ffmpeg", "-y", *inss, "-i", path, *outdur, *cfr, "-c:v", "libx264",
                 "-b:v", f"{kbps}k", "-preset", "medium", *vf]
 
     try:
@@ -212,6 +216,7 @@ def compress_segments(path, out_path, target_mb, scale, audio_kbps, info, segmen
                 return False, "Скасовано.", 0.0
             segf = os.path.join(tmpd, f"s{i}.mp4")
             cmd = ["ffmpeg", "-y", "-ss", f"{s:.3f}", "-i", path, "-t", f"{e - s:.3f}",
+                   "-vsync", "cfr",   # CFR -> сегменти рівні за часом, склейка без дрейфу (VFR-джерела)
                    "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p"]
             cmd += (["-c:a", "aac", "-b:a", "192k"] if has_audio else ["-an"])
             cmd += ["-video_track_timescale", "90000", segf]
