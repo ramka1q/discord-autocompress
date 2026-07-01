@@ -38,6 +38,21 @@ def have_ffmpeg() -> bool:
         return False
 
 
+BUILD = "2026-07-02-trimdiag"   # маркер версії коду — щоб у логах бачити, чи юзер на новому коді
+
+
+def probe_diag(path: str) -> str:
+    """Діагностика відео для логів: start_time, r/avg fps, к-ть кадрів, тривалості."""
+    def p(args):
+        return subprocess.run(["ffprobe", "-v", "error", *args],
+                              capture_output=True, text=True, creationflags=NO_WINDOW).stdout.strip()
+    st = p(["-select_streams", "v:0", "-show_entries", "stream=start_time,r_frame_rate,"
+            "avg_frame_rate,nb_frames,duration", "-of", "default=noprint_wrappers=1", path])
+    fdur = p(["-show_entries", "format=start_time,duration", "-of", "default=noprint_wrappers=1", path])
+    return ("PROBE " + path.replace("\n", " ") + " | " + st.replace("\n", " ") + " | " +
+            fdur.replace("\n", " "))
+
+
 def ffprobe_info(path: str) -> dict:
     """{'duration','width','height','has_audio'}; кидає виняток при помилці."""
     def probe(args):

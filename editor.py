@@ -594,6 +594,13 @@ class VideoEditor(tk.Toplevel):
         segs = [self.pieces[ix] for ix in self.order]
         if not segs:
             return
+        # ДІАГНОСТИКА обрізки -> %TEMP%\dac_debug.log (щоб зрозуміти зсув на реальному відео юзера)
+        try:
+            dc_core.dlog(f"EDITOR EXPORT build={dc_core.BUILD} dur={self.dur:.3f} "
+                         f"segs={[(round(s,3), round(e,3)) for s, e in segs]}")
+            dc_core.dlog(dc_core.probe_diag(self.file_path))
+        except Exception:
+            pass
         self._pause()
         self.busy = True
         self.export_btn.config(state="disabled")
