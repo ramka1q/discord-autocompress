@@ -1229,12 +1229,14 @@ class Watcher:
                 inner = 'start "" %s' % parts
             full = 'ping 127.0.0.1 -n 3 >nul & ' + inner
             import subprocess
-            # КРИТИЧНО для onefile-.exe: чистимо змінні PyInstaller/Tcl, інакше нова копія
-            # шукає Tcl у ТИМЧАСОВІЙ теці старого процесу (_MEIxxxx), яку вже видалено ->
-            # «Can't find a usable init.tcl». Прибираємо -> нова копія розпакується заново.
+            # КРИТИЧНО для onefile-.exe: чистимо ВСІ змінні PyInstaller/Tcl (за префіксом),
+            # інакше нова копія або шукає Tcl у видаленій _MEIxxxx («Can't find a usable
+            # init.tcl»), або бачить залишковий маркер child-процесу (_PYI_PARENT_PROCESS_LEVEL)
+            # без _PYI_APPLICATION_HOME_DIR -> «_PYI_APPLICATION_HOME_DIR is not defined!».
+            # Прибираємо все _PYI*/_MEI* -> свіжий exe стартує як чистий parent і розпакується заново.
             env = {k: v for k, v in os.environ.items()
-                   if k not in ("_MEIPASS2", "_MEIPASS", "_PYI_APPLICATION_HOME_DIR",
-                                "_PYIBootstrap", "TCL_LIBRARY", "TK_LIBRARY", "TKPATH")}
+                   if not k.startswith("_PYI") and not k.startswith("_MEI")
+                   and k not in ("TCL_LIBRARY", "TK_LIBRARY", "TKPATH")}
             # shell=True з РЯДКОМ (не списком!) — інакше вкладені лапки ламаються
             # й Windows бачить '\' як команду («Windows cannot find '\'»).
             subprocess.Popen(full, shell=True, creationflags=0x08000000, env=env)
