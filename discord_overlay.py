@@ -91,6 +91,8 @@ user32.GetWindowThreadProcessId.argtypes = [ctypes.c_void_p, ctypes.POINTER(wint
 user32.GetWindowThreadProcessId.restype = wintypes.DWORD
 user32.GetWindowRect.argtypes = [ctypes.c_void_p, ctypes.POINTER(wintypes.RECT)]
 user32.GetWindowRect.restype = wintypes.BOOL
+user32.GetCursorPos.argtypes = [ctypes.POINTER(wintypes.POINT)]
+user32.GetCursorPos.restype = wintypes.BOOL
 kernel32.GlobalAlloc.restype = ctypes.c_void_p
 kernel32.GlobalAlloc.argtypes = [wintypes.UINT, ctypes.c_size_t]
 kernel32.GlobalLock.restype = ctypes.c_void_p
@@ -933,37 +935,41 @@ class ShrinkPill(tk.Toplevel):
         self.cfg, self.watcher = cfg, watcher
         self.overrideredirect(True)
         self.attributes("-topmost", True)
-        try:
-            self.attributes("-transparentcolor", C_KEY)
-        except tk.TclError:
-            pass
-        self.configure(bg=C_KEY)
+        # СУЦІЛЬНЕ вікно (без transparentcolor) — щоб точно було видно на будь-якій системі
+        self.configure(bg=C_BLURPLE, highlightbackground="#ffffff", highlightthickness=2)
         self._place_near_discord()
 
-        c = tk.Canvas(self, width=self.W, height=self.H, bg=C_KEY, highlightthickness=0)
-        c.pack()
-        c.create_polygon(_rr_pts(2, 2, self.W - 2, self.H - 2, 16), smooth=True, fill=C_BLURPLE, outline="")
-        lbl = tk.Label(c, text="🗜  " + L("pill_shrink"), bg=C_BLURPLE, fg="#ffffff",
-                       font=(FONT, 11, "bold"), cursor="hand2")
-        c.create_window(self.W // 2 - 8, self.H // 2, window=lbl)
-        xb = tk.Label(c, text="✕", bg=C_BLURPLE, fg="#e8ebff", font=(FONT, 9), cursor="hand2")
-        c.create_window(self.W - 16, 13, window=xb)
-        for w in (c, lbl):
+        lbl = tk.Label(self, text="🗜  " + L("pill_shrink"), bg=C_BLURPLE, fg="#ffffff",
+                       font=(FONT, 12, "bold"), cursor="hand2")
+        lbl.pack(side="left", padx=(16, 8), pady=12)
+        xb = tk.Label(self, text="✕", bg=C_BLURPLE, fg="#dfe4ff", font=(FONT, 11), cursor="hand2")
+        xb.pack(side="right", padx=12)
+        for w in (self, lbl):
             w.bind("<Button-1>", lambda e: self._open())
         xb.bind("<Button-1>", lambda e: self._close())
-        self._after = self.after(10000, self._close)   # само зникає, якщо не чіпати
+        # робимо помітним: піднімаємо поверх усього
+        self.lift()
+        self.attributes("-topmost", True)
+        self.update_idletasks()
+        self._after = self.after(12000, self._close)   # само зникає, якщо не чіпати
 
     def _place_near_discord(self):
         sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
-        x, y = (sw - self.W) // 2, int(sh * 0.72)
+        # найнадійніше — біля КУРСОРА (де юзер щойно вставив)
+        x, y = (sw - self.W) // 2, int(sh * 0.68)
         try:
-            if self.discord_hwnd:
+            pt = wintypes.POINT()
+            if user32.GetCursorPos(ctypes.byref(pt)):
+                x, y = pt.x - self.W // 2, pt.y - self.H - 18
+            elif self.discord_hwnd:
                 r = wintypes.RECT()
                 if user32.GetWindowRect(self.discord_hwnd, ctypes.byref(r)):
                     x = (r.left + r.right) // 2 - self.W // 2
                     y = r.bottom - 150
         except Exception:
             pass
+        x = max(4, min(x, sw - self.W - 4))     # тримаємо в межах екрана
+        y = max(4, min(y, sh - self.H - 4))
         self.geometry(f"{self.W}x{self.H}+{x}+{y}")
 
     def _open(self):
@@ -1118,10 +1124,12 @@ class Watcher:
                 continue
             if size > limit:
                 return (hwnd, path, size, kind, "big")          # завелике -> перехопити й стиснути
-            # влазить, але відео й ≥1.5 МБ -> пропонуємо стиснути дрібніше (значок, БЕЗ блокування)
-            if (small_hit is None and kind == "video" and size >= 1.5 * 1024 * 1024
+            # влазить, але відео й ≥1.3 МБ -> пропонуємо стиснути дрібніше (значок, БЕЗ блокування)
+            if (small_hit is None and kind == "video" and size >= 1.3 * 1024 * 1024
                     and self.cfg.get("offer_shrink", True)):
                 small_hit = (hwnd, path, size, kind, "small")
+                dc_core.dlog(f"intercept SMALL (shrink offer): {os.path.basename(path)} "
+                             f"{size/1048576:.2f}MB limit={limit/1048576:.0f}MB")
         return small_hit
 
     # ---- LL keyboard hook ----
@@ -1180,7 +1188,10 @@ class Watcher:
             pass
         try:
             self.pill = ShrinkPill(self.root, hwnd, path, size, self.cfg, self)
-        except Exception:
+            dc_core.dlog("pill SHOWN at " + self.pill.winfo_geometry())
+        except Exception as e:
+            import traceback
+            dc_core.dlog("pill FAILED: " + repr(e) + "\n" + traceback.format_exc())
             self.pill = None
 
     def run(self):
