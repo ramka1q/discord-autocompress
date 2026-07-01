@@ -123,16 +123,18 @@ def compress(path, out_path, target_mb, scale, audio_kbps, info,
     if not v_kbps or v_kbps < 50:
         return False, "Бітрейт занизький для цього розміру — збільш ліміт або зменш роздільність.", 0.0
 
-    inseek = []
-    if dur is not None:
-        inseek = ["-ss", f"{start or 0:.3f}", "-t", f"{dur:.3f}"]  # швидке вхідне перемотування
+    # ТОЧНА обрізка: -ss ПЕРЕД -i = швидкий і (при перекодуванні) кадрово-точний старт;
+    # -t ПІСЛЯ -i = вихідна опція -> довжина виходу РІВНО dur (а не рахується від keyframe,
+    # як було, коли -t стояв перед -i — саме звідси й бралася різниця в тривалості).
+    inss = ["-ss", f"{start or 0:.3f}"] if dur is not None else []
+    outdur = ["-t", f"{dur:.3f}"] if dur is not None else []
     vf = ["-vf", f"scale=-2:{scale}"] if scale else []
     # унікальний passlog на кожен вихідний файл -> безпечно для ПАРАЛЕЛЬНОГО кодування частин
     passlog = os.path.join(os.path.dirname(out_path) or ".",
                            "_d2p_" + os.path.splitext(os.path.basename(out_path))[0])
 
     def venc(kbps):
-        return ["ffmpeg", "-y", *inseek, "-i", path, "-c:v", "libx264",
+        return ["ffmpeg", "-y", *inss, "-i", path, *outdur, "-c:v", "libx264",
                 "-b:v", f"{kbps}k", "-preset", "medium", *vf]
 
     try:
