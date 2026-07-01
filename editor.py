@@ -50,6 +50,14 @@ C_BLURPLE, C_BLURPLE_H = host.C_BLURPLE, host.C_BLURPLE_H
 C_TEXT, C_MUTED, C_GREEN, C_RED = host.C_TEXT, host.C_MUTED, host.C_GREEN, host.C_RED
 FONT = host.FONT
 
+# ---- палітра таймлайна в стилі CapCut ----
+C_TRACK = "#17181c"          # тло доріжки
+C_CLIP = "#3a3d46"           # кліп у монтажі
+C_CLIP_SEL = host.C_BLURPLE  # вибраний кліп
+C_HANDLE = "#ffffff"         # білі ручки-хендли обрізки (як у CapCut)
+C_PLAY = "#ffffff"           # плейхед
+TLH, SEGH = 52, 46           # висоти доріжок (джерело / монтаж)
+
 
 def fmt(t):
     t = max(0, t)
@@ -84,6 +92,9 @@ class VideoEditor(tk.Toplevel):
         self._prev_after = None
         self._frame_idx = 0
         self.busy = False
+        self._drag = None            # 'L'/'R' — тягнемо ручку обрізки; None — ні
+        self._strip_imgs = None      # кадри кіно-стрічки (готуються у фоні)
+        self._sel_xs = self._sel_xe = 0
         self._tmp = tempfile.mkdtemp(prefix="dedit_")
         self._frames = [os.path.join(self._tmp, "a.png"), os.path.join(self._tmp, "b.png")]
 
@@ -95,10 +106,11 @@ class VideoEditor(tk.Toplevel):
         self._build()
         self._redraw()
         self._show_poster(0.0)
+        self._gen_filmstrip()        # кіно-стрічка кадрів на доріжку (як у CapCut)
 
     # ----------------------------------------------------------------- UI -- #
     def _build(self):
-        tk.Label(self, text="Дивись, ріж на шматки, переставляй — і збережи під Discord",
+        tk.Label(self, text="Тягни білі ручки, щоб обрізати · ✂ ріже на шматки",
                  bg=C_BG, fg=C_MUTED, font=(FONT, 10)).pack(pady=(10, 6))
         self.video = tk.Canvas(self, width=self.VW, height=self.VH, bg="black", highlightthickness=0)
         self.video.pack()
@@ -108,25 +120,22 @@ class VideoEditor(tk.Toplevel):
         self.play_btn.pack(side="left", padx=3)
         self._btn(pc, "⏮", self._to_start, primary=False).pack(side="left", padx=3)
         self._btn(pc, "✂ Розрізати тут", self._cut_here).pack(side="left", padx=3)
-        self.time_lbl = tk.Label(pc, text="0:00.0 / 0:00.0", bg=C_BG, fg=C_TEXT, font=(FONT, 10))
-        self.time_lbl.pack(side="left", padx=10)
 
-        tk.Label(self, text="Джерело (клік — перемотати, ✂ ставить розріз):",
-                 bg=C_BG, fg=C_MUTED, font=(FONT, 9)).pack(anchor="w", padx=14)
-        self.tl = tk.Canvas(self, width=self.TW, height=34, bg=C_DARK, highlightthickness=0)
-        self.tl.pack(padx=14, pady=(0, 8))
-        self.tl.bind("<Button-1>", self._tl_click)
+        # ---- доріжка-джерело: кіно-стрічка + ручки обрізки (як у CapCut) ----
+        self.tl = tk.Canvas(self, width=self.TW, height=TLH, bg=C_TRACK, highlightthickness=0)
+        self.tl.pack(padx=14, pady=(2, 8))
+        self.tl.bind("<Button-1>", self._tl_press)
+        self.tl.bind("<B1-Motion>", self._tl_motion)
+        self.tl.bind("<ButtonRelease-1>", self._tl_release)
 
-        tk.Label(self, text="Твій монтаж (клік — вибрати шматок):",
-                 bg=C_BG, fg=C_MUTED, font=(FONT, 9)).pack(anchor="w", padx=14)
-        self.seg = tk.Canvas(self, width=self.TW, height=48, bg=C_DARK, highlightthickness=0)
+        self.seg = tk.Canvas(self, width=self.TW, height=SEGH, bg=C_TRACK, highlightthickness=0)
         self.seg.pack(padx=14, pady=(0, 6))
         self.seg.bind("<Button-1>", self._seg_click)
 
         sc = tk.Frame(self, bg=C_BG); sc.pack(pady=2)
-        self._btn(sc, "◀ Лівіше", lambda: self._move(-1), primary=False).pack(side="left", padx=3)
-        self._btn(sc, "▶ Правіше", lambda: self._move(1), primary=False).pack(side="left", padx=3)
-        self._btn(sc, "► Переглянути шматок", self._play_segment, primary=False).pack(side="left", padx=3)
+        self._btn(sc, "◀", lambda: self._move(-1), primary=False).pack(side="left", padx=3)
+        self._btn(sc, "▶", lambda: self._move(1), primary=False).pack(side="left", padx=3)
+        self._btn(sc, "► Переглянути", self._play_segment, primary=False).pack(side="left", padx=3)
         self._btn(sc, "🗑 Прибрати", self._remove, primary=False).pack(side="left", padx=3)
 
         self.info_lbl = tk.Label(self, text="", bg=C_BG, fg=C_TEXT, font=(FONT, 11, "bold"))
@@ -317,34 +326,128 @@ class VideoEditor(tk.Toplevel):
         self._draw_timeline(); self._draw_segments(); self._update_time(); self._update_info()
 
     def _update_time(self):
-        self.time_lbl.config(text=f"{fmt(self.cur)} / {fmt(self.dur)}")
+        pass   # без цифр — позиція видно по плейхеду на доріжці
+
+    # ---- кіно-стрічка (кадри) для доріжки-джерела ----
+    def _gen_filmstrip(self):
+        n = 15
+        tw = max(1, self.TW // n)
+
+        def work():
+            # ffmpeg — у фоні; а PhotoImage створюємо вже в головному потоці Tk (інакше краш)
+            pat = os.path.join(self._tmp, "strip_%02d.png")
+            try:
+                subprocess.run(
+                    ["ffmpeg", "-y", "-i", self.file_path,
+                     "-vf", f"fps={n}/{self.dur:.3f},scale={tw}:{TLH}",
+                     "-frames:v", str(n), pat],
+                    capture_output=True, creationflags=dc_core.NO_WINDOW)
+            except Exception:
+                return
+            self.after(0, lambda: self._load_filmstrip(n))
+        threading.Thread(target=work, daemon=True).start()
+
+    def _load_filmstrip(self, n):
+        imgs = []
+        for i in range(1, n + 1):
+            p = os.path.join(self._tmp, f"strip_{i:02d}.png")
+            try:
+                imgs.append(tk.PhotoImage(file=p) if os.path.exists(p) else None)
+            except tk.TclError:
+                imgs.append(None)
+        if any(imgs):
+            self._strip_imgs = imgs
+            self._draw_timeline()
+
+    def _draw_handle(self, c, x, left):
+        """Біла ручка-хендл обрізки з вертикальною рискою (як у CapCut)."""
+        w = 8
+        x1, x2 = (x, x + w) if left else (x - w, x)
+        c.create_polygon(host._rr_pts(x1, 1, x2, TLH - 1, 4), smooth=True, fill=C_HANDLE, outline="")
+        cx = (x1 + x2) / 2
+        c.create_line(cx, TLH * 0.32, cx, TLH * 0.68, fill=C_DARK, width=2)
 
     def _draw_timeline(self):
         c = self.tl; c.delete("all"); W = self.TW
+        # 1) кіно-стрічка (або темна доріжка, поки кадри готуються)
+        imgs = self._strip_imgs
+        if imgs:
+            tw = max(1, W // len(imgs))
+            for i, im in enumerate(imgs):
+                if im:
+                    c.create_image(i * tw, 0, image=im, anchor="nw")
+        else:
+            c.create_rectangle(0, 0, W, TLH, fill=C_TRACK, outline="")
+        # 2) вибраний фрагмент яскравий, решта — притемнена (як у CapCut trim)
         s, e = self.pieces[self.order[self.sel]]
-        c.create_rectangle(s / self.dur * W, 0, e / self.dur * W, 34, fill="#3a3f57", outline="")
+        xs, xe = s / self.dur * W, e / self.dur * W
+        c.create_rectangle(0, 0, xs, TLH, fill="#000000", stipple="gray50", outline="")
+        c.create_rectangle(xe, 0, W, TLH, fill="#000000", stipple="gray50", outline="")
+        c.create_rectangle(xs, 1, xe, TLH - 1, outline=C_HANDLE, width=2)
+        self._draw_handle(c, xs, left=True)
+        self._draw_handle(c, xe, left=False)
+        # 3) місця розрізів — тонкі пунктири
         for b in sorted({b for p in self.pieces for b in p}):
+            if b <= 0 or b >= self.dur:
+                continue
             x = b / self.dur * W
-            c.create_line(x, 0, x, 34, fill=C_BLURPLE, width=2)
+            c.create_line(x, 0, x, TLH, fill="#ffffff", width=1, dash=(2, 3))
+        # 4) плейхед з трикутником зверху
         xh = self.cur / self.dur * W
-        c.create_line(xh, 0, xh, 34, fill="#ffffff", width=2)
+        c.create_line(xh, 3, xh, TLH, fill=C_PLAY, width=2)
+        c.create_polygon(xh - 5, 0, xh + 5, 0, xh, 7, fill=C_PLAY, outline="")
+        self._sel_xs, self._sel_xe = xs, xe
 
     def _draw_segments(self):
         c = self.seg; c.delete("all"); W = self.TW
         total = sum(self.pieces[ix][1] - self.pieces[ix][0] for ix in self.order) or 1
         x = 0; self._seg_rects = []
+        gap = 4
         for slot, ix in enumerate(self.order):
             s, e = self.pieces[ix]
             w = (e - s) / total * W
-            fill = C_BLURPLE if slot == self.sel else C_BG2
-            c.create_rectangle(x + 1, 2, x + w - 1, 46, fill=fill, outline=C_DARK)
-            c.create_text(x + w / 2, 16, text=f"#{slot + 1}", fill=C_TEXT, font=(FONT, 9, "bold"))
-            c.create_text(x + w / 2, 32, text=f"{fmt(s)}–{fmt(e)}", fill=C_TEXT, font=(FONT, 7))
+            x1, x2 = x + gap / 2, x + w - gap / 2
+            sel = slot == self.sel
+            c.create_polygon(host._rr_pts(x1, 4, x2, SEGH - 4, 8), smooth=True,
+                             fill=C_CLIP_SEL if sel else C_CLIP, outline="")
+            if sel:   # білий контур на вибраному кліпі — без жодних цифр
+                c.create_polygon(host._rr_pts(x1, 4, x2, SEGH - 4, 8), smooth=True,
+                                 fill="", outline=C_HANDLE, width=2)
             self._seg_rects.append((x, x + w, slot))
             x += w
 
-    def _tl_click(self, ev):
-        self._seek(ev.x / self.TW * self.dur)
+    # ---- ручки обрізки (drag) + перемотка на доріжці-джерелі ----
+    def _tl_press(self, ev):
+        if abs(ev.x - self._sel_xs) <= 11:
+            self._drag = "L"
+        elif abs(ev.x - self._sel_xe) <= 11:
+            self._drag = "R"
+        else:
+            self._drag = None
+            self._seek(ev.x / self.TW * self.dur)
+
+    def _tl_motion(self, ev):
+        if not self._drag:
+            return
+        if self.playing:
+            self._pause()
+        pi = self.order[self.sel]
+        s, e = self.pieces[pi]
+        t = max(0.0, min(self.dur, ev.x / self.TW * self.dur))
+        lo = self.pieces[pi - 1][1] if pi > 0 else 0.0
+        hi = self.pieces[pi + 1][0] if pi < len(self.pieces) - 1 else self.dur
+        if self._drag == "L":
+            t = max(lo, min(t, e - 0.1))
+            self.pieces[pi] = (t, e)
+        else:
+            t = min(hi, max(t, s + 0.1))
+            self.pieces[pi] = (s, t)
+        self.cur = t
+        self._show_poster(t)
+        self._redraw()
+
+    def _tl_release(self, _ev):
+        self._drag = None
 
     def _seg_click(self, ev):
         for x1, x2, slot in getattr(self, "_seg_rects", []):
@@ -357,12 +460,11 @@ class VideoEditor(tk.Toplevel):
         total = sum(self.pieces[ix][1] - self.pieces[ix][0] for ix in self.order)
         target = float(self.cfg["target_mb"])
         v = dc_core.calc_video_kbps(total, target, self.cfg["audio_kbps"], self.info["has_audio"]) or 0
-        if v >= 600: col, tag = C_GREEN, "✓ гарна якість"
-        elif v >= 150: col, tag = "#faa61a", "⚠ норм"
-        elif v >= 50: col, tag = "#faa61a", "⚠ слабка"
-        else: col, tag = C_RED, "✗ задовго"
-        self.info_lbl.config(
-            text=f"Підсумок: {len(self.order)} шматк. · {total:.1f} с · ~{v} kbps · {tag}", fg=col)
+        if v >= 600: col, tag = C_GREEN, "✓ Гарна якість"
+        elif v >= 150: col, tag = "#faa61a", "⚠ Нормальна якість"
+        elif v >= 50: col, tag = "#faa61a", "⚠ Слабка якість"
+        else: col, tag = C_RED, "✗ Задовгий фрагмент"
+        self.info_lbl.config(text=tag, fg=col)   # без цифр — лише оцінка якості
         if not self.busy:
             self.export_btn.config(state=("normal" if v >= 50 else "disabled"))
 
