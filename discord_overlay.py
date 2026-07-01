@@ -323,16 +323,10 @@ class Overlay(tk.Toplevel):
         self._place(self._label(L(big), 14, C_TEXT, bold=True), self.W // 2, 78)
         self._place(self._label(name, 10, C_MUTED), self.W // 2, 100)
         if self.kind == "shrink":
-            self._place(self._label(f"{self.size_mb:.1f} МБ · " + L("ov_shrink_pick"),
-                                    11, C_BLURPLE, bold=True), self.W // 2, 124)
-            opts = [mb for mb in (8, 6, 4, 3, 2, 1) if mb < self.size_mb - 0.3][:4]
-            if not opts:
-                opts = [max(1, int(self.size_mb - 1))]
-            y = 158
-            for mb in opts:
-                self._place(self._button(f"{mb} МБ  ▼", lambda m=mb: self._start_shrink(m)), self.W // 2, y)
-                y += 38
-            self._place(self._button(L("close"), self._close, primary=False), self.W // 2, y + 2)
+            self._place(self._label(f"{self.size_mb:.1f} МБ", 11, C_BLURPLE, bold=True), self.W // 2, 124)
+            self._place(self._button(L("ov_shrink_smaller"), self._shrink_input), self.W // 2, 170)
+            self._place(self._button(L("ov_trim"), self._open_trim, primary=False), self.W // 2, 212)
+            self._place(self._button(L("close"), self._close, primary=False), self.W // 2, 256)
             return
         self._place(self._label(f"{self.size_mb:.1f} МБ  →  ≈{self.cfg['target_mb']} МБ",
                                 11, C_BLURPLE, bold=True), self.W // 2, 124)
@@ -506,6 +500,41 @@ class Overlay(tk.Toplevel):
 
     def _start_shrink(self, target_mb):
         self._start(target_override=target_mb)
+
+    def _shrink_input(self):
+        """Екран, де юзер ВВОДИТЬ бажаний розмір у МБ (не більше за саме відео)."""
+        self._clear()
+        self._place(self._label("🗜", 30, C_TEXT), self.W // 2, 46)
+        self._place(self._label(L("ov_shrink_type", max=f"{self.size_mb:.1f}"), 12, C_TEXT, bold=True),
+                    self.W // 2, 92)
+        self.mb_entry = tk.Entry(self.canvas, width=7, font=(FONT, 18, "bold"), justify="center",
+                                 bg=C_DARK, fg=C_TEXT, insertbackground=C_TEXT, relief="flat")
+        self.mb_entry.insert(0, str(max(1, int(self.size_mb * 0.6))))
+        self._place(self.mb_entry, self.W // 2 - 26, 132)
+        self._place(self._label("МБ", 13, C_MUTED), self.W // 2 + 34, 132)
+        self.shrink_err = self._label("", 9, C_RED)
+        self._place(self.shrink_err, self.W // 2, 160)
+        self.mb_entry.bind("<Return>", lambda e: self._do_shrink_typed())
+        self._place(self._button(L("ov_compress"), self._do_shrink_typed), self.W // 2, 198)
+        self._place(self._button(L("close"), self._close, primary=False), self.W // 2, 242)
+        try:
+            self.focus_force()
+            self.mb_entry.focus_set()
+            self.mb_entry.select_range(0, "end")
+        except tk.TclError:
+            pass
+
+    def _do_shrink_typed(self):
+        txt = self.mb_entry.get().strip().replace(",", ".")
+        try:
+            val = float(txt)
+        except ValueError:
+            return self.shrink_err.config(text=L("ov_shrink_bad"))
+        if val < 0.5:
+            return self.shrink_err.config(text=L("ov_shrink_bad"))
+        if val >= self.size_mb:
+            return self.shrink_err.config(text=L("ov_shrink_toobig", max=f"{self.size_mb:.1f}"))
+        self._start(target_override=val)
 
     def _start(self, target_override=None):
         try:
@@ -955,22 +984,9 @@ class ShrinkPill(tk.Toplevel):
         self._after = self.after(12000, self._close)   # само зникає, якщо не чіпати
 
     def _place_near_discord(self):
+        # ПО СЕРЕДИНІ ЕКРАНА (як просив юзер)
         sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
-        # найнадійніше — біля КУРСОРА (де юзер щойно вставив)
-        x, y = (sw - self.W) // 2, int(sh * 0.68)
-        try:
-            pt = wintypes.POINT()
-            if user32.GetCursorPos(ctypes.byref(pt)):
-                x, y = pt.x - self.W // 2, pt.y - self.H - 18
-            elif self.discord_hwnd:
-                r = wintypes.RECT()
-                if user32.GetWindowRect(self.discord_hwnd, ctypes.byref(r)):
-                    x = (r.left + r.right) // 2 - self.W // 2
-                    y = r.bottom - 150
-        except Exception:
-            pass
-        x = max(4, min(x, sw - self.W - 4))     # тримаємо в межах екрана
-        y = max(4, min(y, sh - self.H - 4))
+        x, y = (sw - self.W) // 2, (sh - self.H) // 2
         self.geometry(f"{self.W}x{self.H}+{x}+{y}")
 
     def _open(self):
@@ -1068,7 +1084,13 @@ class Watcher:
                 inner = 'start "" %s' % parts
             full = 'ping 127.0.0.1 -n 3 >nul & ' + inner
             import subprocess
-            subprocess.Popen(["cmd", "/c", full], creationflags=0x08000000)   # без shell=True (не подвійний cmd)
+            # КРИТИЧНО для onefile-.exe: чистимо змінні PyInstaller/Tcl, інакше нова копія
+            # шукає Tcl у ТИМЧАСОВІЙ теці старого процесу (_MEIxxxx), яку вже видалено ->
+            # «Can't find a usable init.tcl». Прибираємо -> нова копія розпакується заново.
+            env = {k: v for k, v in os.environ.items()
+                   if k not in ("_MEIPASS2", "_MEIPASS", "_PYI_APPLICATION_HOME_DIR",
+                                "_PYIBootstrap", "TCL_LIBRARY", "TK_LIBRARY", "TKPATH")}
+            subprocess.Popen(["cmd", "/c", full], creationflags=0x08000000, env=env)
         except Exception as e:
             dc_core.dlog("restart launch failed: " + repr(e))
         # ВАЖЛИВО: не руйнуємо root просто зараз (ми всередині обробки кліку кнопки —
