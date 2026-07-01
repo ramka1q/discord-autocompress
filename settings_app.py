@@ -66,10 +66,11 @@ class SettingsApp:
         self.v_ca = tk.BooleanVar(w, c.get("compress_audio", True))
         self.v_keep = tk.StringVar(w, c.get("keep_local", "ask"))
         self.v_shrink = tk.BooleanVar(w, c.get("offer_shrink", True))
+        self.v_sound = tk.BooleanVar(w, c.get("sound_done", True))
         self.v_theme = tk.StringVar(w, c.get("theme", "discord"))
         self.v_lang = tk.StringVar(w, c.get("lang", "uk"))
         for v in (self.v_target, self.v_auto, self.v_block, self.v_paste, self.v_audio,
-                  self.v_cv, self.v_ci, self.v_ca, self.v_keep, self.v_shrink):
+                  self.v_cv, self.v_ci, self.v_ca, self.v_keep, self.v_shrink, self.v_sound):
             v.trace_add("write", lambda *a: self._autosave())
 
     def _autosave(self):
@@ -283,6 +284,7 @@ class SettingsApp:
         self._check(f, self.T("media_image"), self.v_ci)
         self._check(f, self.T("media_audio"), self.v_ca)
         self._check(f, self.T("opt_shrink"), self.v_shrink)
+        self._check(f, self.T("opt_sound"), self.v_sound)
 
         tk.Frame(f, bg=self.P["bg"], height=16).pack()
         self._lbl(f, self.T("keep_title"), size=12, bold=True).pack(anchor="w", pady=(0, 6))
@@ -534,7 +536,7 @@ class SettingsApp:
                      audio_kbps=self.v_audio.get(),
                      compress_video=self.v_cv.get(), compress_images=self.v_ci.get(),
                      compress_audio=self.v_ca.get(), keep_local=self.v_keep.get(),
-                     offer_shrink=self.v_shrink.get())
+                     offer_shrink=self.v_shrink.get(), sound_done=self.v_sound.get())
         except (tk.TclError, AttributeError):
             pass
         c["theme"] = self.cfg.get("theme", "discord")

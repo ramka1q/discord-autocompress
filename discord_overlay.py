@@ -59,6 +59,17 @@ def L(key, **kw):
     """Коротко: переклад рядка overlay поточною мовою."""
     return i18n.tr(LANG, key, **kw)
 
+
+def play_done_sound(cfg):
+    """М'який системний «дінь» після стиснення (async, без файлу, лише ctypes -> йде онлайн)."""
+    if not cfg.get("sound_done", True):
+        return
+    try:
+        # SND_ALIAS(0x10000) | SND_ASYNC(0x1) | SND_NODEFAULT(0x2)
+        ctypes.windll.winmm.PlaySoundW(ctypes.c_wchar_p("SystemAsterisk"), None, 0x00010003)
+    except Exception:
+        pass
+
 # --------------------------------------------------------------------------- #
 #  WinAPI
 # --------------------------------------------------------------------------- #
@@ -185,7 +196,7 @@ def load_config() -> dict:
            "block_paste": True, "auto_paste": True,
            "lang": "uk", "theme": "discord",
            "compress_video": True, "compress_images": True, "compress_audio": True,
-           "keep_local": "ask", "offer_shrink": True}
+           "keep_local": "ask", "offer_shrink": True, "sound_done": True}
     try:
         with open(CONFIG_PATH, encoding="utf-8") as f:
             cfg.update(json.load(f))
@@ -456,6 +467,7 @@ class Overlay(tk.Toplevel):
 
     def _show_done(self, final_mb, fits, pasted):
         self._clear()
+        play_done_sound(self.cfg)
         col = C_GREEN if fits else C_WARN
         self._badge("✓", 70, color=col)
         self._text(L("ov_done"), 122, 16, C_TEXT)
@@ -754,6 +766,7 @@ class Overlay(tk.Toplevel):
             self._btn_full(L("close"), self._close, 232, primary=False)
         else:
             # усі пачки надіслано -> питаємо про копію на ПК / завершуємо
+            play_done_sound(self.cfg)
             self._text(L("ov_done"), 140, 13, C_GREEN)
             policy = self.cfg.get("keep_local", "ask")
             if policy == "ask":
@@ -774,6 +787,7 @@ class Overlay(tk.Toplevel):
 
     def _show_done_split(self, n, pasted):
         self._clear()
+        play_done_sound(self.cfg)
         self._badge("✓", 64, color=C_GREEN)
         self._text(L("ov_done_parts", n=n), 116, 15, C_TEXT)
         if pasted:
