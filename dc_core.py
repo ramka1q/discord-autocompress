@@ -150,7 +150,8 @@ def compress(path, out_path, target_mb, scale, audio_kbps, info,
             v_kbps = max(50, int(v_kbps * (ceiling_mb / final_mb) * 0.97))
         return True, "OK", final_mb
     finally:
-        for ext in (".log", ".log.mbtree", "-0.log", "-0.log.mbtree"):
+        for ext in (".log", ".log.mbtree", "-0.log", "-0.log.mbtree",
+                    "-0.log.temp", "-0.log.mbtree.temp", ".log.temp", ".log.mbtree.temp"):
             f = passlog + ext
             if os.path.exists(f):
                 try:
@@ -229,7 +230,8 @@ def compress_segments(path, out_path, target_mb, scale, audio_kbps, info, segmen
             v_kbps = max(50, int(v_kbps * (ceiling_mb / final_mb) * 0.97))
         return True, "OK", final_mb
     finally:
-        for ext in (".log", ".log.mbtree", "-0.log", "-0.log.mbtree"):
+        for ext in (".log", ".log.mbtree", "-0.log", "-0.log.mbtree",
+                    "-0.log.temp", "-0.log.mbtree.temp", ".log.temp", ".log.mbtree.temp"):
             f = passlog + ext
             if os.path.exists(f):
                 try: os.remove(f)
@@ -290,6 +292,7 @@ def split_compress(path, target_mb, auto_scale, audio_kbps, info,
     progress_cb(pct) — загальний прогрес 0..100; part_cb(done, n) — скільки частин готово.
     Повертає (ok: bool, message: str, outputs: list[str])."""
     import threading
+    import time
     from concurrent.futures import ThreadPoolExecutor
 
     duration = info["duration"]
@@ -321,12 +324,13 @@ def split_compress(path, target_mb, auto_scale, audio_kbps, info,
     def sc():
         return cancelled[0] or bool(should_cancel and should_cancel())
 
+    # ВАЖЛИВО: робочі потоки лише оновлюють числа під замком і НЕ чіпають GUI.
+    # Усі progress_cb/part_cb викликає ОДИН потік (цей) — інакше Tkinter з різних
+    # потоків підвішує головне вікно (0% і мертва кнопка «Скасувати»).
     def make_prog(i):
         def cb(p):
             with lock:
                 prog[i] = p
-                if progress_cb:
-                    progress_cb(sum(prog) / n)   # загальний прогрес = середнє по всіх частинах
         return cb
 
     def work(task):
@@ -337,17 +341,32 @@ def split_compress(path, target_mb, auto_scale, audio_kbps, info,
                                 progress_cb=make_prog(i), should_cancel=sc, start=s, dur=d)
         with lock:
             done[0] += 1
-            if part_cb:
-                part_cb(done[0], n)
+            if not ok and msg != "Скасовано." and fail[0] is None:
+                fail[0] = f"Частина {i + 1}: {msg}"
+                cancelled[0] = True      # одна впала -> зупиняємо решту
         return i, ok, msg, out_i
 
     with ThreadPoolExecutor(max_workers=workers) as ex:
-        for i, ok, msg, out_i in [f.result() for f in [ex.submit(work, t) for t in tasks]]:
-            if ok:
-                outputs[i] = out_i
-            elif fail[0] is None and msg != "Скасовано.":
-                fail[0] = f"Частина {i + 1}: {msg}"
-                cancelled[0] = True     # одна впала -> зупиняємо решту
+        futs = [ex.submit(work, t) for t in tasks]
+        last_done = -1
+        while True:
+            with lock:
+                pct, dn = sum(prog) / n, done[0]
+            if progress_cb:
+                progress_cb(pct)
+            if part_cb and dn != last_done:
+                part_cb(dn, n)
+                last_done = dn
+            if should_cancel and should_cancel():
+                cancelled[0] = True
+            if all(f.done() for f in futs):
+                break
+            time.sleep(0.12)
+        results = [f.result() for f in futs]
+
+    for i, ok, _msg, out_i in results:
+        if ok:
+            outputs[i] = out_i
 
     if fail[0] or sc():
         _cleanup_outputs([t[3] for t in tasks])   # прибираємо всі (навіть недороблені) файли
