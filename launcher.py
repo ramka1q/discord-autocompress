@@ -36,6 +36,8 @@ import re                 # noqa: F401
 import math               # noqa: F401
 import datetime           # noqa: F401
 import struct             # noqa: F401  (appicon малює .ico)
+import zlib               # noqa: F401  (appicon пакує PNG у .ico)
+import winreg             # noqa: F401  (deps перечитує PATH після встановлення ffmpeg)
 
 APP_TITLE = "Discord Auto-Compress"
 REPO_RAW = os.environ.get(
@@ -169,7 +171,8 @@ if __name__ == "__main__":
             import tray               # noqa: F401
             import settings_app       # noqa: F401
             import optimize_test      # noqa: F401
-            print("IMPORTTEST OK: core + themes/i18n/appicon/media/tray/settings_app/optimize_test")
+            import deps               # noqa: F401
+            print("IMPORTTEST OK: core + themes/i18n/appicon/media/tray/settings_app/optimize_test/deps")
             sys.exit(0)
         except Exception as e:
             print("IMPORTTEST FAIL:", repr(e))

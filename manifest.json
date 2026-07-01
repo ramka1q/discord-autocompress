@@ -9,6 +9,7 @@
     "tray.py",
     "settings_app.py",
     "optimize_test.py",
+    "deps.py",
     "editor.py",
     "discord_autowatch.py",
     "discord_compressor.py",

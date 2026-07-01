@@ -11,6 +11,7 @@ import threading
 import tkinter as tk
 
 import appicon
+import deps
 import i18n
 import themes
 
@@ -30,7 +31,8 @@ class SettingsApp:
         self.lang = self.cfg.get("lang", "uk")
         self.P = themes.palette(self.cfg.get("theme", "discord"))
         self._or_active = True
-        self._active_tab = "general"
+        # якщо чогось бракує (ffmpeg) — одразу відкриваємо вкладку «Встановлення»
+        self._active_tab = "general" if deps.all_ok() else "setup"
 
         self.win = tk.Toplevel(master) if master is not None else tk.Tk()
         self.win.title(i18n.tr(self.lang, "app_title"))
@@ -131,8 +133,9 @@ class SettingsApp:
 
         self._nav = {}
         tabs = [("general", "tab_general", "⚙"), ("media", "tab_media", "🎞"),
-                ("appearance", "tab_appearance", "🎨"), ("updates", "tab_updates", "⭳"),
-                ("performance", "tab_performance", "⚡"), ("about", "tab_about", "ⓘ")]
+                ("appearance", "tab_appearance", "🎨"), ("setup", "tab_setup", "⬇"),
+                ("updates", "tab_updates", "⭳"), ("performance", "tab_performance", "⚡"),
+                ("about", "tab_about", "ⓘ")]
         tk.Frame(self.side, bg=P["sidebar"], height=10).pack()
         for key, tkey, icon in tabs:
             self._nav_btn(key, f"  {icon}  " + self.T(tkey))
@@ -185,8 +188,9 @@ class SettingsApp:
         for w in self.content.winfo_children():
             w.destroy()
         {"general": self._tab_general, "media": self._tab_media,
-         "appearance": self._tab_appearance, "updates": self._tab_updates,
-         "performance": self._tab_performance, "about": self._tab_about}[key]()
+         "appearance": self._tab_appearance, "setup": self._tab_setup,
+         "updates": self._tab_updates, "performance": self._tab_performance,
+         "about": self._tab_about}[key]()
 
     def _pad(self):
         f = tk.Frame(self.content, bg=self.P["bg"])
@@ -365,6 +369,78 @@ class SettingsApp:
                      fg=self.P["green"] if res.get("ok") else self.P["warn"],
                      font=(themes.FONT, 11, "bold"), wraplength=440, justify="left"
                      ).pack(anchor="w", pady=(10, 0))
+        except tk.TclError:
+            pass
+
+    def _tab_setup(self):
+        f = self._pad()
+        self._header(f, self.T("setup_title"))
+        self._lbl(f, self.T("setup_hint"), muted=True).pack(anchor="w", pady=(0, 10))
+        self.setup_status = tk.Frame(f, bg=self.P["bg"]); self.setup_status.pack(anchor="w", fill="x")
+
+        btns = tk.Frame(f, bg=self.P["bg"]); btns.pack(anchor="w", pady=(12, 6))
+        self.setup_install_btn = self._btn(btns, self.T("setup_install"), self._setup_install)
+        self.setup_install_btn.pack(side="left")
+        self._btn(btns, self.T("setup_recheck"), self._setup_render, primary=False).pack(side="left", padx=8)
+
+        self.setup_msg = self._lbl(f, "", size=11, bold=True); self.setup_msg.pack(anchor="w", pady=(2, 4))
+        self._lbl(f, self.T("setup_manual"), size=9, muted=True).pack(anchor="w")
+
+        self.setup_log = tk.Text(f, height=7, bg=self.P["dark"], fg=self.P["muted"],
+                                 font=("Consolas", 9), relief="flat", bd=0, wrap="word",
+                                 insertbackground=self.P["text"])
+        self.setup_log.pack(anchor="w", fill="both", expand=True, pady=(10, 0))
+        self.setup_log.configure(state="disabled")
+        self._setup_render()
+
+    def _setup_render(self):
+        try:
+            for w in self.setup_status.winfo_children():
+                w.destroy()
+            st = deps.check(refresh=True)
+            for name, ok in st.items():
+                row = tk.Frame(self.setup_status, bg=self.P["bg"]); row.pack(anchor="w", pady=2)
+                tk.Label(row, text="✓" if ok else "✗", bg=self.P["bg"],
+                         fg=self.P["green"] if ok else self.P["red"],
+                         font=(themes.FONT, 12, "bold"), width=2).pack(side="left")
+                tag = self.T("setup_present") if ok else self.T("setup_missing")
+                tk.Label(row, text=f"{name} — {tag}", bg=self.P["bg"], fg=self.P["text"],
+                         font=(themes.FONT, 11)).pack(side="left")
+            if all(st.values()):
+                self.setup_msg.config(text=self.T("setup_all_ok"), fg=self.P["green"])
+                self.setup_install_btn.config(state="disabled")
+            else:
+                self.setup_install_btn.config(state="normal")
+        except tk.TclError:
+            pass
+
+    def _setup_install(self):
+        try:
+            self.setup_install_btn.config(state="disabled", text=self.T("setup_installing"))
+        except tk.TclError:
+            return
+        deps.install(
+            log_cb=lambda s: self.win.after(0, lambda s=s: self._setup_log_append(s)),
+            done_cb=lambda ok: self.win.after(0, lambda: self._setup_install_done(ok)))
+
+    def _setup_log_append(self, s):
+        try:
+            self.setup_log.configure(state="normal")
+            self.setup_log.insert("end", s + "\n")
+            self.setup_log.see("end")
+            self.setup_log.configure(state="disabled")
+        except tk.TclError:
+            pass
+
+    def _setup_install_done(self, ok):
+        try:
+            self.setup_install_btn.config(state="normal", text=self.T("setup_install"))
+        except tk.TclError:
+            pass
+        self._setup_render()
+        try:
+            self.setup_msg.config(text=self.T("setup_done_ok") if ok else self.T("setup_done_fail"),
+                                  fg=self.P["green"] if ok else self.P["warn"])
         except tk.TclError:
             pass
 
