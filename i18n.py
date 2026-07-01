@@ -113,6 +113,16 @@ STR = {
     "ov_kept":          {"uk": "Копію збережено поруч з оригіналом", "ru": "Копия сохранена рядом с оригиналом", "en": "Copy saved next to original"},
     "ov_fail":          {"uk": "Не вдалося стиснути", "ru": "Не удалось сжать", "en": "Compression failed"},
     "ov_done_parts":    {"uk": "Готово — {n} частин", "ru": "Готово — {n} частей", "en": "Done — {n} parts"},
+    "ov_batch_in":      {"uk": "Партія {a}–{b} з {total} у Discord — натисни Enter",
+                         "ru": "Партия {a}–{b} из {total} в Discord — нажми Enter",
+                         "en": "Batch {a}–{b} of {total} in Discord — press Enter"},
+    "ov_batch_clip":    {"uk": "Партія {a}–{b} з {total} у буфері — Ctrl+V",
+                         "ru": "Партия {a}–{b} из {total} в буфере — Ctrl+V",
+                         "en": "Batch {a}–{b} of {total} in clipboard — Ctrl+V"},
+    "ov_batch_hint":    {"uk": "Надішли цю партію в Discord, тоді тисни ↓",
+                         "ru": "Отправь эту партию в Discord, потом жми ↓",
+                         "en": "Send this batch in Discord, then click ↓"},
+    "ov_batch_next":    {"uk": "Вставити наступні {a}–{b}  →", "ru": "Вставить следующие {a}–{b}  →", "en": "Paste next {a}–{b}  →"},
 }
 
 

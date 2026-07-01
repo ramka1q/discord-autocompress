@@ -568,8 +568,52 @@ class Overlay(tk.Toplevel):
             return self._show_error(msg or "Не вдалося розділити відео.", allow_trim=False)
         self._set(100)
         self.out_paths = outs
-        pasted = self._paste_files(outs)
-        self._show_done_split(len(outs), pasted)
+        # Discord бере МАКС 10 вкладень за раз -> >10 файлів шлемо пачками по 10
+        if len(outs) > 10:
+            self._batches = [outs[i:i + 10] for i in range(0, len(outs), 10)]
+            self._batch_i = 0
+            pasted = self._paste_files(self._batches[0])
+            self._show_batches(pasted)
+        else:
+            pasted = self._paste_files(outs)
+            self._show_done_split(len(outs), pasted)
+
+    def _show_batches(self, pasted):
+        """Екран пакетної відправки: показує поточну пачку 1–10, потім кнопку «наступні»."""
+        self._clear()
+        total = len(self.out_paths)
+        b = self._batch_i
+        lo, hi = b * 10 + 1, min(total, (b + 1) * 10)
+        self._place(self._label("✓", 32, C_GREEN, bold=True), self.W // 2, 42)
+        key = "ov_batch_in" if pasted else "ov_batch_clip"
+        self._place(self._label(L(key, a=lo, b=hi, total=total), 12, C_TEXT, bold=True),
+                    self.W // 2, 82)
+        if b + 1 < len(self._batches):
+            self._place(self._label(L("ov_batch_hint"), 10, C_MUTED), self.W // 2, 108)
+            nlo, nhi = (b + 1) * 10 + 1, min(total, (b + 2) * 10)
+            self._place(self._button(L("ov_batch_next", a=nlo, b=nhi), self._next_batch),
+                        self.W // 2, 152)
+            self._place(self._button(L("close"), self._close, primary=False), self.W // 2, 198)
+        else:
+            # усі пачки надіслано -> питаємо про копію на ПК / завершуємо
+            self._place(self._label(L("ov_done"), 13, C_GREEN, bold=True), self.W // 2, 110)
+            policy = self.cfg.get("keep_local", "ask")
+            if policy == "ask":
+                self._place(self._label(L("ov_keep_q"), 11, C_TEXT, bold=True), self.W // 2, 150)
+                self._place(self._button(L("ov_keep"), lambda: self._keep_parts(True), primary=False),
+                            self.W // 2 - 8, 190, "e")
+                self._place(self._button(L("ov_delete"), lambda: self._keep_parts(False)),
+                            self.W // 2 + 8, 190, "w")
+            else:
+                if policy == "never":
+                    self._schedule_delete(self.out_paths)
+                self._place(self._button(L("ov_done"), self._close), self.W // 2, 176)
+                self.after(9000, self._close)
+
+    def _next_batch(self):
+        self._batch_i += 1
+        pasted = self._paste_files(self._batches[self._batch_i])
+        self._show_batches(pasted)
 
     def _show_done_split(self, n, pasted):
         self._clear()
