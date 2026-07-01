@@ -99,6 +99,8 @@ class VideoEditor(tk.Toplevel):
         self._sel_xs = self._sel_xe = 0
         self._clip_rects = []        # (slot, cx1, cx2, ix) для кліків по кліпах
         self._undo = []; self._redo = []   # історія для скасувати/повторити
+        self._zoom = 1.0             # масштаб доріжки (Ctrl+колесо)
+        self._scroll = 0.0           # горизонтальний зсув (px) коли зумнуто
         self._tmp = tempfile.mkdtemp(prefix="dedit_")
         self._frames = [os.path.join(self._tmp, "a.png"), os.path.join(self._tmp, "b.png")]
 
@@ -135,6 +137,8 @@ class VideoEditor(tk.Toplevel):
         self.tl.bind("<Button-1>", self._tl_press)
         self.tl.bind("<B1-Motion>", self._tl_motion)
         self.tl.bind("<ButtonRelease-1>", self._tl_release)
+        self.tl.bind("<Control-MouseWheel>", self._on_zoom)   # Ctrl+колесо = зум
+        self.tl.bind("<MouseWheel>", self._on_scroll)          # колесо = горизонтальний скрол (коли зумнуто)
 
         sc = tk.Frame(self, bg=C_BG); sc.pack(pady=2)
         self._btn(sc, "◀ Пересунути", lambda: self._move(-1), primary=False).pack(side="left", padx=3)
@@ -439,11 +443,62 @@ class VideoEditor(tk.Toplevel):
         c.create_line(cx, TLH * 0.34, cx, TLH * 0.66, fill=C_DARK, width=2)
 
     # ---- ЄДИНА доріжка: кліпи в порядку монтажу, фіксований масштаб (px/сек) ----
+    # ---- масштаб/скрол доріжки (Ctrl+колесо приближає біля плейхеда) ----
+    def _pps(self):
+        return (self.TW / self.dur) * self._zoom
+
+    def _clip_durs(self):
+        return [self.pieces[ix][1] - self.pieces[ix][0] for ix in self.order]
+
+    def _content_width(self, pps):
+        ds = self._clip_durs()
+        return 4.0 + sum(d * pps for d in ds) + 3 * max(0, len(ds) - 1)
+
+    def _content_x_of(self, montage_t, pps):
+        x, acc, gap = 2.0, 0.0, 3
+        for d in self._clip_durs():
+            if montage_t <= acc + d:
+                return x + (montage_t - acc) * pps
+            x += d * pps + gap
+            acc += d
+        return x
+
+    def _playhead_montage_t(self):
+        acc = 0.0
+        for slot in range(len(self.order)):
+            s, e = self.pieces[self.order[slot]]
+            if slot == self.sel:
+                return acc + min(max(self.cur, s), e) - s
+            acc += (e - s)
+        return acc
+
+    def _clamp_scroll(self, pps):
+        self._scroll = max(0.0, min(self._scroll, max(0.0, self._content_width(pps) - self.TW)))
+
+    def _on_zoom(self, ev):
+        old = self._pps()
+        ft = self._playhead_montage_t()
+        screen_x = self._content_x_of(ft, old) - self._scroll     # тримаємо плейхед на місці
+        self._zoom = min(24.0, max(1.0, self._zoom * (1.25 if ev.delta > 0 else 0.8)))
+        new = self._pps()
+        self._scroll = self._content_x_of(ft, new) - screen_x
+        self._clamp_scroll(new)
+        self._draw_track()
+        return "break"
+
+    def _on_scroll(self, ev):
+        if self._zoom <= 1.0:
+            return
+        self._scroll -= (ev.delta / 120.0) * 60
+        self._clamp_scroll(self._pps())
+        self._draw_track()
+        return "break"
+
     def _draw_track(self):
         c = self.tl; c.delete("all"); W = self.TW
         c.create_rectangle(0, 0, W, TLH, fill=C_TRACK, outline="")
-        pps = W / self.dur                 # фіксований масштаб — обрізка стабільна
-        x = 2.0; gap = 3
+        pps = self._pps()
+        x = 2.0 - self._scroll; gap = 3
         self._clip_rects = []
         self._sel_xs = self._sel_xe = 0
         for slot, ix in enumerate(self.order):
@@ -577,7 +632,41 @@ class VideoEditor(tk.Toplevel):
             except Exception:
                 pasted = ""
         self.info_lbl.config(text=f"Готово ✓ {mb:.2f} МБ{pasted}", fg=C_GREEN)
-        self.after(2600, self._close)
+        # keep_local: як і в оверлеї — питаємо / завжди лишаємо / завжди видаляємо
+        policy = self.cfg.get("keep_local", "ask")
+        if policy == "ask":
+            self._ask_keep(out_path)
+        else:
+            if policy == "never":
+                self._schedule_delete([out_path])
+            self.after(2600, self._close)
+
+    def _ask_keep(self, out_path):
+        ec = self.export_btn.master
+        for w in ec.winfo_children():
+            w.destroy()
+        self.info_lbl.config(text="Лишити стиснуту копію на ПК?", fg=C_TEXT)
+        self._btn(ec, "Лишити", self._close, primary=False).pack(side="left", padx=4)
+        self._btn(ec, "Видалити",
+                  lambda: (self._schedule_delete([out_path]), self._close())).pack(side="left", padx=4)
+
+    def _schedule_delete(self, paths):
+        """Видаляє файли з затримкою у ФОНОВОМУ потоці (переживає закриття вікна редактора)."""
+        paths = [p for p in paths if p]
+        if not paths:
+            return
+
+        def _rm():
+            time.sleep(10)
+            for p in paths:
+                for _ in range(5):
+                    try:
+                        if os.path.exists(p):
+                            os.remove(p)
+                        break
+                    except OSError:
+                        time.sleep(2)
+        threading.Thread(target=_rm, daemon=True).start()
 
     def _close(self):
         self._pause()                  # зупиняємо ffplay і його опитування

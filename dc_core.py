@@ -8,6 +8,7 @@ dc_core — спільне ядро стиснення відео під Discord
 import math
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 import time
@@ -180,75 +181,62 @@ def output_name(path: str, target_mb: float) -> str:
 
 def compress_segments(path, out_path, target_mb, scale, audio_kbps, info, segments,
                       progress_cb=None, should_cancel=None):
-    """Вирізає й склеює кілька сегментів [(start,end),...] (у заданому порядку)
-    в одне відео під target_mb. Повертає (ok, message, final_mb)."""
+    """Вирізає й склеює сегменти [(start,end),...] у порядку -> одне відео під target_mb.
+    ШВИДКО й ТОЧНО: замість старого trim-фільтра (декодував УСЕ відео двічі) використовуємо
+    вхідний seek (-ss перед -i) — ffmpeg декодує лише потрібні шматки, і це кадрово-точно.
+    Повертає (ok, message, final_mb)."""
     segs = [(float(s), float(e)) for s, e in segments if e > s]
     if not segs:
         return False, "Немає сегментів для збереження.", 0.0
     total = sum(e - s for s, e in segs)
-    has_audio = info["has_audio"] and audio_kbps > 0
     v_kbps = calc_video_kbps(total, target_mb, audio_kbps, info["has_audio"])
     if not v_kbps or v_kbps < 50:
         return False, "Загалом задовго для цього ліміту — прибери сегмент або підвищ ліміт.", 0.0
 
+    # ОДИН фрагмент -> одразу через швидкий вхідний seek (compress зі start/dur) — найшвидше й точно
+    if len(segs) == 1:
+        s, e = segs[0]
+        return compress(path, out_path, target_mb, scale, audio_kbps, info,
+                        progress_cb=progress_cb, should_cancel=should_cancel, start=s, dur=e - s)
+
+    # БАГАТО фрагментів -> кожен швидко вирізаємо (вхідний seek), склеюємо, тоді 2-прохідно тиснемо
+    has_audio = info["has_audio"] and audio_kbps > 0
+    tmpd = tempfile.mkdtemp(prefix="dseg_")
     n = len(segs)
-
-    def build_graph(with_audio):
-        parts, labels = [], []
-        for i, (s, e) in enumerate(segs):
-            parts.append(f"[0:v]trim=start={s}:end={e},setpts=PTS-STARTPTS[v{i}]")
-            if with_audio:
-                parts.append(f"[0:a]atrim=start={s}:end={e},asetpts=PTS-STARTPTS[a{i}]")
-            labels.append(f"[v{i}]" + (f"[a{i}]" if with_audio else ""))
-        parts.append(f"{''.join(labels)}concat=n={n}:v=1:a={1 if with_audio else 0}[cv]"
-                     + ("[ca]" if with_audio else ""))
-        vout = "[cv]"
-        if scale:
-            parts.append(f"[cv]scale=-2:{scale}[sv]")
-            vout = "[sv]"
-        return ";".join(parts), vout
-
-    ceiling_mb = target_ceiling(target_mb)
-    passlog = os.path.join(os.path.dirname(out_path) or ".",
-                           "_d2p_" + os.path.splitext(os.path.basename(out_path))[0])
-    fc1, vout1 = build_graph(False)        # pass 1 — лише відео (без неприєднаного аудіо)
-    fc2, vout2 = build_graph(has_audio)
-
-    def common(kbps):
-        return ["-c:v", "libx264", "-b:v", f"{kbps}k", "-preset", "medium"]
-
     try:
-        rc = _run_pass(["ffmpeg", "-y", "-i", path, "-filter_complex", fc1, "-map", vout1,
-                        *common(v_kbps), "-an", "-pass", "1", "-passlogfile", passlog, "-f", "null", os.devnull],
-                       total, 0.0, 45.0, progress_cb, should_cancel)
-        if should_cancel and should_cancel():
-            return False, "Скасовано.", 0.0
-        if rc != 0:
-            return False, "Прохід 1 з помилкою.", 0.0
-        a = (["-map", "[ca]", "-c:a", "aac", "-b:a", f"{audio_kbps}k"] if has_audio else ["-an"])
-        # pass 2 з гарантією розміру: до 4 спроб зі зниженням бітрейту
-        final_mb = 0.0
-        for attempt in range(4):
-            rc = _run_pass(["ffmpeg", "-y", "-i", path, "-filter_complex", fc2, "-map", vout2,
-                            *common(v_kbps), *a, "-pass", "2", "-passlogfile", passlog,
-                            "-movflags", "+faststart", out_path],
-                           total, 45.0, 55.0, progress_cb, should_cancel)
+        files = []
+        for i, (s, e) in enumerate(segs):
             if should_cancel and should_cancel():
                 return False, "Скасовано.", 0.0
-            if rc != 0:
-                return False, "Прохід 2 з помилкою.", 0.0
-            final_mb = os.path.getsize(out_path) / 1024 / 1024
-            if final_mb <= ceiling_mb or v_kbps <= 50:
-                break
-            v_kbps = max(50, int(v_kbps * (ceiling_mb / final_mb) * 0.97))
-        return True, "OK", final_mb
+            segf = os.path.join(tmpd, f"s{i}.mp4")
+            cmd = ["ffmpeg", "-y", "-ss", f"{s:.3f}", "-i", path, "-t", f"{e - s:.3f}",
+                   "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p"]
+            cmd += (["-c:a", "aac", "-b:a", "192k"] if has_audio else ["-an"])
+            cmd += ["-video_track_timescale", "90000", segf]
+            rc = _run_pass(cmd, e - s, i / n * 35.0, 35.0 / n, progress_cb, should_cancel)
+            if rc != 0 or not os.path.exists(segf):
+                return False, "Не вдалося вирізати фрагмент.", 0.0
+            files.append(segf)
+
+        # склейка (concat demuxer, без перекодування — миттєво)
+        listf = os.path.join(tmpd, "list.txt")
+        with open(listf, "w", encoding="utf-8") as f:
+            for pf in files:
+                f.write("file '%s'\n" % pf.replace("\\", "/").replace("'", "'\\''"))
+        joined = os.path.join(tmpd, "joined.mp4")
+        rc = subprocess.run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", listf,
+                             "-c", "copy", "-movflags", "+faststart", joined],
+                            capture_output=True, creationflags=NO_WINDOW).returncode
+        if rc != 0 or not os.path.exists(joined):
+            return False, "Не вдалося склеїти фрагменти.", 0.0
+
+        jinfo = {"duration": total, "has_audio": has_audio,
+                 "width": info.get("width", 0), "height": info.get("height", 0)}
+        return compress(joined, out_path, target_mb, scale, audio_kbps, jinfo,
+                        progress_cb=(lambda p: progress_cb(35.0 + p * 0.65)) if progress_cb else None,
+                        should_cancel=should_cancel)
     finally:
-        for ext in (".log", ".log.mbtree", "-0.log", "-0.log.mbtree",
-                    "-0.log.temp", "-0.log.mbtree.temp", ".log.temp", ".log.mbtree.temp"):
-            f = passlog + ext
-            if os.path.exists(f):
-                try: os.remove(f)
-                except OSError: pass
+        shutil.rmtree(tmpd, ignore_errors=True)
 
 
 def extract_frame(path: str, t: float, out_png: str, width: int = 380) -> bool:

@@ -89,6 +89,8 @@ user32.IsWindowVisible.argtypes = [ctypes.c_void_p]
 user32.IsWindowVisible.restype = ctypes.c_int
 user32.GetWindowThreadProcessId.argtypes = [ctypes.c_void_p, ctypes.POINTER(wintypes.DWORD)]
 user32.GetWindowThreadProcessId.restype = wintypes.DWORD
+user32.GetWindowRect.argtypes = [ctypes.c_void_p, ctypes.POINTER(wintypes.RECT)]
+user32.GetWindowRect.restype = wintypes.BOOL
 kernel32.GlobalAlloc.restype = ctypes.c_void_p
 kernel32.GlobalAlloc.argtypes = [wintypes.UINT, ctypes.c_size_t]
 kernel32.GlobalLock.restype = ctypes.c_void_p
@@ -178,7 +180,7 @@ def load_config() -> dict:
            "block_paste": True, "auto_paste": True,
            "lang": "uk", "theme": "discord",
            "compress_video": True, "compress_images": True, "compress_audio": True,
-           "keep_local": "ask"}
+           "keep_local": "ask", "offer_shrink": True}
     try:
         with open(CONFIG_PATH, encoding="utf-8") as f:
             cfg.update(json.load(f))
@@ -311,12 +313,24 @@ class Overlay(tk.Toplevel):
         name = os.path.basename(self.file_path)
         if len(name) > 42:
             name = name[:39] + "…"
-        icon = {"video": "🎬", "image": "🖼", "audio": "🎵"}.get(self.kind, "🎬")
+        icon = {"video": "🎬", "image": "🖼", "audio": "🎵", "shrink": "🗜"}.get(self.kind, "🎬")
         big = {"video": "ov_video_big", "image": "ov_image_big",
-               "audio": "ov_audio_big"}.get(self.kind, "ov_video_big")
+               "audio": "ov_audio_big", "shrink": "ov_shrink_q"}.get(self.kind, "ov_video_big")
         self._place(self._label(icon, 30, C_TEXT), self.W // 2, 40)
         self._place(self._label(L(big), 14, C_TEXT, bold=True), self.W // 2, 78)
         self._place(self._label(name, 10, C_MUTED), self.W // 2, 100)
+        if self.kind == "shrink":
+            self._place(self._label(f"{self.size_mb:.1f} МБ · " + L("ov_shrink_pick"),
+                                    11, C_BLURPLE, bold=True), self.W // 2, 124)
+            opts = [mb for mb in (8, 6, 4, 3, 2, 1) if mb < self.size_mb - 0.3][:4]
+            if not opts:
+                opts = [max(1, int(self.size_mb - 1))]
+            y = 158
+            for mb in opts:
+                self._place(self._button(f"{mb} МБ  ▼", lambda m=mb: self._start_shrink(m)), self.W // 2, y)
+                y += 38
+            self._place(self._button(L("close"), self._close, primary=False), self.W // 2, y + 2)
+            return
         self._place(self._label(f"{self.size_mb:.1f} МБ  →  ≈{self.cfg['target_mb']} МБ",
                                 11, C_BLURPLE, bold=True), self.W // 2, 124)
         if self.kind == "video":
@@ -383,20 +397,25 @@ class Overlay(tk.Toplevel):
         self.after(1600, self._close)
 
     def _schedule_delete(self, paths):
-        """Видаляє файли з невеликою затримкою (Discord встигає прочитати перед видаленням)."""
+        """Видаляє файли з затримкою у ФОНОВОМУ потоці (Discord встигає прочитати).
+        ВАЖЛИВО: не через self.after — вікно оверлея закривається раніше за таймер,
+        і тоді таймер скасовувався й файли лишались (це й був баг)."""
         paths = [p for p in paths if p]
+        if not paths:
+            return
+        import time as _t
 
         def _rm():
+            _t.sleep(10)   # даємо Discord дочитати файли, потім прибираємо
             for p in paths:
-                try:
-                    if os.path.exists(p):
-                        os.remove(p)
-                except OSError:
-                    pass
-        try:
-            self.after(9000, _rm)
-        except tk.TclError:
-            _rm()
+                for _ in range(5):
+                    try:
+                        if os.path.exists(p):
+                            os.remove(p)
+                        break
+                    except OSError:
+                        _t.sleep(2)   # файл ще зайнятий (Discord вантажить) — чекаємо і пробуємо ще
+        threading.Thread(target=_rm, daemon=True).start()
 
     def _paste_files(self, paths):
         try:
@@ -482,13 +501,16 @@ class Overlay(tk.Toplevel):
             self._visible = True
             self._show_error(f"Редактор недоступний:\n{str(e)[:60]}", allow_trim=False)
 
-    def _start(self):
+    def _start_shrink(self, target_mb):
+        self._start(target_override=target_mb)
+
+    def _start(self, target_override=None):
         try:
             info = dc_core.ffprobe_info(self.file_path)
         except Exception:
             return self._show_error("Не вдалося прочитати відео.\nМожливо, файл пошкоджений.",
                                     allow_split=False, allow_trim=False)
-        target = float(self.cfg["target_mb"])
+        target = float(target_override) if target_override else float(self.cfg["target_mb"])
         # перевірка здійсненності: навіть якщо ВЕСЬ бюджет віддати відео — чи вистачить?
         best = dc_core.calc_video_kbps(info["duration"], target, 0, False)
         if not best or best < 50:
@@ -900,6 +922,77 @@ class TrimWindow(tk.Toplevel):
 
 
 # --------------------------------------------------------------------------- #
+#  Значок-пропозиція «стиснути дрібніше» (для відео, що вже влазить у ліміт)
+# --------------------------------------------------------------------------- #
+class ShrinkPill(tk.Toplevel):
+    W, H = 220, 48
+
+    def __init__(self, master, discord_hwnd, path, size, cfg, watcher):
+        super().__init__(master)
+        self.discord_hwnd, self.path, self.size = discord_hwnd, path, size
+        self.cfg, self.watcher = cfg, watcher
+        self.overrideredirect(True)
+        self.attributes("-topmost", True)
+        try:
+            self.attributes("-transparentcolor", C_KEY)
+        except tk.TclError:
+            pass
+        self.configure(bg=C_KEY)
+        self._place_near_discord()
+
+        c = tk.Canvas(self, width=self.W, height=self.H, bg=C_KEY, highlightthickness=0)
+        c.pack()
+        c.create_polygon(_rr_pts(2, 2, self.W - 2, self.H - 2, 16), smooth=True, fill=C_BLURPLE, outline="")
+        lbl = tk.Label(c, text="🗜  " + L("pill_shrink"), bg=C_BLURPLE, fg="#ffffff",
+                       font=(FONT, 11, "bold"), cursor="hand2")
+        c.create_window(self.W // 2 - 8, self.H // 2, window=lbl)
+        xb = tk.Label(c, text="✕", bg=C_BLURPLE, fg="#e8ebff", font=(FONT, 9), cursor="hand2")
+        c.create_window(self.W - 16, 13, window=xb)
+        for w in (c, lbl):
+            w.bind("<Button-1>", lambda e: self._open())
+        xb.bind("<Button-1>", lambda e: self._close())
+        self._after = self.after(10000, self._close)   # само зникає, якщо не чіпати
+
+    def _place_near_discord(self):
+        sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
+        x, y = (sw - self.W) // 2, int(sh * 0.72)
+        try:
+            if self.discord_hwnd:
+                r = wintypes.RECT()
+                if user32.GetWindowRect(self.discord_hwnd, ctypes.byref(r)):
+                    x = (r.left + r.right) // 2 - self.W // 2
+                    y = r.bottom - 150
+        except Exception:
+            pass
+        self.geometry(f"{self.W}x{self.H}+{x}+{y}")
+
+    def _open(self):
+        self._cancel()
+        try:
+            self.destroy()
+        except Exception:
+            pass
+        if not self.watcher.overlay_open:
+            self.watcher.overlay_open = True
+            Overlay(self.watcher.root, self.path, self.size / 1024 / 1024, self.cfg,
+                    self.discord_hwnd, on_close=self.watcher._closed, watcher=self.watcher, kind="shrink")
+
+    def _cancel(self):
+        try:
+            if getattr(self, "_after", None):
+                self.after_cancel(self._after)
+        except Exception:
+            pass
+
+    def _close(self):
+        self._cancel()
+        try:
+            self.destroy()
+        except Exception:
+            pass
+
+
+# --------------------------------------------------------------------------- #
 #  Фон: перехоплення Ctrl+V у Discord
 # --------------------------------------------------------------------------- #
 def _autoupdate_bg():
@@ -1012,6 +1105,7 @@ class Watcher:
         enabled = {"video": self.cfg.get("compress_video", True),
                    "image": self.cfg.get("compress_images", True),
                    "audio": self.cfg.get("compress_audio", True)}
+        small_hit = None
         for path in clipboard_files():
             if "_discord_" in os.path.basename(path) or not os.path.isfile(path):
                 continue
@@ -1023,8 +1117,12 @@ class Watcher:
             except OSError:
                 continue
             if size > limit:
-                return (hwnd, path, size, kind)
-        return None
+                return (hwnd, path, size, kind, "big")          # завелике -> перехопити й стиснути
+            # влазить, але відео й ≥1.5 МБ -> пропонуємо стиснути дрібніше (значок, БЕЗ блокування)
+            if (small_hit is None and kind == "video" and size >= 1.5 * 1024 * 1024
+                    and self.cfg.get("offer_shrink", True)):
+                small_hit = (hwnd, path, size, kind, "small")
+        return small_hit
 
     # ---- LL keyboard hook ----
     def _ll_proc(self, nCode, wParam, lParam):
@@ -1039,7 +1137,9 @@ class Watcher:
                         if hit:
                             self._cooldown_until = now + 1500
                             self.q.put(hit)
-                            if self.cfg.get("block_paste", True):
+                            # блокуємо вставку ЛИШЕ для завеликих; для «стиснути дрібніше»
+                            # пускаємо вставку як є — покажемо лише значок-пропозицію
+                            if hit[4] == "big" and self.cfg.get("block_paste", True):
                                 return 1  # зʼїдаємо Ctrl+V, щоб Discord не лаявся
         except Exception:
             pass
@@ -1056,18 +1156,32 @@ class Watcher:
 
     # ---- черга подій -> головний потік Tk ----
     def _poll_queue(self):
-        try:
-            while not self.overlay_open:
-                hwnd, path, size, kind = self.q.get_nowait()
+        while True:
+            try:
+                hwnd, path, size, kind, mode = self.q.get_nowait()
+            except queue.Empty:
+                break
+            if mode == "small":
+                self._show_pill(hwnd, path, size)           # ненав'язливий значок-пропозиція
+            elif not self.overlay_open:
                 self.overlay_open = True
                 Overlay(self.root, path, size / 1024 / 1024, self.cfg, hwnd,
                         on_close=self._closed, watcher=self, kind=kind)
-        except queue.Empty:
-            pass
         self.root.after(120, self._poll_queue)
 
     def _closed(self):
         self.overlay_open = False
+
+    def _show_pill(self, hwnd, path, size):
+        try:
+            if getattr(self, "pill", None):
+                self.pill._close()
+        except Exception:
+            pass
+        try:
+            self.pill = ShrinkPill(self.root, hwnd, path, size, self.cfg, self)
+        except Exception:
+            self.pill = None
 
     def run(self):
         self.root.mainloop()
