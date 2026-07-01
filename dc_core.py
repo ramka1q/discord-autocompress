@@ -9,8 +9,21 @@ import math
 import os
 import re
 import subprocess
+import tempfile
+import time
 
 NO_WINDOW = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+
+DEBUG_LOG = os.path.join(tempfile.gettempdir(), "dac_debug.log")
+
+
+def dlog(msg: str):
+    """Проста діагностика у файл (%TEMP%\\dac_debug.log). Ніколи не кидає виняток."""
+    try:
+        with open(DEBUG_LOG, "a", encoding="utf-8") as f:
+            f.write(f"{time.strftime('%H:%M:%S')} {msg}\n")
+    except Exception:
+        pass
 TIME_RE = re.compile(r"out_time=(\d+):(\d+):(\d+\.\d+)")
 VIDEO_EXT = {".mp4", ".mkv", ".mov", ".avi", ".webm", ".flv", ".m4v", ".wmv", ".mpg", ".mpeg", ".ts"}
 
@@ -291,9 +304,7 @@ def split_compress(path, target_mb, auto_scale, audio_kbps, info,
     кодувати одночасно (None = авто за кількістю ядер).
     progress_cb(pct) — загальний прогрес 0..100; part_cb(done, n) — скільки частин готово.
     Повертає (ok: bool, message: str, outputs: list[str])."""
-    import threading
-    import time
-    from concurrent.futures import ThreadPoolExecutor
+    import threading   # лише threading — БЕЗ concurrent.futures (його могло не бути у старому .exe)
 
     duration = info["duration"]
     if duration <= 0:
@@ -306,6 +317,7 @@ def split_compress(path, target_mb, auto_scale, audio_kbps, info,
     scale = pick_auto_scale(info, target_mb, audio_kbps) if auto_scale else 0
     if workers is None:
         workers = auto_workers(n)
+    dlog(f"split_compress start: n={n} workers={workers} cpu={os.cpu_count()} dur={duration:.1f}")
 
     # план: (індекс, старт, тривалість, вихідний файл)
     tasks = []
@@ -320,6 +332,7 @@ def split_compress(path, target_mb, auto_scale, audio_kbps, info,
     fail = [None]
     cancelled = [False]
     lock = threading.Lock()
+    sem = threading.Semaphore(max(1, workers))   # обмежуємо, скільки частин кодуються одночасно
 
     def sc():
         return cancelled[0] or bool(should_cancel and should_cancel())
@@ -333,41 +346,54 @@ def split_compress(path, target_mb, auto_scale, audio_kbps, info,
                 prog[i] = p
         return cb
 
-    def work(task):
-        i, s, d, out_i = task
-        if sc():
-            return i, False, "Скасовано.", out_i
-        ok, msg, _mb = compress(path, out_i, target_mb, scale, audio_kbps, info,
-                                progress_cb=make_prog(i), should_cancel=sc, start=s, dur=d)
-        with lock:
-            done[0] += 1
-            if not ok and msg != "Скасовано." and fail[0] is None:
-                fail[0] = f"Частина {i + 1}: {msg}"
-                cancelled[0] = True      # одна впала -> зупиняємо решту
-        return i, ok, msg, out_i
-
-    with ThreadPoolExecutor(max_workers=workers) as ex:
-        futs = [ex.submit(work, t) for t in tasks]
-        last_done = -1
-        while True:
+    def work(i, s, d, out_i):
+        try:
+            with sem:                       # чекаємо вільний «слот» кодування
+                if sc():
+                    return
+                dlog(f"part {i + 1}/{n} START")
+                ok, msg, _mb = compress(path, out_i, target_mb, scale, audio_kbps, info,
+                                        progress_cb=make_prog(i), should_cancel=sc, start=s, dur=d)
+                dlog(f"part {i + 1}/{n} DONE ok={ok} msg={msg}")
+                with lock:
+                    if ok:
+                        outputs[i] = out_i
+                    elif msg != "Скасовано." and fail[0] is None:
+                        fail[0] = f"Частина {i + 1}: {msg}"
+                        cancelled[0] = True   # одна впала -> зупиняємо решту
+        except Exception as e:                # будь-яка несподіванка -> лог + зупинка, а не тихий зависон
+            dlog(f"part {i + 1}/{n} EXCEPTION: {e!r}")
             with lock:
-                pct, dn = sum(prog) / n, done[0]
-            if progress_cb:
-                progress_cb(pct)
-            if part_cb and dn != last_done:
-                part_cb(dn, n)
-                last_done = dn
-            if should_cancel and should_cancel():
+                if fail[0] is None:
+                    fail[0] = f"Частина {i + 1}: {e}"
                 cancelled[0] = True
-            if all(f.done() for f in futs):
-                break
-            time.sleep(0.12)
-        results = [f.result() for f in futs]
+        finally:
+            with lock:
+                done[0] += 1
 
-    for i, ok, _msg, out_i in results:
-        if ok:
-            outputs[i] = out_i
+    threads = [threading.Thread(target=work, args=t, daemon=True) for t in tasks]
+    for th in threads:
+        th.start()
 
+    # цей (єдиний) потік звітує прогрес і чекає завершення
+    last_done = -1
+    while True:
+        with lock:
+            pct, dn = sum(prog) / n, done[0]
+        if progress_cb:
+            progress_cb(pct)
+        if part_cb and dn != last_done:
+            part_cb(dn, n)
+            last_done = dn
+        if should_cancel and should_cancel():
+            cancelled[0] = True
+        if dn >= n:
+            break
+        time.sleep(0.12)
+    for th in threads:
+        th.join(timeout=5)
+
+    dlog(f"split_compress end: fail={fail[0]} cancelled={cancelled[0]} done={done[0]}/{n}")
     if fail[0] or sc():
         _cleanup_outputs([t[3] for t in tasks])   # прибираємо всі (навіть недороблені) файли
         return False, fail[0] or "Скасовано.", []

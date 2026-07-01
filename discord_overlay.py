@@ -429,9 +429,14 @@ class Overlay(tk.Toplevel):
         self._show_progress(title=L("ov_working"))
 
         def worker():
-            ok, msg, mb = fn(self.file_path, out_path, target,
-                             progress_cb=lambda p: self.after(0, lambda: self._set(p)),
-                             should_cancel=lambda: self.cancel["flag"])
+            try:
+                ok, msg, mb = fn(self.file_path, out_path, target,
+                                 progress_cb=lambda p: self.after(0, lambda: self._set(p)),
+                                 should_cancel=lambda: self.cancel["flag"])
+            except Exception as e:
+                import traceback
+                dc_core.dlog("media worker EXCEPTION: " + repr(e) + "\n" + traceback.format_exc())
+                return self.after(0, lambda: self._show_error(f"Помилка:\n{str(e)[:70]}"))
             self.after(0, lambda: self._after(ok, out_path, mb, target, msg))
 
         threading.Thread(target=worker, daemon=True).start()
@@ -497,10 +502,15 @@ class Overlay(tk.Toplevel):
         self._show_progress()
 
         def worker():
-            ok, msg, mb = dc_core.compress(self.file_path, out_path, target, scale,
-                                           self.cfg["audio_kbps"], info,
-                                           progress_cb=lambda p: self.after(0, lambda: self._set(p)),
-                                           should_cancel=lambda: self.cancel["flag"])
+            try:
+                ok, msg, mb = dc_core.compress(self.file_path, out_path, target, scale,
+                                               self.cfg["audio_kbps"], info,
+                                               progress_cb=lambda p: self.after(0, lambda: self._set(p)),
+                                               should_cancel=lambda: self.cancel["flag"])
+            except Exception as e:
+                import traceback
+                dc_core.dlog("compress worker EXCEPTION: " + repr(e) + "\n" + traceback.format_exc())
+                return self.after(0, lambda: self._show_error(f"Помилка:\n{str(e)[:70]}"))
             self.after(0, lambda: self._after(ok, out_path, mb, target, msg))
 
         threading.Thread(target=worker, daemon=True).start()
@@ -545,15 +555,22 @@ class Overlay(tk.Toplevel):
                                                info["has_audio"]) if balanced else None)
         self.cancel["flag"] = False
         self._show_progress(title="Стискаю і ділю…" if balanced else "Ділю на частини…")
+        dc_core.dlog(f"_start_split: balanced={balanced} n_parts={n_parts} target={target}")
 
         def worker():
-            ok, msg, outs = dc_core.split_compress(
-                self.file_path, target, self.cfg.get("auto_scale", True),
-                self.cfg["audio_kbps"], info,
-                progress_cb=lambda p: self.after(0, lambda: self._set(p)),
-                should_cancel=lambda: self.cancel["flag"],
-                part_cb=lambda i, n: self.after(0, lambda: self._set_part(i, n)),
-                n_parts=n_parts)
+            try:
+                ok, msg, outs = dc_core.split_compress(
+                    self.file_path, target, self.cfg.get("auto_scale", True),
+                    self.cfg["audio_kbps"], info,
+                    progress_cb=lambda p: self.after(0, lambda: self._set(p)),
+                    should_cancel=lambda: self.cancel["flag"],
+                    part_cb=lambda i, n: self.after(0, lambda: self._set_part(i, n)),
+                    n_parts=n_parts)
+            except Exception as e:
+                import traceback
+                dc_core.dlog("split worker EXCEPTION: " + repr(e) + "\n" + traceback.format_exc())
+                return self.after(0, lambda: self._show_error(
+                    f"Помилка ділення:\n{str(e)[:70]}", allow_trim=False))
             self.after(0, lambda: self._after_split(ok, outs, msg))
 
         threading.Thread(target=worker, daemon=True).start()
