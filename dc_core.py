@@ -274,6 +274,89 @@ def compress_segments(path, out_path, target_mb, scale, audio_kbps, info, segmen
         shutil.rmtree(tmpd, ignore_errors=True)
 
 
+def _cut_join(path, segs, tmpd, audio=False):
+    """Вирізає сегменти [(s,e)] (CFR, точно) і склеює у один temp-mp4. Повертає шлях або None."""
+    an = [] if audio else ["-an"]
+    if len(segs) == 1:
+        s, e = segs[0]
+        out = os.path.join(tmpd, "j.mp4")
+        rc = subprocess.run(["ffmpeg", "-y", "-ss", f"{s:.3f}", "-i", path, "-t", f"{e - s:.3f}",
+                             "-vsync", "cfr", *an, "-c:v", "libx264", "-preset", "veryfast",
+                             "-crf", "18", "-pix_fmt", "yuv420p", out],
+                            capture_output=True, creationflags=NO_WINDOW).returncode
+        return out if rc == 0 and os.path.exists(out) else None
+    files = []
+    for i, (s, e) in enumerate(segs):
+        f = os.path.join(tmpd, f"c{i}.mp4")
+        rc = subprocess.run(["ffmpeg", "-y", "-ss", f"{s:.3f}", "-i", path, "-t", f"{e - s:.3f}",
+                             "-vsync", "cfr", *an, "-c:v", "libx264", "-preset", "veryfast",
+                             "-crf", "18", "-pix_fmt", "yuv420p", "-video_track_timescale", "90000", f],
+                            capture_output=True, creationflags=NO_WINDOW).returncode
+        if rc != 0 or not os.path.exists(f):
+            return None
+        files.append(f)
+    listf = os.path.join(tmpd, "l.txt")
+    with open(listf, "w", encoding="utf-8") as fh:
+        for pf in files:
+            fh.write("file '%s'\n" % pf.replace("\\", "/").replace("'", "'\\''"))
+    out = os.path.join(tmpd, "j.mp4")
+    rc = subprocess.run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", listf,
+                         "-c", "copy", out], capture_output=True, creationflags=NO_WINDOW).returncode
+    return out if rc == 0 and os.path.exists(out) else None
+
+
+def gif_out_name(path: str) -> str:
+    base, _ = os.path.splitext(path)
+    return base + "_discord.gif"
+
+
+def export_gif(path, out_path, segments, fps=14, width=480, progress_cb=None, should_cancel=None):
+    """Робить якісний GIF з обраних сегментів (2-прохідна палітра). (ok, msg, mb)."""
+    segs = [(float(s), float(e)) for s, e in segments if e > s]
+    if not segs:
+        return False, "Немає сегментів.", 0.0
+    total = sum(e - s for s, e in segs)
+    if total > 30:
+        return False, "Для GIF задовгий фрагмент (макс ~30с) — обріж коротше.", 0.0
+    tmpd = tempfile.mkdtemp(prefix="dgif_")
+    try:
+        if progress_cb:
+            progress_cb(15)
+        trimmed = _cut_join(path, segs, tmpd, audio=False)
+        if not trimmed:
+            return False, "Не вдалося підготувати відео для GIF.", 0.0
+        if progress_cb:
+            progress_cb(50)
+        vf = f"fps={fps},scale={width}:-1:flags=lanczos"
+        pal = os.path.join(tmpd, "pal.png")
+        subprocess.run(["ffmpeg", "-y", "-i", trimmed, "-vf", vf + ",palettegen=stats_mode=diff", pal],
+                       capture_output=True, creationflags=NO_WINDOW)
+        if not os.path.exists(pal):
+            return False, "Не вдалося створити палітру GIF.", 0.0
+        if progress_cb:
+            progress_cb(75)
+        rc = subprocess.run(["ffmpeg", "-y", "-i", trimmed, "-i", pal, "-lavfi",
+                             vf + "[x];[x][1:v]paletteuse=dither=bayer:bayer_scale=3", out_path],
+                            capture_output=True, creationflags=NO_WINDOW).returncode
+        if rc != 0 or not os.path.exists(out_path):
+            return False, "Не вдалося зробити GIF.", 0.0
+        if progress_cb:
+            progress_cb(100)
+        return True, "OK", os.path.getsize(out_path) / 1024 / 1024
+    finally:
+        shutil.rmtree(tmpd, ignore_errors=True)
+
+
+def waveform_png(path, out_png, width=596, height=42, color="6a7bf0") -> bool:
+    """Малює аудіо-хвилю всього відео у PNG (showwavespic). True при успіху."""
+    rc = subprocess.run(
+        ["ffmpeg", "-y", "-i", path, "-filter_complex",
+         f"aformat=channel_layouts=mono,compand,showwavespic=s={width}x{height}:colors=#{color}",
+         "-frames:v", "1", out_png],
+        capture_output=True, creationflags=NO_WINDOW).returncode
+    return rc == 0 and os.path.exists(out_png)
+
+
 def extract_frame(path: str, t: float, out_png: str, width: int = 380) -> bool:
     """Витягує один кадр на позиції t (сек) у PNG для прев'ю. True при успіху."""
     r = subprocess.run(

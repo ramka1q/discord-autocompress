@@ -24,6 +24,7 @@ import tkinter as tk
 
 import dc_core
 import discord_overlay as host
+import jokes
 
 # ---- WinAPI для вбудовування вікна ffplay у наш відео-екран (SetParent) ----
 _u32 = ctypes.windll.user32
@@ -142,7 +143,13 @@ class VideoEditor(tk.Toplevel):
 
         # ---- ЄДИНА доріжка монтажу: кіно-стрічка + ручки обрізки + плейхед ----
         self.tl = tk.Canvas(self, width=self.TW, height=TLH, bg=C_TRACK, highlightthickness=0)
-        self.tl.pack(padx=14, pady=(4, 8))
+        self.tl.pack(padx=14, pady=(4, 2))
+        # аудіо-хвиля всього відео (де звук/тиша) — під доріжкою, з маркером плейхеда
+        self.WAVE_H = 40
+        self.wave = tk.Canvas(self, width=self.TW, height=self.WAVE_H, bg=C_DARK, highlightthickness=0)
+        self.wave.pack(padx=14, pady=(0, 8))
+        self._wave_img = None
+        self._gen_waveform()
         self.tl.bind("<Button-1>", self._tl_press)
         self.tl.bind("<B1-Motion>", self._tl_motion)
         self.tl.bind("<ButtonRelease-1>", self._tl_release)
@@ -176,10 +183,16 @@ class VideoEditor(tk.Toplevel):
         self.bind("<Control-Z>", lambda e: self._redo_action())   # Ctrl+Shift+Z
 
         self.info_lbl = tk.Label(self, text="", bg=C_BG, fg=C_TEXT, font=(FONT, 11, "bold"))
-        self.info_lbl.pack(pady=(8, 2))
+        self.info_lbl.pack(pady=(8, 0))
+        # жарт під час експорту (щоб скоротати очікування)
+        self.joke_lbl = tk.Label(self, text="", bg=C_BG, fg=C_MUTED, font=(FONT, 9),
+                                 wraplength=self.VW, justify="center")
+        self.joke_lbl.pack(pady=(0, 2))
         ec = tk.Frame(self, bg=C_BG); ec.pack(pady=(2, 12))
         self.export_btn = self._btn(ec, "Зберегти і вставити  ▶", self._export)
         self.export_btn.pack(side="left", padx=4)
+        self.gif_btn = self._btn(ec, "🎞 GIF", self._export_gif, primary=False)
+        self.gif_btn.pack(side="left", padx=4)
         self._btn(ec, "Скасувати", self._close, primary=False).pack(side="left", padx=4)
 
     def _btn(self, parent, text, cmd, primary=True):
@@ -466,6 +479,42 @@ class VideoEditor(tk.Toplevel):
         pass   # без цифр — позиція видно по плейхеду
 
     # ---- кіно-стрічка (кадри) — по одному набору на все відео, ділиться між кліпами ----
+    def _gen_waveform(self):
+        """Малює аудіо-хвилю всього відео у фоні (ffmpeg), показує під доріжкою."""
+        if not self.info.get("has_audio", False):
+            return
+        png = os.path.join(self._tmp, "wave.png")
+
+        def work():
+            col = C_BLURPLE.lstrip("#")
+            if dc_core.waveform_png(self.file_path, png, width=self.TW, height=self.WAVE_H, color=col):
+                self.after(0, lambda: self._load_waveform(png))
+        threading.Thread(target=work, daemon=True).start()
+
+    def _load_waveform(self, png):
+        try:
+            self._wave_img = tk.PhotoImage(file=png)
+        except tk.TclError:
+            self._wave_img = None
+        self._draw_wave()
+
+    def _draw_wave(self):
+        c = getattr(self, "wave", None)
+        if c is None:
+            return
+        try:
+            c.delete("all")
+            if self._wave_img is not None:
+                c.create_image(0, 0, anchor="nw", image=self._wave_img)
+            elif not self.info.get("has_audio", False):
+                c.create_text(self.TW // 2, self.WAVE_H // 2, text="без звуку",
+                              fill=C_MUTED, font=(FONT, 8))
+            if self.dur > 0:                          # маркер плейхеда (джерельний час на всю ширину)
+                x = min(self.TW, max(0, self.cur / self.dur * self.TW))
+                c.create_line(x, 0, x, self.WAVE_H, fill=C_PLAY, width=2)
+        except tk.TclError:
+            pass
+
     def _gen_filmstrip(self):
         n = 24
         # кожен кадр стрічки прив'язаний до КОНКРЕТНОГО часу — і саме на цей час його й
@@ -671,6 +720,7 @@ class VideoEditor(tk.Toplevel):
             tx = min(max(30, tx), W - 30)
             c.create_rectangle(tx - 30, 0, tx + 30, 16, fill=C_DARK, outline=C_PLAY)
             c.create_text(tx, 8, text=self._fmt_tt(self._tip_t), fill="#ffffff", font=(FONT, 8, "bold"))
+        self._draw_wave()   # оновити маркер плейхеда на аудіо-хвилі
 
     # ---- взаємодія на одній доріжці: ручки / вибір кліпа / плейхед ----
     def _tl_press(self, ev):
@@ -761,6 +811,8 @@ class VideoEditor(tk.Toplevel):
                  if self.cfg.get("auto_scale", True) else 0)
         out_path = dc_core.output_name(self.file_path, target)
 
+        self._start_export_jokes()
+
         def worker():
             ok, msg, mb = dc_core.compress_segments(
                 self.file_path, out_path, target, scale, self.cfg["audio_kbps"], self.info, segs,
@@ -771,15 +823,58 @@ class VideoEditor(tk.Toplevel):
 
         threading.Thread(target=worker, daemon=True).start()
 
+    def _export_gif(self):
+        segs = [self.pieces[ix] for ix in self.order]
+        if not segs:
+            return
+        self._pause()
+        self.busy = True
+        self.export_btn.config(state="disabled")
+        self.gif_btn.config(state="disabled")
+        out_path = dc_core.gif_out_name(self.file_path)
+        self._start_export_jokes()
+
+        def worker():
+            ok, msg, mb = dc_core.export_gif(
+                self.file_path, out_path, segs,
+                progress_cb=lambda p: self.after(0, lambda: self.info_lbl.config(
+                    text=f"Роблю GIF… {int(p)}%", fg=C_BLURPLE)))
+            self.after(0, lambda: self._done(ok, out_path, mb, msg))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _start_export_jokes(self):
+        self._jokes_eff = jokes.effective(self.cfg)
+        self._joke_i = host.kernel32.GetTickCount() % max(1, len(self._jokes_eff))
+        self._rotate_export_joke()
+
+    def _rotate_export_joke(self):
+        try:
+            if not self.busy or not self.joke_lbl.winfo_exists():
+                self.joke_lbl.config(text="")
+                return
+            eff = getattr(self, "_jokes_eff", None) or ["🐮"]
+            self.joke_lbl.config(text="🐮  " + eff[self._joke_i % len(eff)])
+            self._joke_i += 1
+        except (tk.TclError, AttributeError):
+            return
+        self._joke_after = self.after(4500, self._rotate_export_joke)
+
     def _done(self, ok, out_path, mb, msg):
+        self.busy = False                       # зупиняє ротацію жартів
+        try:
+            self.joke_lbl.config(text="")
+            self.gif_btn.config(state="normal")
+        except tk.TclError:
+            pass
         if not ok:
             if os.path.exists(out_path):
                 try: os.remove(out_path)
                 except OSError: pass
-            self.busy = False
             self.export_btn.config(state="normal")
             self.info_lbl.config(text=msg or "Не вдалося зберегти", fg=C_RED)
             return
+        host.play_done_sound(self.cfg)          # звук «готово»
         try:
             host.set_clipboard_files([out_path])
             if self.watcher:

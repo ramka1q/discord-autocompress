@@ -31,6 +31,7 @@ import themes
 import media
 import i18n
 import jokes
+import sounds
 
 CONFIG_PATH = os.path.join(os.path.expanduser("~"), ".discord_overlay.json")
 
@@ -62,12 +63,21 @@ def L(key, **kw):
 
 
 def play_done_sound(cfg):
-    """М'який системний «дінь» після стиснення (async, без файлу, лише ctypes -> йде онлайн)."""
+    """Випадкова мелодія «готово» (140+ варіантів) через kernel32.Beep у фон-треді.
+    Без файлів і без random -> йде онлайн. Вибір за лічильником тіків."""
     if not cfg.get("sound_done", True):
         return
     try:
-        # SND_ALIAS(0x10000) | SND_ASYNC(0x1) | SND_NODEFAULT(0x2)
-        ctypes.windll.winmm.PlaySoundW(ctypes.c_wchar_p("SystemAsterisk"), None, 0x00010003)
+        i = kernel32.GetTickCount() % max(1, sounds.count())
+        mel = sounds.melody(i)
+
+        def _play():
+            try:
+                for f, d in mel:
+                    kernel32.Beep(int(f), int(d))
+            except Exception:
+                pass
+        threading.Thread(target=_play, daemon=True).start()
     except Exception:
         pass
 
@@ -197,7 +207,8 @@ def load_config() -> dict:
            "block_paste": True, "auto_paste": True,
            "lang": "uk", "theme": "discord",
            "compress_video": True, "compress_images": True, "compress_audio": True,
-           "keep_local": "ask", "offer_shrink": True, "sound_done": True}
+           "keep_local": "ask", "offer_shrink": True, "sound_done": True,
+           "custom_jokes": [], "hidden_jokes": []}
     try:
         with open(CONFIG_PATH, encoding="utf-8") as f:
             cfg.update(json.load(f))
@@ -468,7 +479,8 @@ class Overlay(tk.Toplevel):
         self.joke_lbl = tk.Label(self.canvas, text="", bg=C_BG, fg=C_MUTED, font=(FONT, 9),
                                  wraplength=self.W - 84, justify="center")
         self._place(self.joke_lbl, self.W // 2, 250)
-        self._joke_i = kernel32.GetTickCount() % max(1, jokes.count())   # старт «випадковий» (без random)
+        self._jokes_eff = jokes.effective(self.cfg)                      # вбудовані − приховані + свої
+        self._joke_i = kernel32.GetTickCount() % max(1, len(self._jokes_eff))  # старт «випадковий», без random
         self._rotate_joke()
         self._btn_full(L("ov_cancel"), lambda: self.cancel.update(flag=True), 316, primary=False)
 
@@ -477,7 +489,8 @@ class Overlay(tk.Toplevel):
         try:
             if not self.joke_lbl.winfo_exists():
                 return
-            self.joke_lbl.config(text="🐮  " + jokes.joke_at(self._joke_i))
+            eff = getattr(self, "_jokes_eff", None) or ["🐮"]
+            self.joke_lbl.config(text="🐮  " + eff[self._joke_i % len(eff)])
             self._joke_i += 1
         except (tk.TclError, AttributeError):
             return
@@ -489,7 +502,15 @@ class Overlay(tk.Toplevel):
         col = C_GREEN if fits else C_WARN
         self._badge("✓", 70, color=col)
         self._text(L("ov_done"), 122, 16, C_TEXT)
-        self._text(f"{final_mb:.2f} {L('unit_mb')}", 146, 11, C_MUTED, bold=False)
+        u = L("unit_mb")
+        saved = ""
+        try:
+            if self.size_mb and final_mb and final_mb < self.size_mb:
+                pct = int(round((1 - final_mb / self.size_mb) * 100))
+                saved = f"   ·   {L('ov_saved', pct=pct)}"
+        except Exception:
+            pass
+        self._text(f"{self.size_mb:.1f} → {final_mb:.2f} {u}{saved}", 146, 11, C_MUTED, bold=False)
         msg = L("ov_pasted") if pasted else L("ov_in_clip")
         self._text(msg, 172, 12, C_BLURPLE)
 
