@@ -100,6 +100,9 @@ class VideoEditor(tk.Toplevel):
         self._tip_after = None
         self._nudge_active = False   # щоб серія стрілок була ОДНИМ кроком undo
         self._playhead_x = 0
+        self._ffplay_pos = None      # РЕАЛЬНА позиція ffplay (парситься з його -stats у stderr)
+        self._stat_offset = None     # абс/віднос конвенція часу ffplay
+        self._stat_log_t = 0.0       # тротлінг логу позицій
         self._strip_imgs = None      # кадри кіно-стрічки (готуються у фоні)
         self._strip_times = []       # час кожного кадру стрічки у джерелі (сек)
         self._sel_xs = self._sel_xe = 0
@@ -243,26 +246,68 @@ class VideoEditor(tk.Toplevel):
         w = self.video.winfo_width() or self.VW
         h = self.video.winfo_height() or self.VH
         self._embed_title = f"dac_play_{os.getpid()}_{int(start * 1000)}"
-        cmd = ["ffplay", "-hide_banner", "-loglevel", "error", "-noborder", "-autoexit",
+        cmd = ["ffplay", "-hide_banner", "-loglevel", "error", "-stats", "-noborder", "-autoexit",
                "-left", "32000", "-top", "32000",   # спавн за межами екрана — без спалаху
                "-x", str(w), "-y", str(h), "-ss", f"{start:.3f}"]
         if dur is not None:
             cmd += ["-t", f"{max(0.1, dur):.3f}"]
         cmd += ["-window_title", self._embed_title, "-i", self.file_path]
+        self._ffplay_pos = None
+        self._stat_offset = None
         try:
-            self._ffplay = subprocess.Popen(cmd, creationflags=dc_core.NO_WINDOW)
+            self._ffplay = subprocess.Popen(cmd, creationflags=dc_core.NO_WINDOW,
+                                            stderr=subprocess.PIPE)
         except FileNotFoundError:
             self.info_lbl.config(text="ffplay не знайдено — онови ffmpeg", fg=C_RED)
             return
         self.playing = True
         self._embedded = None
         self._play_t0 = time.monotonic()
+        dc_core.dlog(f"PLAY launch build={dc_core.BUILD} start={start:.3f} dur={dur} "
+                     f"t0={self._play_t0:.3f}")
+        threading.Thread(target=self._read_ffplay_stats, args=(self._ffplay,), daemon=True).start()
         try:
             self.play_btn.config(text="⏸ Стоп")
         except tk.TclError:
             pass
         self._embed_try(0)
         self._play_progress()
+
+    def _read_ffplay_stats(self, proc):
+        """Читаємо stderr ffplay і парсимо ЙОГО реальну позицію відтворення (перше число
+        у рядку -stats, напр. '  36.05 A-V: ...'). Рядки оновлюються через \\r."""
+        buf = b""
+        try:
+            while True:
+                ch = proc.stderr.read(1)
+                if not ch:
+                    break
+                if ch in (b"\r", b"\n"):
+                    line = buf.decode("utf-8", "ignore").strip(); buf = b""
+                    if line:
+                        self._parse_stat(line)
+                else:
+                    buf += ch
+        except Exception:
+            pass
+
+    def _parse_stat(self, line):
+        try:
+            v = float(line.split()[0])
+        except (ValueError, IndexError):
+            return
+        if v != v or v < 0 or v > self.dur + 5:   # nan/сміття (ffplay спершу друкує nan) -> пропуск
+            return
+        if self._stat_offset is None:
+            # визначаємо: ffplay звітує АБСОЛЮТНИЙ час чи від нуля сегмента
+            self._stat_offset = 0.0 if abs(v - self._play_start) < abs(v) else self._play_start
+            dc_core.dlog(f"  ffplay stat first={v:.3f} play_start={self._play_start:.3f} "
+                         f"-> offset={self._stat_offset:.3f}")
+        self._ffplay_pos = self._stat_offset + v
+        now = time.monotonic()
+        if now - self._stat_log_t > 0.4:      # тротлінг, щоб не залити лог
+            self._stat_log_t = now
+            dc_core.dlog(f"  ffplay_pos={self._ffplay_pos:.3f} (raw={v:.3f})")
 
     def _embed_try(self, n):
         """Знаходимо вікно ffplay за заголовком і вклеюємо його в наш відео-екран."""
@@ -278,10 +323,9 @@ class VideoEditor(tk.Toplevel):
                 h = self.video.winfo_height() or self.VH
                 _u32.MoveWindow(hwnd, 0, 0, w, h, True)
                 self._embedded = hwnd
-                # РЕСИНХ годинника: ffplay щойно показав перший кадр (=_play_start).
-                # Раніше t0 ставили при запуску, до появи вікна -> плейхед забігав уперед
-                # на затримку старту ffplay, і ножиці різали «трохи далі». Скидаємо тут.
+                # РЕСИНХ запасного годинника на момент появи вікна ffplay.
                 self._play_t0 = time.monotonic()
+                dc_core.dlog(f"EMBED ok n={n} elapsed={n * 0.05:.2f}s ffplay_pos={self._ffplay_pos}")
                 return
         except Exception:
             pass
@@ -289,13 +333,16 @@ class VideoEditor(tk.Toplevel):
             self.after(50, lambda: self._embed_try(n + 1))
 
     def _play_progress(self):
-        """Рухаємо playhead за годинником + стежимо, чи не завершилось відтворення."""
+        """Рухаємо playhead. Пріоритет — РЕАЛЬНА позиція ffplay (-stats); wall-clock лише запас."""
         if not self.playing:
             return
         p = getattr(self, "_ffplay", None)
         if p is None or p.poll() is not None:
             return self._pause()
-        pos = self._play_start + (time.monotonic() - self._play_t0)
+        if self._ffplay_pos is not None:
+            pos = self._ffplay_pos                    # де ffplay РЕАЛЬНО грає
+        else:
+            pos = self._play_start + (time.monotonic() - self._play_t0)  # запасний годинник
         if pos >= self._play_end:
             return self._pause()
         self.cur = min(self.dur, pos)
@@ -303,6 +350,8 @@ class VideoEditor(tk.Toplevel):
         self._tick_id = self.after(80, self._play_progress)
 
     def _pause(self):
+        if self.playing:
+            dc_core.dlog(f"PAUSE cur={self.cur:.3f} ffplay_pos={self._ffplay_pos}")
         self.playing = False
         self.play_until = None
         p = getattr(self, "_ffplay", None)
@@ -334,11 +383,17 @@ class VideoEditor(tk.Toplevel):
 
     # --------------------------------------------------------- ножиці ------ #
     def _cut_here(self):
+        wall = self._play_start + (time.monotonic() - self._play_t0)
+        dc_core.dlog(f"CUT_HERE build={dc_core.BUILD} playing={self.playing} cur={self.cur:.3f} "
+                     f"ffplay_pos={self._ffplay_pos} wallclock={wall:.3f} "
+                     f"play_start={self._play_start:.3f} play_end={self._play_end:.3f}")
         if self.playing:
             self._pause()          # спершу пауза -> ріжемо рівно по кадру, який ВИДНО (не по годиннику)
+        dc_core.dlog(f"CUT_HERE after_pause cur={self.cur:.3f}")
         self._cut_at(self.cur)
 
     def _cut_at(self, t):
+        done = False
         for pi, (s, e) in enumerate(self.pieces):
             if s < t < e:
                 self._push_undo()
@@ -348,7 +403,10 @@ class VideoEditor(tk.Toplevel):
                 slot = self.order.index(pi)
                 self.order.insert(slot + 1, pi + 1)
                 self.sel = slot
+                done = True
                 break
+        dc_core.dlog(f"CUT_AT t={t:.3f} done={done} "
+                     f"pieces={[(round(a, 3), round(b, 3)) for a, b in self.pieces]}")
         self._redraw()
 
     def _move(self, d):
