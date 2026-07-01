@@ -1042,6 +1042,7 @@ class TrimWindow(tk.Toplevel):
 # --------------------------------------------------------------------------- #
 class ShrinkPill(tk.Toplevel):
     W, H = 220, 48
+    LIFE_MS = 3000        # скільки живе пілюля, якщо її не чіпати
 
     def __init__(self, master, discord_hwnd, path, size, cfg, watcher):
         super().__init__(master)
@@ -1061,14 +1062,40 @@ class ShrinkPill(tk.Toplevel):
         for w in (self, lbl):
             w.bind("<Button-1>", lambda e: self._open())
         xb.bind("<Button-1>", lambda e: self._close())
+
+        # ── таймер: тонка смужка внизу, що спливає за LIFE_MS ──
+        # (з відступом від країв + білого бордера, щоб її було ВИДНО як окремий елемент)
+        self._bar_w = self.W - 24
+        self._bar = tk.Frame(self, bg="#ffffff")
+        self._bar.place(x=12, y=self.H - 11, width=self._bar_w, height=4)
+        self._hover = False                            # наведення миші ставить таймер на паузу
+        self._left = self.LIFE_MS
+        for w in (self, lbl, xb):
+            w.bind("<Enter>", lambda e: setattr(self, "_hover", True), add="+")
+            w.bind("<Leave>", lambda e: setattr(self, "_hover", False), add="+")
+
         # робимо помітним: піднімаємо поверх усього
         self.lift()
         self.attributes("-topmost", True)
         self.update_idletasks()
         self._force_top()                              # win32: реально виносимо поверх Discord
         self._alive = True
-        self._after = self.after(3000, self._close)    # само зникає через 3с, якщо не чіпати
+        self._countdown()                              # запуск таймера-смужки
         self.after(600, self._tick)                    # закриваємось, якщо юзер пішов з Discord
+
+    def _countdown(self):
+        """Плавно спускає смужку-таймер; на паузі поки миша над пілюлею (щоб встиг клікнути)."""
+        if not self._alive:
+            return
+        if not self._hover:
+            self._left -= 50
+        if self._left <= 0:
+            return self._close()
+        try:
+            self._bar.place_configure(width=max(1, int(self._bar_w * self._left / self.LIFE_MS)))
+        except Exception:
+            pass
+        self.after(50, self._countdown)
 
     def _force_top(self):
         """Виносимо вікно у топ-бенд Windows БЕЗ крадіжки фокуса в Discord.
@@ -1106,6 +1133,7 @@ class ShrinkPill(tk.Toplevel):
         self.geometry(f"{self.W}x{self.H}+{x}+{y}")
 
     def _open(self):
+        self._alive = False        # зупиняє таймер-смужку і _tick (інакше стріляють по знищеному вікну)
         self._cancel()
         try:
             self.destroy()
