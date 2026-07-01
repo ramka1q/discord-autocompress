@@ -91,8 +91,9 @@ user32.GetWindowThreadProcessId.argtypes = [ctypes.c_void_p, ctypes.POINTER(wint
 user32.GetWindowThreadProcessId.restype = wintypes.DWORD
 user32.GetWindowRect.argtypes = [ctypes.c_void_p, ctypes.POINTER(wintypes.RECT)]
 user32.GetWindowRect.restype = wintypes.BOOL
-user32.GetCursorPos.argtypes = [ctypes.POINTER(wintypes.POINT)]
-user32.GetCursorPos.restype = wintypes.BOOL
+# УВАГА: НЕ задаємо argtypes для GetCursorPos — user32 спільний для всіх модулів,
+# а трей (tray.py) кличе GetCursorPos зі СВОЄЮ структурою POINT. Жорсткий argtypes
+# ламав меню трею. Без argtypes ctypes приймає byref будь-якої POINT-структури.
 kernel32.GlobalAlloc.restype = ctypes.c_void_p
 kernel32.GlobalAlloc.argtypes = [wintypes.UINT, ctypes.c_size_t]
 kernel32.GlobalLock.restype = ctypes.c_void_p

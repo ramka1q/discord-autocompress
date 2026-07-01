@@ -206,17 +206,20 @@ class Tray:
         return user32.DefWindowProcW(hwnd, msg, wparam, lparam)
 
     def _show_menu(self):
-        hmenu = user32.CreatePopupMenu()
-        user32.AppendMenuW(hmenu, MF_STRING, ID_OPEN, self.open_text)
-        user32.AppendMenuW(hmenu, MF_SEPARATOR, 0, None)
-        user32.AppendMenuW(hmenu, MF_STRING, ID_QUIT, self.quit_text)
-        pt = POINT()
-        user32.GetCursorPos(ctypes.byref(pt))
-        user32.SetForegroundWindow(self.hwnd)
-        cmd = user32.TrackPopupMenu(hmenu, TPM_RIGHTBUTTON | TPM_RETURNCMD,
-                                    pt.x, pt.y, 0, self.hwnd, None)
-        user32.PostMessageW(self.hwnd, 0, 0, 0)   # рекомендовано після TrackPopupMenu
-        user32.DestroyMenu(hmenu)
+        try:
+            hmenu = user32.CreatePopupMenu()
+            user32.AppendMenuW(hmenu, MF_STRING, ID_OPEN, self.open_text or "Open")
+            user32.AppendMenuW(hmenu, MF_SEPARATOR, 0, None)
+            user32.AppendMenuW(hmenu, MF_STRING, ID_QUIT, self.quit_text or "Quit")
+            pt = POINT()
+            user32.GetCursorPos(ctypes.byref(pt))
+            user32.SetForegroundWindow(self.hwnd)
+            cmd = user32.TrackPopupMenu(hmenu, TPM_RIGHTBUTTON | TPM_RETURNCMD,
+                                        pt.x, pt.y, 0, self.hwnd, None)
+            user32.PostMessageW(self.hwnd, 0, 0, 0)   # рекомендовано після TrackPopupMenu
+            user32.DestroyMenu(hmenu)
+        except Exception:
+            return
         if cmd == ID_OPEN:
             self._safe(self.on_open)
         elif cmd == ID_QUIT:
