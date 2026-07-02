@@ -1,12 +1,26 @@
 #!/usr/bin/env python3
 """Author tool: write ONE donate link into monetize.py and .github/FUNDING.yml.
-Called by 'Set donate link.bat'. ASCII only. Usage: set_links.py "<donate_url>"."""
+Called by the donate batch files. ASCII only.
+Usage: set_links.py "<donate_url_or_name>" [kofi]
+  - plain URL  -> used as is
+  - with 'kofi' second arg -> a bare Ko-fi name is turned into
+    https://ko-fi.com/<name> (full ko-fi links are accepted too)."""
 import os
 import re
 import sys
 
 url = (sys.argv[1] if len(sys.argv) > 1 else "").strip()
+mode = (sys.argv[2] if len(sys.argv) > 2 else "").strip().lower()
 here = os.path.dirname(os.path.abspath(__file__))
+
+if mode == "kofi" and url:
+    u = url.strip().strip('"').strip()
+    if "ko-fi.com" in u.lower():
+        handle = u.rstrip("/").split("/")[-1]
+    else:
+        handle = u.lstrip("@").strip("/")
+    handle = handle.strip().strip('"').strip()
+    url = "https://ko-fi.com/" + handle if handle else ""
 
 # 1) monetize.py -> DONATE_URL
 mp = os.path.join(here, "monetize.py")
