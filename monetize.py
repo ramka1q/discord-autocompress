@@ -8,7 +8,7 @@ online in the old exe. No subscription, no payment, no "Pro" here.
 import os
 
 # The author pastes their donation link here (e.g. https://ko-fi.com/yourname).
-DONATE_URL = ""
+DONATE_URL = "https://ko-fi.com/latratrol"
 
 
 def open_url(url):

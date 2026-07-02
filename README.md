@@ -39,6 +39,7 @@ Discord Auto-Compress is **free and open-source (MIT)** and always will be. If i
 - ❤ **Donate** — use the **Sponsor** button at the top of this repo, the button below, or the **Support** button inside the app (Settings → About). It's a free, no-strings donation — nothing is locked behind it.
 
 <!-- DONATE:START -->
+[![Support me on Ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/latratrol)
 <!-- DONATE:END -->
 
 Every bit of support is genuinely appreciated and goes straight into new features.
