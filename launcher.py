@@ -112,79 +112,9 @@ def have_ffmpeg() -> bool:
     return bool(shutil.which("ffmpeg") and shutil.which("ffplay") and shutil.which("ffprobe"))
 
 
-def updates_available() -> int:
-    """Скільки .py-файлів відрізняються від GitHub, БЕЗ застосування. -1 при збої мережі."""
-    try:
-        manifest = json.loads(_fetch("manifest.json").decode("utf-8"))
-    except Exception:
-        return -1
-    n = 0
-    for rel in manifest.get("files", []):
-        if not rel.endswith(".py"):
-            continue
-        try:
-            data = _fetch(rel)
-        except Exception:
-            return -1
-        dst = os.path.join(APPDIR, rel)
-        try:
-            if os.path.exists(dst) and open(dst, "rb").read() == data:
-                continue
-        except OSError:
-            pass
-        n += 1
-    return n
-
-
-def _user_lang() -> str:
-    """Мова інтерфейсу з конфіга користувача (для повідомлення про оновлення)."""
-    try:
-        p = os.path.join(os.path.expanduser("~"), ".discord_overlay.json")
-        with open(p, encoding="utf-8") as f:
-            return json.load(f).get("lang", "en")
-    except Exception:
-        return "en"
-
-
-# повідомлення «є оновлення» — трьома мовами (launcher у exe, тож переклади тут, inline)
-_UPD = {
-    "title": {"uk": "Оновлення", "ru": "Обновление", "en": "Update"},
-    "msg": {
-        "uk": "Знайдено нову версію Discord Auto-Compress.\n\nОновити зараз?",
-        "ru": "Найдена новая версия Discord Auto-Compress.\n\nОбновить сейчас?",
-        "en": "A new version of Discord Auto-Compress is available.\n\nUpdate now?",
-    },
-}
-
-
-def _prompt_update(lang: str) -> bool:
-    """Запитати користувача (Так/Ні) чи оновлюватись. Мовою користувача."""
-    title = _UPD["title"].get(lang, _UPD["title"]["en"])
-    msg = _UPD["msg"].get(lang, _UPD["msg"]["en"])
-    try:
-        r = tkinter.Tk(); r.withdraw()
-        try:
-            r.attributes("-topmost", True)
-        except Exception:
-            pass
-        ans = _mb.askyesno(title, msg, parent=r)
-        r.destroy()
-        return bool(ans)
-    except Exception:
-        return True   # не змогли спитати -> поводимось як раніше (оновлюємось)
-
-
 def main():
     os.makedirs(APPDIR, exist_ok=True)
-    # Перший запуск (коду ще нема) — тягнемо без питань. Далі: якщо є нова версія,
-    # ПИТАЄМО користувача, чи переходити на неї (а не оновлюємось мовчки).
-    if not os.path.exists(os.path.join(APPDIR, "discord_overlay.py")):
-        sync_code()
-    else:
-        n = updates_available()
-        if n > 0 and _prompt_update(_user_lang()):
-            sync_code()
-        # n<=0 (нема оновлень) або відмова -> лишаємо поточну версію
+    sync_code()
     ensure_autostart()
     # маркер, щоб і внутрішнє авто-оновлення програми працювало
     try:

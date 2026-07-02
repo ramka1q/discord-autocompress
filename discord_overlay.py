@@ -1215,17 +1215,7 @@ class ShrinkPill(tk.Toplevel):
 # --------------------------------------------------------------------------- #
 #  Фон: перехоплення Ctrl+V у Discord
 # --------------------------------------------------------------------------- #
-def _autoupdate_bg():
-    """Оновлення. У .exe цим займається ЛАУНЧЕР (питає користувача ДО старту коду),
-    тож тут нічого не робимо, щоб не перезаписати мовчки відмову «Ні». Для рідкісного
-    .py-встановлення лишаємо тихе авто-оновлення (за маркером .autoupdate)."""
-    try:
-        if getattr(sys, "frozen", False):
-            return
-        import update
-        update.auto()
-    except Exception:
-        pass
+_AUTO_MOVED_TO_WATCHER = True   # логіка оновлення тепер у Watcher._update_watch
 
 
 class Watcher:
@@ -1234,7 +1224,6 @@ class Watcher:
         self.cfg = load_config()
         LANG = self.cfg.get("lang", "en")
         apply_theme(self.cfg.get("theme", "discord"))
-        threading.Thread(target=_autoupdate_bg, daemon=True).start()
         self.root = tk.Tk()
         self.root.withdraw()
         self.q = queue.Queue()
@@ -1242,7 +1231,9 @@ class Watcher:
         self.settings_win = None
         self.last_seq_self = 0
         self._cooldown_until = 0
+        self._update_prompted = False
         threading.Thread(target=self._hook_thread, daemon=True).start()
+        threading.Thread(target=self._update_watch, daemon=True).start()
         self.root.after(120, self._poll_queue)
         self._start_tray()
         if open_settings:
@@ -1262,6 +1253,55 @@ class Watcher:
             self.tray.start()
         except Exception:
             self.tray = None
+
+    # ---- перевірка оновлень + ПИТАННЯ (працює й через старий лаунчер, бо це онлайн-код) ----
+    def _update_watch(self):
+        """Періодично дивиться, чи вийшла нова версія на GitHub, і ПИТАЄ користувача,
+        чи оновитись. Лаунчер тихо синкає код при СТАРТІ, тож одразу різниці нема; але
+        коли автор пушить нову версію, поки програма в треї — тут вона й помічається."""
+        try:
+            import update
+        except Exception:
+            return
+        if not os.path.exists(update.MARKER):
+            return                       # лише встановлені копії (є маркер .autoupdate)
+        import time as _t
+        _t.sleep(90)                     # дати старту влягтись (лаунчер уже синкнув .py)
+        while not self._update_prompted:
+            try:
+                ok, changed = update.available()
+                if ok and changed > 0:
+                    self.root.after(0, self._prompt_update)
+                    return               # питаємо один раз за сесію
+            except Exception:
+                pass
+            _t.sleep(1800)               # перевіряти кожні 30 хв
+
+    def _prompt_update(self):
+        if self._update_prompted:
+            return
+        self._update_prompted = True
+        try:
+            import tkinter.messagebox as mb
+            try:
+                self.root.attributes("-topmost", True)
+            except Exception:
+                pass
+            ans = mb.askyesno(i18n.tr(LANG, "update_found_title"),
+                              i18n.tr(LANG, "update_found_msg"))
+            try:
+                self.root.attributes("-topmost", False)
+            except Exception:
+                pass
+            if ans:
+                try:
+                    import update
+                    update.run(quiet=True)     # завантажити нову версію на диск
+                except Exception:
+                    pass
+                self.restart_app()             # перезапуск -> лаунчер підхопить нову версію
+        except Exception:
+            pass
 
     def quit_app(self):
         try:

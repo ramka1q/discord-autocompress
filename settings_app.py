@@ -617,19 +617,19 @@ class SettingsApp:
             "uk": "Автостиснення відео, фото та звуку під ліміт Discord.\n"
                   "Живе у треї (приховані значки). ПКМ по значку — меню або вихід.\n\n"
                   "Як оновлюється програма:\n"
-                  "  • при запуску запитує вас, коли виходить нова версія;\n"
+                  "  • запитує вас, коли виходить нова версія;\n"
                   "  • або кнопкою «Перевірити оновлення» на вкладці Оновлення;\n"
                   "  • або запустивши «Update now.bat».",
             "ru": "Автосжатие видео, фото и звука под лимит Discord.\n"
                   "Живёт в трее (скрытые значки). ПКМ по значку — меню или выход.\n\n"
                   "Как обновляется программа:\n"
-                  "  • при запуске спрашивает вас, когда выходит новая версия;\n"
+                  "  • спрашивает вас, когда выходит новая версия;\n"
                   "  • или кнопкой «Проверить обновления» на вкладке Обновления;\n"
                   "  • или запустив «Update now.bat».",
             "en": "Auto-compress video, images and audio under the Discord limit.\n"
                   "Lives in the tray (hidden icons). Right-click — menu or quit.\n\n"
                   "How the app updates:\n"
-                  "  • it asks you at startup when a new version is available;\n"
+                  "  • it asks you when a new version is available;\n"
                   "  • or the ‘Check for updates’ button on the Updates tab;\n"
                   "  • or by running ‘Update now.bat’.",
         }[self.lang]

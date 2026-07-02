@@ -20,6 +20,14 @@ STR = {
     "tab_setup":        {"uk": "Встановлення",  "ru": "Установка",     "en": "Setup"},
     "tab_about":        {"uk": "Про програму",  "ru": "О программе",   "en": "About"},
 
+    # ---- питання про оновлення (нова версія вийшла) ----
+    "update_found_title": {"uk": "Оновлення", "ru": "Обновление", "en": "Update"},
+    "update_found_msg": {
+        "uk": "Вийшла нова версія Discord Auto-Compress.\n\nОновити зараз? (програма перезапуститься)",
+        "ru": "Вышла новая версия Discord Auto-Compress.\n\nОбновить сейчас? (программа перезапустится)",
+        "en": "A new version of Discord Auto-Compress is available.\n\nUpdate now? (the app will restart)",
+    },
+
     # ---- встановлення компонентів ----
     "setup_title":      {"uk": "Потрібні компоненти", "ru": "Необходимые компоненты", "en": "Required components"},
     "setup_hint":       {"uk": "Програмі потрібен ffmpeg. Натисни кнопку — і все встановиться саме.",

@@ -45,9 +45,10 @@ def _fetch(rel: str) -> bytes:
         return r.read()
 
 
-def _sync(quiet: bool = True):
+def _sync(quiet: bool = True, apply: bool = True):
     """Ядро оновлення. Повертає (ok: bool, changed: int).
-    ok=False -> збій (мережа/репо); changed = скільки файлів реально замінено."""
+    ok=False -> збій (мережа/репо); changed = скільки файлів відрізняється/замінено.
+    apply=False -> лише РАХУЄ різницю, нічого не пише (для питання «є оновлення?»)."""
     if "USERNAME/REPO" in REPO_RAW:
         if not quiet:
             print("[!] Спершу впиши адресу репозиторію у REPO_RAW (update.py).")
@@ -77,12 +78,14 @@ def _sync(quiet: bool = True):
                 continue  # без змін — не чіпаємо
         except OSError:
             pass
+        changed += 1
+        if not apply:
+            continue           # режим лише-перевірки: рахуємо, але не пишемо
         os.makedirs(os.path.dirname(dst) or HERE, exist_ok=True)
         tmp = dst + ".new"
         with open(tmp, "wb") as f:
             f.write(data)
         os.replace(tmp, dst)   # атомарна заміна (безпечно навіть для запущеного .py)
-        changed += 1
 
     if not quiet:
         print(f"[OK] Оновлено файлів: {changed}." if changed else "[OK] Уже остання версія.")
@@ -98,6 +101,11 @@ def run(quiet: bool = True) -> bool:
 def check(quiet: bool = True):
     """Примусова перевірка з меню (ігнорує маркер .autoupdate). Повертає (ok, changed)."""
     return _sync(quiet)
+
+
+def available(quiet: bool = True):
+    """Лише перевірка (нічого не пише): (ok, changed). Для питання «вийшла нова версія?»."""
+    return _sync(quiet, apply=False)
 
 
 def auto():
