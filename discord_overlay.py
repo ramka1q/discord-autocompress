@@ -1235,6 +1235,7 @@ class Watcher:
         threading.Thread(target=self._hook_thread, daemon=True).start()
         threading.Thread(target=self._update_watch, daemon=True).start()
         self.root.after(120, self._poll_queue)
+        self.root.after(2500, self._check_just_updated)   # чи лаунчер щойно оновив код?
         self._start_tray()
         if open_settings:
             self.root.after(200, self.open_settings)
@@ -1253,6 +1254,50 @@ class Watcher:
             self.tray.start()
         except Exception:
             self.tray = None
+
+    # ---- повідомлення «вас щойно оновлено» при СТАРТІ (старий лаунчер синкає код тихо,
+    #      тож коли відкриваєш програму — код уже новий; хоч скажемо, що вийшла нова версія) ----
+    def _code_fp(self):
+        """Відбиток коду програми (crc32 усіх .py) — щоб помітити, що версія змінилась."""
+        try:
+            import zlib
+            import update
+            h = 0
+            for rel in ("discord_overlay.py", "settings_app.py", "editor.py", "dc_core.py",
+                        "i18n.py", "jokes.py", "media.py", "update.py", "tray.py", "themes.py"):
+                p = os.path.join(update.HERE, rel)
+                try:
+                    if os.path.exists(p):
+                        h = zlib.crc32(open(p, "rb").read(), h)
+                except OSError:
+                    pass
+            return h & 0xFFFFFFFF
+        except Exception:
+            return 0
+
+    def _check_just_updated(self):
+        try:
+            fp = self._code_fp()
+            if not fp:
+                return
+            old = self.cfg.get("code_fp")
+            if old is not None and old != fp:      # код змінився з минулого запуску -> нова версія
+                try:
+                    self.root.attributes("-topmost", True)
+                except Exception:
+                    pass
+                import tkinter.messagebox as mb
+                mb.showinfo(i18n.tr(LANG, "update_applied_title"),
+                            i18n.tr(LANG, "update_applied_msg"))
+                try:
+                    self.root.attributes("-topmost", False)
+                except Exception:
+                    pass
+            if old != fp:
+                self.cfg["code_fp"] = fp
+                save_config(self.cfg)
+        except Exception:
+            pass
 
     # ---- перевірка оновлень + ПИТАННЯ (працює й через старий лаунчер, бо це онлайн-код) ----
     def _update_watch(self):

@@ -20,6 +20,14 @@ STR = {
     "tab_setup":        {"uk": "Встановлення",  "ru": "Установка",     "en": "Setup"},
     "tab_about":        {"uk": "Про програму",  "ru": "О программе",   "en": "About"},
 
+    # ---- повідомлення про оновлення ----
+    "update_applied_title": {"uk": "Оновлення", "ru": "Обновление", "en": "Update"},
+    "update_applied_msg": {
+        "uk": "Програму оновлено до нової версії! ✓",
+        "ru": "Программа обновлена до новой версии! ✓",
+        "en": "The app has been updated to a new version! ✓",
+    },
+
     # ---- питання про оновлення (нова версія вийшла) ----
     "update_found_title": {"uk": "Оновлення", "ru": "Обновление", "en": "Update"},
     "update_found_msg": {
