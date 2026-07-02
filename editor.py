@@ -903,6 +903,12 @@ class VideoEditor(tk.Toplevel):
             self.info_lbl.config(text=msg or "Не вдалося зберегти", fg=C_RED)
             return
         host.play_done_sound(self.cfg)          # звук «готово»
+        try:                                    # статистика: обрізка/gif = теж стиснення
+            import stats
+            orig_mb = os.path.getsize(self.file_path) / (1024 * 1024)
+            stats.record("video", orig_mb, mb, [out_path])
+        except Exception:
+            pass
         try:
             host.set_clipboard_files([out_path])
             if self.watcher:

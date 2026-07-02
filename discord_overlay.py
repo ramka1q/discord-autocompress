@@ -31,6 +31,7 @@ import themes
 import media
 import i18n
 import jokes
+import stats
 
 CONFIG_PATH = os.path.join(os.path.expanduser("~"), ".discord_overlay.json")
 
@@ -495,7 +496,7 @@ class Overlay(tk.Toplevel):
             return
         self._joke_after = self.after(4500, self._rotate_joke)
 
-    def _show_done(self, final_mb, fits, pasted):
+    def _show_done(self, final_mb, fits, pasted, milestone=0):
         self._clear()
         play_done_sound(self.cfg)
         col = C_GREEN if fits else C_WARN
@@ -512,6 +513,7 @@ class Overlay(tk.Toplevel):
         self._text(f"{self.size_mb:.1f} → {final_mb:.2f} {u}{saved}", 146, 11, C_MUTED, bold=False)
         msg = L("ov_pasted") if pasted else L("ov_in_clip")
         self._text(msg, 172, 12, C_BLURPLE)
+        self._total_saved_line(194, milestone)
 
         policy = self.cfg.get("keep_local", "ask")
         if policy == "ask" and self.out_path:
@@ -524,6 +526,20 @@ class Overlay(tk.Toplevel):
                 self._schedule_delete([self.out_path] if self.out_path else [])
             self._btn_full(L("ov_done"), self._close, 230)
             self.after(6000, self._close)
+
+    def _total_saved_line(self, y, milestone=0):
+        """Рядок «разом зекономлено N 💙» (або 🎉-ювілей) на екрані «Готово»."""
+        try:
+            u, g = L("unit_mb"), L("unit_gb")
+            if milestone:
+                self._text(L("ov_milestone", tot=stats.fmt_mb(milestone, u, g)), y, 10, C_GREEN)
+            else:
+                tot = stats.load().get("saved_mb", 0.0)
+                if tot >= 1:
+                    self._text(L("ov_total_saved", tot=stats.fmt_mb(tot, u, g)),
+                               y, 9, C_MUTED, bold=False)
+        except Exception:
+            pass
 
     def _keep_yes(self):
         self._text(L("ov_kept"), 306, 10, C_GREEN, bold=False)
@@ -727,8 +743,12 @@ class Overlay(tk.Toplevel):
             return self._show_error(msg or L("ov_fail"), allow_split=allow, allow_trim=allow)
         self._set(100)  # довести смужку до кінця
         self.out_path = out_path
+        try:
+            milestone = stats.record(self.kind, self.size_mb, final_mb, [out_path])
+        except Exception:
+            milestone = 0
         pasted = self._paste_files([out_path])
-        self._show_done(final_mb, final_mb <= target, pasted)
+        self._show_done(final_mb, final_mb <= target, pasted, milestone=milestone)
 
     # ---- розділення довгого відео на кілька частин ----
     def _set_part(self, i, n):
@@ -778,6 +798,13 @@ class Overlay(tk.Toplevel):
             return self._show_error(msg or L("ov_split_fail"), allow_trim=False)
         self._set(100)
         self.out_paths = outs
+        self._split_milestone = 0
+        try:
+            final_mb = sum(os.path.getsize(p) for p in outs if os.path.isfile(p)) / (1024 * 1024)
+            self._split_milestone = stats.record("video", self.size_mb, final_mb, outs,
+                                                 parts=len(outs))
+        except Exception:
+            pass
         # Discord бере МАКС 10 вкладень за раз -> >10 файлів шлемо пачками по 10
         if len(outs) > 10:
             self._batches = [outs[i:i + 10] for i in range(0, len(outs), 10)]
@@ -836,6 +863,7 @@ class Overlay(tk.Toplevel):
             msg = L("ov_in_clip")
         self._text(msg, 142, 11, C_BLURPLE)
         self._text(L("ov_parts_near"), 164, 9, C_MUTED, bold=False)
+        self._total_saved_line(184, getattr(self, "_split_milestone", 0))
 
         outs = getattr(self, "out_paths", [])
         policy = self.cfg.get("keep_local", "ask")
@@ -1311,7 +1339,7 @@ class Watcher:
         if not os.path.exists(update.MARKER):
             return                       # лише встановлені копії (є маркер .autoupdate)
         import time as _t
-        _t.sleep(90)                     # дати старту влягтись (лаунчер уже синкнув .py)
+        _t.sleep(30)                     # дати старту влягтись (лаунчер уже синкнув .py)
         while not self._update_prompted:
             try:
                 ok, changed = update.available()
@@ -1320,7 +1348,7 @@ class Watcher:
                     return               # питаємо один раз за сесію
             except Exception:
                 pass
-            _t.sleep(1800)               # перевіряти кожні 30 хв
+            _t.sleep(180)                # перевіряти кожні 3 хв (поки програма відкрита)
 
     def _prompt_update(self):
         if self._update_prompted:

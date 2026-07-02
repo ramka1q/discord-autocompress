@@ -9,7 +9,9 @@ settings_app.py — красиве меню налаштувань у стилі
 import ctypes
 import os
 import shutil
+import subprocess
 import threading
+import time
 
 import tkinter as tk
 import tkinter.filedialog as filedialog
@@ -20,6 +22,7 @@ import deps
 import i18n
 import jokes
 import monetize
+import stats
 import themes
 
 APP_VERSION = "1.0"
@@ -186,7 +189,8 @@ class SettingsApp:
         self.content.pack(side="left", fill="both", expand=True)
 
         self._nav = {}
-        tabs = [("general", "tab_general", "⚙"), ("media", "tab_media", "🎞"),
+        tabs = [("general", "tab_general", "⚙"), ("stats", "tab_stats", "📊"),
+                ("media", "tab_media", "🎞"),
                 ("appearance", "tab_appearance", "🎨"), ("facts", "tab_facts", "💡"),
                 ("setup", "tab_setup", "⬇"),
                 ("updates", "tab_updates", "⭳"), ("performance", "tab_performance", "⚡"),
@@ -244,7 +248,7 @@ class SettingsApp:
                      font=(themes.FONT, 11, "bold" if act else "normal"))
         for w in self.content.winfo_children():
             w.destroy()
-        {"general": self._tab_general, "media": self._tab_media,
+        {"general": self._tab_general, "stats": self._tab_stats, "media": self._tab_media,
          "appearance": self._tab_appearance, "facts": self._tab_facts, "setup": self._tab_setup,
          "updates": self._tab_updates, "performance": self._tab_performance,
          "about": self._tab_about}[key]()
@@ -441,6 +445,127 @@ class SettingsApp:
                      font=(themes.FONT, 11, "bold"), wraplength=440, justify="left"
                      ).pack(anchor="w", pady=(10, 0))
         except tk.TclError:
+            pass
+
+    def _tab_stats(self):
+        """Особиста статистика: скільки файлів/місця зекономлено + історія
+        останніх стиснень з кнопкою «скопіювати знову» (без повторного стиснення)."""
+        f = self._pad()
+        P = self.P
+        d = stats.load()
+        self._header(f, "📊  " + self.T("stats_title"))
+        if d.get("since"):
+            try:
+                day = time.strftime("%d.%m.%Y", time.localtime(d["since"]))
+                self._lbl(f, self.T("stats_since", d=day), size=10, muted=True)\
+                    .pack(anchor="w", pady=(0, 10))
+            except Exception:
+                pass
+        u, g = self.T("unit_mb"), self.T("unit_gb")
+
+        # --- три картки з великими цифрами ---
+        cards = tk.Frame(f, bg=P["bg"]); cards.pack(anchor="w", fill="x")
+        avg = f"−{stats.avg_percent(d)}%" if d.get("files") else "—"
+        for big, small in ((str(d.get("files", 0)), self.T("stats_files")),
+                           (stats.fmt_mb(d.get("saved_mb", 0.0), u, g), self.T("stats_saved")),
+                           (avg, self.T("stats_avg"))):
+            c = tk.Frame(cards, bg=P["dark"], padx=18, pady=10)
+            c.pack(side="left", padx=(0, 10))
+            tk.Label(c, text=big, bg=P["dark"], fg=P["accent"],
+                     font=(themes.FONT, 17, "bold")).pack(anchor="w")
+            tk.Label(c, text=small, bg=P["dark"], fg=P["muted"],
+                     font=(themes.FONT, 9)).pack(anchor="w")
+        bk = d.get("by_kind", {})
+        kinds = "    ".join(f"{ic} {bk[k]}" for ic, k in
+                            (("🎬", "video"), ("🖼", "image"), ("🎵", "audio")) if bk.get(k))
+        if kinds:
+            self._lbl(f, kinds, size=10, muted=True).pack(anchor="w", pady=(6, 0))
+
+        # --- історія ---
+        self._lbl(f, self.T("stats_hist"), size=12, bold=True).pack(anchor="w", pady=(14, 2))
+        hist = d.get("history", [])
+        if not hist:
+            self._lbl(f, self.T("stats_empty"), size=10, muted=True).pack(anchor="w", pady=10)
+            return
+        hint = self._lbl(f, self.T("stats_hint"), size=9, muted=True)
+        hint.config(wraplength=470, justify="left")
+        hint.pack(anchor="w", pady=(0, 6))
+        box = tk.Frame(f, bg=P["bg"]); box.pack(fill="both", expand=True)
+        sb = tk.Scrollbar(box); sb.pack(side="right", fill="y")
+        lb = tk.Listbox(box, yscrollcommand=sb.set, bg=P["dark"], fg=P["text"],
+                        selectbackground=P["accent"], selectforeground="#ffffff",
+                        highlightthickness=0, bd=0, font=(themes.FONT, 10),
+                        activestyle="none", height=8)
+        lb.pack(side="left", fill="both", expand=True)
+        sb.config(command=lb.yview)
+        self._hist_lb, self._hist_entries = lb, hist
+        for e in hist:
+            icon = {"video": "🎬", "image": "🖼", "audio": "🎵"}.get(e.get("kind"), "🎬")
+            try:
+                when = time.strftime("%d.%m %H:%M", time.localtime(e.get("t", 0)))
+            except Exception:
+                when = ""
+            name = e.get("name", "")
+            if len(name) > 34:
+                name = name[:31] + "…"
+            parts = ""
+            if int(e.get("parts", 1)) > 1:
+                parts = f"  ×{e['parts']} {self.T('stats_parts')}"
+            lb.insert("end", f" {when}  {icon}  {name}   "
+                             f"{e.get('orig', 0):g}→{e.get('final', 0):g} {u}{parts}")
+        lb.bind("<Double-Button-1>", lambda _e: self._hist_copy())
+
+        row = tk.Frame(f, bg=P["bg"]); row.pack(anchor="w", fill="x", pady=(8, 0))
+        self._btn(row, self.T("stats_copy"), self._hist_copy, small=True).pack(side="left")
+        self._btn(row, self.T("stats_open"), self._hist_open,
+                  primary=False, small=True).pack(side="left", padx=6)
+        self._btn(row, self.T("stats_clear"), self._hist_clear,
+                  primary=False, small=True).pack(side="left")
+        self._hist_status = self._lbl(row, "", size=9)
+        self._hist_status.pack(side="left", padx=10)
+
+    def _hist_sel(self):
+        try:
+            return self._hist_entries[self._hist_lb.curselection()[0]]
+        except Exception:
+            return None
+
+    def _hist_paths(self):
+        e = self._hist_sel()
+        if not e:
+            return []
+        return [p for p in e.get("paths", []) if p and os.path.isfile(p)]
+
+    def _hist_copy(self):
+        """Кладе стиснутий файл назад у буфер — Ctrl+V у Discord і все."""
+        paths = self._hist_paths()
+        if not paths:
+            return self._hist_flash(self.T("stats_gone"), err=True)
+        try:
+            import discord_overlay as _ov   # завжди вже завантажений (він відкрив меню)
+            _ov.set_clipboard_files(paths)
+        except Exception:
+            return self._hist_flash(self.T("stats_gone"), err=True)
+        self._hist_flash(self.T("stats_copied"))
+
+    def _hist_open(self):
+        paths = self._hist_paths()
+        if not paths:
+            return self._hist_flash(self.T("stats_gone"), err=True)
+        try:
+            subprocess.Popen(["explorer", "/select,", os.path.normpath(paths[0])])
+        except Exception:
+            pass
+
+    def _hist_clear(self):
+        stats.clear_history()
+        self._show_tab("stats")
+
+    def _hist_flash(self, msg, err=False):
+        try:
+            self._hist_status.config(text=msg,
+                                     fg=self.P["red"] if err else self.P["green"])
+        except (tk.TclError, AttributeError):
             pass
 
     def _tab_facts(self):
