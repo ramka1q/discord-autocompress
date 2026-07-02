@@ -18,3 +18,12 @@ dist/
 appicon.ico
 *_discord_*.webp
 *_discord_*.mp3
+
+# author-only tooling — kept locally, not published to GitHub
+Build EXE.bat
+Publish update.bat
+Step 1 - GitHub login.bat
+Step 2 - Create repo.bat
+Set donate link.bat
+Setup Ko-fi donations.bat
+set_links.py
