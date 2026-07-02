@@ -27,7 +27,7 @@ echo.
 
 set /p PUB=Publish to GitHub now so everyone gets it? [y/N]:
 if /i not "%PUB%"=="y" goto done
-git add monetize.py ".github\FUNDING.yml"
+git add monetize.py ".github\FUNDING.yml" "README.md"
 git commit -m "Update donate link"
 git push origin main
 echo.

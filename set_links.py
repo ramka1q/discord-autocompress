@@ -50,5 +50,23 @@ else:
 with open(fund, "w", encoding="utf-8", newline="\n") as f:
     f.write(line + "\n")
 
+# 3) README.md -> visible donate badge between the DONATE markers (so GitHub shows it)
+readme = os.path.join(here, "README.md")
+if os.path.exists(readme):
+    with open(readme, "r", encoding="utf-8") as f:
+        rt = f.read()
+    if url and "ko-fi.com" in url.lower():
+        block = ("\n[![Support me on Ko-fi]"
+                 "(https://ko-fi.com/img/githubbutton_sm.svg)](%s)\n" % url)
+    elif url:
+        block = "\n**[❤ Donate](%s)**\n" % url
+    else:
+        block = "\n"
+    rt2 = re.sub(r'(?s)(<!-- DONATE:START -->).*?(<!-- DONATE:END -->)',
+                 lambda m: m.group(1) + block + m.group(2), rt, count=1)
+    if rt2 != rt:
+        with open(readme, "w", encoding="utf-8", newline="\n") as f:
+            f.write(rt2)
+
 print("Donate URL:", url or "(empty)")
 print("OK")

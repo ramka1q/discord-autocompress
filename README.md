@@ -36,7 +36,10 @@ Requires Python 3 and ffmpeg (`winget install Gyan.FFmpeg`). Run `Build EXE.bat`
 
 Discord Auto-Compress is **free and open-source (MIT)** and always will be. If it saves you time, a small tip helps keep it going:
 
-- ❤ **Donate** — use the **Sponsor** button at the top of this repo, or the **Support** button inside the app (Settings → About). It's a free, no-strings donation — nothing is locked behind it.
+- ❤ **Donate** — use the **Sponsor** button at the top of this repo, the button below, or the **Support** button inside the app (Settings → About). It's a free, no-strings donation — nothing is locked behind it.
+
+<!-- DONATE:START -->
+<!-- DONATE:END -->
 
 Every bit of support is genuinely appreciated and goes straight into new features.
 
