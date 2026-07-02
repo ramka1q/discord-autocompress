@@ -144,11 +144,13 @@ class VideoEditor(tk.Toplevel):
         # ---- ЄДИНА доріжка монтажу: кіно-стрічка + ручки обрізки + плейхед ----
         self.tl = tk.Canvas(self, width=self.TW, height=TLH, bg=C_TRACK, highlightthickness=0)
         self.tl.pack(padx=14, pady=(4, 2))
-        # аудіо-хвиля всього відео (де звук/тиша) — під доріжкою, з маркером плейхеда
+        # аудіо-хвиля — під доріжкою; малюється ВЕКТОРОМ у синхроні з кліпами,
+        # тож тягнеться за зумом/обрізкою/переміщенням (звук лише візуал, не редагується)
         self.WAVE_H = 40
-        self.wave = tk.Canvas(self, width=self.TW, height=self.WAVE_H, bg=C_DARK, highlightthickness=0)
+        self.wave = tk.Canvas(self, width=self.TW, height=self.WAVE_H, bg=C_TRACK, highlightthickness=0)
         self.wave.pack(padx=14, pady=(0, 8))
-        self._wave_img = None
+        self._env = None            # обвідна гучності (0..1 по _env_hz значень/сек)
+        self._env_hz = 100
         self._gen_waveform()
         self.tl.bind("<Button-1>", self._tl_press)
         self.tl.bind("<B1-Motion>", self._tl_motion)
@@ -480,38 +482,64 @@ class VideoEditor(tk.Toplevel):
 
     # ---- кіно-стрічка (кадри) — по одному набору на все відео, ділиться між кліпами ----
     def _gen_waveform(self):
-        """Малює аудіо-хвилю всього відео у фоні (ffmpeg), показує під доріжкою."""
+        """Рахує обвідну гучності всього відео у фоні (ffmpeg→s16le), тоді малює."""
         if not self.info.get("has_audio", False):
             return
-        png = os.path.join(self._tmp, "wave.png")
 
         def work():
-            col = C_BLURPLE.lstrip("#")
-            if dc_core.waveform_png(self.file_path, png, width=self.TW, height=self.WAVE_H, color=col):
-                self.after(0, lambda: self._load_waveform(png))
+            env = dc_core.audio_envelope(self.file_path, hz=self._env_hz)
+            if env:
+                self.after(0, lambda: self._set_env(env))
         threading.Thread(target=work, daemon=True).start()
 
-    def _load_waveform(self, png):
-        try:
-            self._wave_img = tk.PhotoImage(file=png)
-        except tk.TclError:
-            self._wave_img = None
+    def _set_env(self, env):
+        self._env = env
         self._draw_wave()
 
+    def _env_at(self, src):
+        """Гучність (0..1) на джерельній секунді src."""
+        if not self._env:
+            return 0.0
+        i = int(src * self._env_hz)
+        if i < 0:
+            i = 0
+        elif i >= len(self._env):
+            i = len(self._env) - 1
+        return self._env[i]
+
     def _draw_wave(self):
+        """Хвиля кожного кліпа малюється РІВНО під ним (ті самі cx1..cx2, що на доріжці),
+        тож зум/обрізка/переміщення/видалення застосовуються і до звуку автоматично."""
         c = getattr(self, "wave", None)
         if c is None:
             return
         try:
             c.delete("all")
-            if self._wave_img is not None:
-                c.create_image(0, 0, anchor="nw", image=self._wave_img)
-            elif not self.info.get("has_audio", False):
-                c.create_text(self.TW // 2, self.WAVE_H // 2, text="без звуку",
-                              fill=C_MUTED, font=(FONT, 8))
-            if self.dur > 0:                          # маркер плейхеда (джерельний час на всю ширину)
-                x = min(self.TW, max(0, self.cur / self.dur * self.TW))
-                c.create_line(x, 0, x, self.WAVE_H, fill=C_PLAY, width=2)
+            W, H = self.TW, self.WAVE_H
+            mid = H / 2.0
+            c.create_rectangle(0, 0, W, H, fill=C_TRACK, outline="")
+            if not self.info.get("has_audio", False):
+                c.create_text(W // 2, mid, text="без звуку", fill=C_MUTED, font=(FONT, 8))
+                return
+            if not self._env:
+                return
+            for slot, ix, cx1, cx2 in self._clip_rects:
+                s, e = self.pieces[ix]
+                span = max(0.001, e - s)
+                wpx = cx2 - cx1
+                if wpx <= 0:
+                    continue
+                col = C_BLURPLE if slot == self.sel else "#4a4d57"
+                xx = max(0.0, cx1)
+                xend = min(float(W), cx2)
+                while xx < xend:
+                    a = self._env_at(s + (xx - cx1) / wpx * span)
+                    h = max(0.6, a * (mid - 1))
+                    c.create_line(xx, mid - h, xx, mid + h, fill=col, width=1)
+                    xx += 2
+            xh = getattr(self, "_playhead_x", 0)     # той самий плейхед, що на доріжці
+            if xh:
+                c.create_line(xh, 0, xh, H, fill=C_PLAY, width=2)
         except tk.TclError:
             pass
 

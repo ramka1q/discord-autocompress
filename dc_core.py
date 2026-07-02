@@ -9,6 +9,7 @@ import math
 import os
 import re
 import shutil
+import struct
 import subprocess
 import tempfile
 import time
@@ -367,6 +368,42 @@ def waveform_png(path, out_png, width=596, height=42, color="6a7bf0") -> bool:
          "-frames:v", "1", out_png],
         capture_output=True, creationflags=NO_WINDOW).returncode
     return rc == 0 and os.path.exists(out_png)
+
+
+def audio_envelope(path, hz: int = 100, ar: int = 8000) -> list:
+    """Обвідна гучності всього відео як список піків 0..1 (по `hz` значень/сек).
+    Декодуємо звук у mono s16le через ffmpeg і рахуємо максимум |семпла| у кожному
+    «відрі». Потрібно, щоб намалювати хвилю ВЕКТОРОМ на канвасі — тоді вона тягнеться
+    за зумом/обрізкою/переміщенням кліпів (на відміну від готового PNG). [] якщо звуку
+    нема / ffmpeg не зміг. Лише stdlib (struct) — щоб точно йшло онлайн у старому exe."""
+    try:
+        out = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", path,
+             "-ac", "1", "-ar", str(ar), "-f", "s16le", "-"],
+            capture_output=True, creationflags=NO_WINDOW).stdout
+    except Exception:
+        return []
+    if not out:
+        return []
+    per = max(1, ar // max(1, hz))           # семплів на одне значення обвідної
+    n = len(out) // 2                        # усього семплів (int16)
+    env = []
+    peak = 1
+    for b in range(0, n, per):
+        m = min(per, n - b)
+        try:
+            vals = struct.unpack_from("<%dh" % m, out, b * 2)
+        except struct.error:
+            break
+        a = 0
+        for v in vals:
+            av = -v if v < 0 else v
+            if av > a:
+                a = av
+        if a > peak:
+            peak = a
+        env.append(a)
+    return [a / peak for a in env]           # нормалізуємо до максимуму (0..1)
 
 
 def extract_frame(path: str, t: float, out_png: str, width: int = 380) -> bool:
