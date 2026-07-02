@@ -1243,7 +1243,7 @@ class ShrinkPill(tk.Toplevel):
 # --------------------------------------------------------------------------- #
 #  Фон: перехоплення Ctrl+V у Discord
 # --------------------------------------------------------------------------- #
-_AUTO_MOVED_TO_WATCHER = True   # логіка оновлення тепер у Watcher._update_watch
+_AUTO_MOVED_TO_WATCHER = True   # авто-оновлення без вікон; ручне — кнопкою в меню
 
 
 class Watcher:
@@ -1259,11 +1259,8 @@ class Watcher:
         self.settings_win = None
         self.last_seq_self = 0
         self._cooldown_until = 0
-        self._update_prompted = False
         threading.Thread(target=self._hook_thread, daemon=True).start()
-        threading.Thread(target=self._update_watch, daemon=True).start()
         self.root.after(120, self._poll_queue)
-        self.root.after(2500, self._check_just_updated)   # чи лаунчер щойно оновив код?
         self._start_tray()
         if open_settings:
             self.root.after(200, self.open_settings)
@@ -1283,98 +1280,9 @@ class Watcher:
         except Exception:
             self.tray = None
 
-    # ---- повідомлення «вас щойно оновлено» при СТАРТІ (старий лаунчер синкає код тихо,
-    #      тож коли відкриваєш програму — код уже новий; хоч скажемо, що вийшла нова версія) ----
-    def _code_fp(self):
-        """Відбиток коду програми (crc32 усіх .py) — щоб помітити, що версія змінилась."""
-        try:
-            import zlib
-            import update
-            h = 0
-            for rel in ("discord_overlay.py", "settings_app.py", "editor.py", "dc_core.py",
-                        "i18n.py", "jokes.py", "media.py", "update.py", "tray.py", "themes.py"):
-                p = os.path.join(update.HERE, rel)
-                try:
-                    if os.path.exists(p):
-                        h = zlib.crc32(open(p, "rb").read(), h)
-                except OSError:
-                    pass
-            return h & 0xFFFFFFFF
-        except Exception:
-            return 0
-
-    def _check_just_updated(self):
-        try:
-            fp = self._code_fp()
-            if not fp:
-                return
-            old = self.cfg.get("code_fp")
-            if old is not None and old != fp:      # код змінився з минулого запуску -> нова версія
-                try:
-                    self.root.attributes("-topmost", True)
-                except Exception:
-                    pass
-                import tkinter.messagebox as mb
-                mb.showinfo(i18n.tr(LANG, "update_applied_title"),
-                            i18n.tr(LANG, "update_applied_msg"))
-                try:
-                    self.root.attributes("-topmost", False)
-                except Exception:
-                    pass
-            if old != fp:
-                self.cfg["code_fp"] = fp
-                save_config(self.cfg)
-        except Exception:
-            pass
-
-    # ---- перевірка оновлень + ПИТАННЯ (працює й через старий лаунчер, бо це онлайн-код) ----
-    def _update_watch(self):
-        """Періодично дивиться, чи вийшла нова версія на GitHub, і ПИТАЄ користувача,
-        чи оновитись. Лаунчер тихо синкає код при СТАРТІ, тож одразу різниці нема; але
-        коли автор пушить нову версію, поки програма в треї — тут вона й помічається."""
-        try:
-            import update
-        except Exception:
-            return
-        if not os.path.exists(update.MARKER):
-            return                       # лише встановлені копії (є маркер .autoupdate)
-        import time as _t
-        _t.sleep(30)                     # дати старту влягтись (лаунчер уже синкнув .py)
-        while not self._update_prompted:
-            try:
-                ok, changed = update.available()
-                if ok and changed > 0:
-                    self.root.after(0, self._prompt_update)
-                    return               # питаємо один раз за сесію
-            except Exception:
-                pass
-            _t.sleep(180)                # перевіряти кожні 3 хв (поки програма відкрита)
-
-    def _prompt_update(self):
-        if self._update_prompted:
-            return
-        self._update_prompted = True
-        try:
-            import tkinter.messagebox as mb
-            try:
-                self.root.attributes("-topmost", True)
-            except Exception:
-                pass
-            ans = mb.askyesno(i18n.tr(LANG, "update_found_title"),
-                              i18n.tr(LANG, "update_found_msg"))
-            try:
-                self.root.attributes("-topmost", False)
-            except Exception:
-                pass
-            if ans:
-                try:
-                    import update
-                    update.run(quiet=True)     # завантажити нову версію на диск
-                except Exception:
-                    pass
-                self.restart_app()             # перезапуск -> лаунчер підхопить нову версію
-        except Exception:
-            pass
+    # Авто-вікон про оновлення БІЛЬШЕ НЕМАЄ (на прохання юзера): жодних питань
+    # чи повідомлень само собою. Оновлення — ЛИШЕ кнопкою «Перевірити оновлення»
+    # у меню (вкладка Оновлення), там же кнопка перезапуску.
 
     def quit_app(self):
         try:

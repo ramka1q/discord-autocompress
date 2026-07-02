@@ -60,6 +60,16 @@ class SettingsApp:
 
         self._init_vars()      # усі змінні — ОДИН раз (щоб стан не губився між вкладками)
         self._build()
+        self._fade_in()
+
+    def _fade_in(self, a=0.0):
+        """Плавна поява вікна (~150 мс) — замість різкого «вистрибування»."""
+        try:
+            self.win.attributes("-alpha", a)
+        except tk.TclError:
+            return
+        if a < 1.0:
+            self.win.after(25, lambda: self._fade_in(min(1.0, a + 0.2)))
 
     def _init_vars(self):
         """Створює всі змінні налаштувань один раз. Віджети вкладок лише прив'язуються
@@ -198,6 +208,8 @@ class SettingsApp:
         tk.Frame(self.side, bg=P["sidebar"], height=10).pack()
         for key, tkey, icon in tabs:
             self._nav_btn(key, f"  {icon}  " + self.T(tkey))
+        tk.Label(self.side, text=f"v{APP_VERSION}", bg=P["sidebar"], fg=P["muted"],
+                 font=(themes.FONT, 8)).pack(side="bottom", pady=8)
 
         # --- футер із «Зберегти» ---
         footer = tk.Frame(self.win, bg=P["title_bg"], height=52)
@@ -213,20 +225,32 @@ class SettingsApp:
         self._show_tab(self._active_tab)
 
     def _nav_btn(self, key, text):
+        """Вкладка сайдбара у стилі Discord: активна = панель + акцентна смужка
+        зліва (спокійніше за суцільну заливку), наведення підсвічує."""
         P = self.P
         active = key == self._active_tab
-        b = tk.Button(self.side, text=text, anchor="w", command=lambda: self._show_tab(key),
-                      bg=P["accent"] if active else P["sidebar"],
-                      fg="#fff" if active else P["text"],
-                      activebackground=P["accent_h"] if active else P["panel"],
-                      activeforeground=P["text"], relief="flat", bd=0,
+        row = tk.Frame(self.side, bg=P["sidebar"])
+        row.pack(fill="x", padx=8, pady=2)
+        ind = tk.Frame(row, width=3, bg=P["accent"] if active else P["sidebar"])
+        ind.pack(side="left", fill="y")
+        b = tk.Button(row, text=text, anchor="w", command=lambda: self._show_tab(key),
+                      bg=P["panel"] if active else P["sidebar"], fg=P["text"],
+                      activebackground=P["panel"], activeforeground=P["text"],
+                      relief="flat", bd=0,
                       font=(themes.FONT, 11, "bold" if active else "normal"),
-                      padx=14, pady=10, cursor="hand2")
-        b.pack(fill="x", padx=8, pady=2)
-        if not active:
-            b.bind("<Enter>", lambda e: b.config(bg=P["panel"]))
-            b.bind("<Leave>", lambda e: b.config(bg=P["sidebar"]))
-        self._nav[key] = b
+                      padx=12, pady=10, cursor="hand2")
+        b.pack(side="left", fill="x", expand=True)
+
+        def _enter(_e, b=b, key=key):
+            if key != self._active_tab:
+                b.config(bg=P["panel"])
+
+        def _leave(_e, b=b, key=key):
+            if key != self._active_tab:
+                b.config(bg=P["sidebar"])
+        b.bind("<Enter>", _enter)
+        b.bind("<Leave>", _leave)
+        self._nav[key] = (b, ind)
 
     def _drag_start(self, e):
         self._dx, self._dy = e.x_root - self.win.winfo_x(), e.y_root - self.win.winfo_y()
@@ -241,11 +265,11 @@ class SettingsApp:
         except Exception:
             pass
         self._active_tab = key
-        for k, b in self._nav.items():
+        for k, (b, ind) in self._nav.items():
             act = k == key
-            b.config(bg=self.P["accent"] if act else self.P["sidebar"],
-                     fg="#fff" if act else self.P["text"],
+            b.config(bg=self.P["panel"] if act else self.P["sidebar"], fg=self.P["text"],
                      font=(themes.FONT, 11, "bold" if act else "normal"))
+            ind.config(bg=self.P["accent"] if act else self.P["sidebar"])
         for w in self.content.winfo_children():
             w.destroy()
         {"general": self._tab_general, "stats": self._tab_stats, "media": self._tab_media,
@@ -265,14 +289,14 @@ class SettingsApp:
         P = self.P
         tk.Checkbutton(parent, text=text, variable=var, bg=P["bg"], fg=P["text"],
                        selectcolor=P["dark"], activebackground=P["bg"], activeforeground=P["text"],
-                       font=(themes.FONT, 11), anchor="w").pack(anchor="w", pady=3)
+                       font=(themes.FONT, 11), anchor="w", cursor="hand2").pack(anchor="w", pady=3)
 
     def _radio(self, parent, text, var, value):
         P = self.P
         tk.Radiobutton(parent, text=text, variable=var, value=value,
                        bg=P["bg"], fg=P["text"], selectcolor=P["dark"],
                        activebackground=P["bg"], activeforeground=P["text"],
-                       font=(themes.FONT, 11)).pack(anchor="w", padx=6, pady=2)
+                       font=(themes.FONT, 11), cursor="hand2").pack(anchor="w", padx=6, pady=2)
 
     def _tab_general(self):
         f = self._pad()
@@ -288,7 +312,11 @@ class SettingsApp:
         row = tk.Frame(f, bg=self.P["bg"]); row.pack(anchor="w", pady=(12, 0))
         self._lbl(row, self.T("audio_kbps")).pack(side="left")
         tk.Spinbox(row, from_=0, to=320, increment=32, width=6, textvariable=self.v_audio,
-                   font=(themes.FONT, 11)).pack(side="left", padx=8)
+                   font=(themes.FONT, 11), bg=self.P["dark"], fg=self.P["text"],
+                   insertbackground=self.P["text"], buttonbackground=self.P["panel"],
+                   relief="flat", highlightthickness=1,
+                   highlightbackground=self.P["dark"],
+                   highlightcolor=self.P["accent"]).pack(side="left", padx=8)
 
     def _tab_media(self):
         f = self._pad()
@@ -742,22 +770,16 @@ class SettingsApp:
         about = {
             "uk": "Автостиснення відео, фото та звуку під ліміт Discord.\n"
                   "Живе у треї (приховані значки). ПКМ по значку — меню або вихід.\n\n"
-                  "Як оновлюється програма:\n"
-                  "  • запитує вас, коли виходить нова версія;\n"
-                  "  • або кнопкою «Перевірити оновлення» на вкладці Оновлення;\n"
-                  "  • або запустивши «Update now.bat».",
+                  "Оновлення — лише вручну: кнопка «Перевірити оновлення»\n"
+                  "на вкладці Оновлення. Само нічого не вискакує.",
             "ru": "Автосжатие видео, фото и звука под лимит Discord.\n"
                   "Живёт в трее (скрытые значки). ПКМ по значку — меню или выход.\n\n"
-                  "Как обновляется программа:\n"
-                  "  • спрашивает вас, когда выходит новая версия;\n"
-                  "  • или кнопкой «Проверить обновления» на вкладке Обновления;\n"
-                  "  • или запустив «Update now.bat».",
+                  "Обновление — только вручную: кнопка «Проверить обновления»\n"
+                  "на вкладке Обновления. Само ничего не выскакивает.",
             "en": "Auto-compress video, images and audio under the Discord limit.\n"
                   "Lives in the tray (hidden icons). Right-click — menu or quit.\n\n"
-                  "How the app updates:\n"
-                  "  • it asks you when a new version is available;\n"
-                  "  • or the ‘Check for updates’ button on the Updates tab;\n"
-                  "  • or by running ‘Update now.bat’.",
+                  "Updates are manual only: the ‘Check for updates’ button\n"
+                  "on the Updates tab. Nothing pops up on its own.",
         }[self.lang]
         tk.Label(f, text=about, bg=self.P["bg"], fg=self.P["text"], font=(themes.FONT, 11),
                  justify="left", anchor="w").pack(anchor="w")
