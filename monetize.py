@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
 """
-monetize.py — посилання підтримки/донату + продажу готового .exe («Pro»).
-Автор заповнює URL-и через «Set support links.bat» (або вручну тут).
-Порожній рядок = кнопка ховається. Відкриваємо через os.startfile (Windows,
-дефолтний браузер) — лише stdlib, щоб точно йшло онлайн у старому exe.
+monetize.py — ОДНЕ посилання донату (безкоштовна підтримка розробника, нічого не дає).
+Автор вставляє своє посилання через «Set donate link.bat» (або вручну сюди).
+Відкриваємо через os.startfile (Windows, дефолтний браузер) — лише stdlib,
+щоб точно йшло онлайн у старому exe. Ніякої підписки/оплати/Pro тут немає.
 """
 import os
 
-# Заповнюється автором (Set support links.bat). Порожнє = кнопка не показується.
-SUPPORT_URL = ""
-PRO_URL = ""
+# Автор вставляє своє посилання донату (напр. https://ko-fi.com/твійнік).
+DONATE_URL = ""
 
 
 def open_url(url):
@@ -29,9 +28,5 @@ def open_url(url):
             return False
 
 
-def has_support():
-    return bool(SUPPORT_URL.strip())
-
-
-def has_pro():
-    return bool(PRO_URL.strip())
+def has_donate():
+    return bool(DONATE_URL.strip())

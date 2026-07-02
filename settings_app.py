@@ -635,23 +635,32 @@ class SettingsApp:
         }[self.lang]
         tk.Label(f, text=about, bg=self.P["bg"], fg=self.P["text"], font=(themes.FONT, 11),
                  justify="left", anchor="w").pack(anchor="w")
-        # ---- підтримати розробника (показується лише коли автор задав посилання) ----
-        if monetize.has_support() or monetize.has_pro():
-            box = tk.Frame(f, bg=self.P["bg"]); box.pack(anchor="w", pady=(16, 0))
-            lab = {"uk": "Подобається програма? Підтримай розробника ❤",
-                   "ru": "Нравится программа? Поддержи разработчика ❤",
-                   "en": "Enjoying the app? Support the developer ❤"}.get(self.lang)
-            tk.Label(box, text=lab, bg=self.P["bg"], fg=self.P["text"],
-                     font=(themes.FONT, 11, "bold")).pack(anchor="w", pady=(0, 6))
-            row = tk.Frame(box, bg=self.P["bg"]); row.pack(anchor="w")
-            if monetize.has_support():
-                t = {"uk": "❤ Підтримати", "ru": "❤ Поддержать", "en": "❤ Support"}.get(self.lang)
-                self._btn(row, t, lambda: monetize.open_url(monetize.SUPPORT_URL)).pack(side="left", padx=(0, 8))
-            if monetize.has_pro():
-                t = {"uk": "★ Купити Pro (.exe)", "ru": "★ Купить Pro (.exe)",
-                     "en": "★ Get Pro (.exe)"}.get(self.lang)
-                self._btn(row, t, lambda: monetize.open_url(monetize.PRO_URL),
-                          primary=False).pack(side="left")
+        # ---- кнопка донату (завжди видима; підписки/оплати немає — суто підтримка) ----
+        box = tk.Frame(f, bg=self.P["bg"]); box.pack(anchor="w", pady=(16, 0))
+        lab = {"uk": "Подобається програма? Підтримай розробника ❤",
+               "ru": "Нравится программа? Поддержи разработчика ❤",
+               "en": "Enjoying the app? Support the developer ❤"}.get(self.lang)
+        tk.Label(box, text=lab, bg=self.P["bg"], fg=self.P["text"],
+                 font=(themes.FONT, 11, "bold")).pack(anchor="w", pady=(0, 6))
+        t = {"uk": "❤ Підтримати (донат)", "ru": "❤ Поддержать (донат)",
+             "en": "❤ Support (donate)"}.get(self.lang)
+        self._btn(box, t, self._open_donate).pack(anchor="w")
+
+    def _open_donate(self):
+        if monetize.has_donate():
+            monetize.open_url(monetize.DONATE_URL)
+            return
+        try:
+            import tkinter.messagebox as mb
+            msg = {"uk": "Посилання донату ще не задане.\n\nЗапусти «Set donate link.bat» "
+                         "і встав своє посилання (напр. з Ko-fi).",
+                   "ru": "Ссылка доната ещё не задана.\n\nЗапусти «Set donate link.bat» "
+                         "и вставь свою ссылку (напр. с Ko-fi).",
+                   "en": "Donate link is not set yet.\n\nRun 'Set donate link.bat' and paste "
+                         "your link (e.g. from Ko-fi)."}.get(self.lang)
+            mb.showinfo("Donate", msg)
+        except Exception:
+            pass
 
     # ---------- збереження ----------
     def _collect(self):
