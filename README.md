@@ -1,59 +1,50 @@
-# Discord Toolbox
+# Discord Auto-Compress
 
-Мега-програма для Discord — усе в одному вікні, через **вебхук** (без бота й токена).
+**Paste any video, image or audio into Discord — it is automatically shrunk under the upload limit before it sends.** No manual re-encoding, no "file too large" errors.
 
-![залежності](https://img.shields.io/badge/залежності-немає-success)
+The app lives quietly in the system tray. When you press **Ctrl+V** in Discord and the clipboard file is over the limit, it pops a small overlay, compresses the file with a two-pass x264 encode, and pastes the smaller version back for you.
+
 ![python](https://img.shields.io/badge/python-3.8%2B-blue)
+![platform](https://img.shields.io/badge/platform-Windows-0a84ff)
+![license](https://img.shields.io/badge/license-MIT-green)
 
-## 4 інструменти в одному вікні
+---
 
-**1 · Надсилання** — повний редактор повідомлень і embed:
-заголовок, опис, автор, велика картинка, мініатюра, підвал, колір (палітра),
-поля (fields) з `inline`, часова мітка, перевизначення імені/аватарки,
-жива превʼю JSON, збереження/завантаження шаблонів.
+## Features
 
-**2 · Планувальник** — надсилання поточного повідомлення:
-- через N хвилин (одноразово)
-- кожні N хвилин (повторювано)
-- о певній годині (год:хв; якщо минуло — завтра)
-Список активних завдань + скасування. Працює, доки програма відкрита.
+- **Auto-compress on paste** — catches Ctrl+V in Discord, compresses, re-pastes. Guaranteed to fit the limit.
+- **Video, images and audio** — x264 for video, WebP for images, MP3 for audio.
+- **Split long videos** into parts that each fit the limit, or "compress & split" for fewer files.
+- **Built-in editor** — trim, cut, reorder and remove clips on a CapCut-style timeline with a live **audio waveform that follows your zoom, cuts and moves**. Preview with sound; export to MP4 or GIF.
+- **Shrink-more** offer for videos that already fit but could be smaller.
+- **Themes & languages** — Discord / DokiDoki / Aero themes, UK / RU / EN.
+- **Auto-updates** — pulls the latest code from GitHub on every launch.
 
-**3 · Менеджер** — редагувати або видаляти вже надіслані повідомлення за ID.
-ID надісланих повідомлень підхоплюються автоматично у випадний список.
+## Install (for friends — no Python needed)
 
-**4 · Утиліти**:
-- Генератор динамічних часових міток `<t:..>` (усі стилі Discord)
-- Декодер ID (snowflake → дата/час створення)
-- Оформлювач тексту (жирний, курсив, код, спойлер, блок коду…)
-- Підбір кольору → HEX + decimal для embed
+1. Download the release `.exe` (or `setup.zip` and run `Install.bat`).
+2. It installs Python + ffmpeg via winget if missing, sets up autostart, and starts in the tray.
+3. Update anytime with the **Check for updates** button or `Update now.bat`.
 
-## Запуск
+## Build it yourself
 
-1. Встанови **Python 3.8+** з [python.org](https://python.org)
-   (на Windows постав галочку *Add Python to PATH*). `tkinter` вже в комплекті.
-2. Подвійний клік на **`Запустити.bat`** або в терміналі:
-   ```
-   python discord_toolbox.py
-   ```
+Requires Python 3 and ffmpeg (`winget install Gyan.FFmpeg`). Run `Build EXE.bat` for a single-file executable, or run the Python entry point directly.
 
-## Як отримати URL вебхука
+---
 
-Discord: **Канал → Налаштування каналу (⚙) → Integrations → Webhooks →
-New Webhook → Copy Webhook URL**. Встав у поле «URL» зверху — він спільний для всіх вкладок.
+## Support this project ❤
 
-## Файли
+Discord Auto-Compress is **free and open-source (MIT)**. If it saves you time, you can help keep it going:
 
-```
-DiscordWebhookStudio/
-├── discord_toolbox.py   # ⭐ мега-програма (усі 4 інструменти)
-├── webhook_studio.py    # стара окрема версія (лише надсилання)
-├── Запустити.bat        # запуск подвійним кліком (Windows)
-└── README.md
-```
+- ❤ **Donate** — use the **Sponsor** button at the top of this repo, or the **Support** button inside the app (Settings → About).
+- ★ **Get the ready-to-run build** — a one-click `.exe` with zero setup, for a small price.
 
-## Безпека
+Every bit of support is genuinely appreciated and goes straight into new features.
 
-- URL вебхука — це «ключ» до публікації в каналі. Не діліться ним.
-- URL зберігається локально у `~/.discord_toolbox.json` лише для зручності.
-- Усі запити йдуть напряму на `discord.com`, без посередників.
-- Редагувати/видаляти можна лише повідомлення, надіслані тим самим вебхуком.
+## License
+
+[MIT](LICENSE) — free to use, modify and share.
+
+---
+
+*This repo also bundles a separate webhook tool (`discord_toolbox.py`) — see its header for usage.*

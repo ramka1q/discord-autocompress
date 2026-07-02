@@ -19,6 +19,7 @@ import dc_core
 import deps
 import i18n
 import jokes
+import monetize
 import themes
 
 APP_VERSION = "2.0"
@@ -634,6 +635,23 @@ class SettingsApp:
         }[self.lang]
         tk.Label(f, text=about, bg=self.P["bg"], fg=self.P["text"], font=(themes.FONT, 11),
                  justify="left", anchor="w").pack(anchor="w")
+        # ---- підтримати розробника (показується лише коли автор задав посилання) ----
+        if monetize.has_support() or monetize.has_pro():
+            box = tk.Frame(f, bg=self.P["bg"]); box.pack(anchor="w", pady=(16, 0))
+            lab = {"uk": "Подобається програма? Підтримай розробника ❤",
+                   "ru": "Нравится программа? Поддержи разработчика ❤",
+                   "en": "Enjoying the app? Support the developer ❤"}.get(self.lang)
+            tk.Label(box, text=lab, bg=self.P["bg"], fg=self.P["text"],
+                     font=(themes.FONT, 11, "bold")).pack(anchor="w", pady=(0, 6))
+            row = tk.Frame(box, bg=self.P["bg"]); row.pack(anchor="w")
+            if monetize.has_support():
+                t = {"uk": "❤ Підтримати", "ru": "❤ Поддержать", "en": "❤ Support"}.get(self.lang)
+                self._btn(row, t, lambda: monetize.open_url(monetize.SUPPORT_URL)).pack(side="left", padx=(0, 8))
+            if monetize.has_pro():
+                t = {"uk": "★ Купити Pro (.exe)", "ru": "★ Купить Pro (.exe)",
+                     "en": "★ Get Pro (.exe)"}.get(self.lang)
+                self._btn(row, t, lambda: monetize.open_url(monetize.PRO_URL),
+                          primary=False).pack(side="left")
 
     # ---------- збереження ----------
     def _collect(self):

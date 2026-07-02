@@ -12,6 +12,7 @@
     "deps.py",
     "editor.py",
     "jokes.py",
+    "monetize.py",
     "discord_autowatch.py",
     "discord_compressor.py",
     "discord_toolbox.py",
