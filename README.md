@@ -20,7 +20,7 @@ The app lives quietly in the system tray. When you press **Ctrl+V** in Discord a
 - **Themes & languages** — Discord / DokiDoki / Aero themes, UK / RU / EN.
 - **Auto-updates** — pulls the latest code from GitHub on every launch.
 
-## Install (for friends — no Python needed)
+## Install (no Python needed)
 
 1. Download the release `.exe` (or `setup.zip` and run `Install.bat`).
 2. It installs Python + ffmpeg via winget if missing, sets up autostart, and starts in the tray.
