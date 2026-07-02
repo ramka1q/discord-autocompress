@@ -1262,12 +1262,25 @@ class Watcher:
     def quit_app(self):
         try:
             if self.tray:
-                self.tray.stop()
+                self.tray.stop()          # posts WM_CLOSE -> NIM_DELETE на потоці трею
         except Exception:
             pass
         try:
             self.root.quit()
             self.root.destroy()
+        except Exception:
+            pass
+        # ГАРАНТОВАНИЙ вихід. Раніше лишався ЗОМБІ-процес: значок трею вже видалено
+        # (NIM_DELETE), але не-daemon-потік (клав. хук/автооновлення) тримав процес живим
+        # -> на рестарті нова копія бачила старе вікно трею (single-instance) й не піднімалась,
+        # тож значок «зникав». Даємо трею мить обробити WM_CLOSE, тоді жорстко виходимо.
+        try:
+            import time as _t
+            _t.sleep(0.25)
+        except Exception:
+            pass
+        try:
+            os._exit(0)
         except Exception:
             pass
 
