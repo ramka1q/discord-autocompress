@@ -143,6 +143,11 @@ STR = {
     "perf_hint":        {"uk": "Перевіряє ffmpeg, ядра CPU і швидкість стиснення.",
                          "ru": "Проверяет ffmpeg, ядра CPU и скорость сжатия.",
                          "en": "Checks ffmpeg, CPU cores and compression speed."},
+    "perf_dl":          {"uk": "Скачую ffmpeg…", "ru": "Скачиваю ffmpeg…", "en": "Downloading ffmpeg…"},
+    "perf_dl_ok":       {"uk": "Все скачано ✓", "ru": "Всё скачано ✓", "en": "All downloaded ✓"},
+    "perf_dl_fail":     {"uk": "Не вдалося скачати саме — відкрий вкладку «Встановлення» ⬇",
+                         "ru": "Не удалось скачать само — открой вкладку «Установка» ⬇",
+                         "en": "Auto-download failed — open the Setup ⬇ tab"},
 
     # ---- трей ----
     "tray_open":        {"uk": "Відкрити меню", "ru": "Открыть меню", "en": "Open menu"},

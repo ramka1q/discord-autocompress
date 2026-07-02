@@ -419,11 +419,49 @@ class SettingsApp:
         self.perf_btn.config(state="disabled", text=self.T("perf_running"))
         for w in self.perf_box.winfo_children():
             w.destroy()
+        # статус + смужка прогресу (для скачування ffmpeg і для самого тесту)
+        self.perf_status = self._lbl(self.perf_box, "", size=10, bold=True)
+        self.perf_status.pack(anchor="w")
+        self._perf_barw = 440
+        bar = tk.Frame(self.perf_box, bg=self.P["dark"], height=10, width=self._perf_barw)
+        bar.pack(anchor="w", pady=(6, 0))
+        bar.pack_propagate(False)
+        self.perf_fill = tk.Frame(bar, bg=self.P["accent"])
+        self.perf_fill.place(x=0, y=0, relheight=1, width=1)
+
+        if deps.all_ok(refresh=True):
+            return self._perf_test()
+        # ffmpeg нема — НЕ показуємо помилки: самі все скачуємо, з відсотками
+        self._perf_set(self.T("perf_dl"), 0)
+        deps.install_progress(
+            progress_cb=lambda v: self.win.after(0, lambda v=v: self._perf_set(self.T("perf_dl"), v)),
+            done_cb=lambda ok: self.win.after(0, lambda ok=ok: self._perf_dl_done(ok)))
+
+    def _perf_set(self, txt, pct):
+        try:
+            self.perf_status.config(text=f"{txt}  {int(pct)}%", fg=self.P["text"])
+            self.perf_fill.place_configure(width=max(1, int(self._perf_barw * pct / 100)))
+        except (tk.TclError, AttributeError):
+            pass
+
+    def _perf_dl_done(self, ok):
+        if ok:
+            self._perf_set(self.T("perf_dl_ok"), 100)
+            return self.win.after(600, self._perf_test)   # секунда «Все скачано ✓ 100%» — і тест
+        try:
+            self.perf_btn.config(state="normal", text=self.T("perf_run"))
+            self.perf_status.config(text=self.T("perf_dl_fail"), fg=self.P["warn"])
+        except (tk.TclError, AttributeError):
+            pass
+
+    def _perf_test(self):
+        self._perf_set(self.T("perf_running"), 0)
 
         def work():
             try:
                 import optimize_test
-                res = optimize_test.run(lambda v: None)
+                res = optimize_test.run(lambda v: self.win.after(
+                    0, lambda v=v: self._perf_set(self.T("perf_running"), v)))
             except Exception as e:
                 res = {"lines": [("✗", str(e)[:60])], "verdict": "—", "ok": False}
             self.win.after(0, lambda: self._perf_done(res))
@@ -431,6 +469,8 @@ class SettingsApp:
 
     def _perf_done(self, res):
         try:
+            for w in self.perf_box.winfo_children():   # прибрати статус і смужку
+                w.destroy()
             self.perf_btn.config(state="normal", text=self.T("perf_run"))
             colmap = {"✓": self.P["green"], "⚠": self.P["warn"], "✗": self.P["red"]}
             for icon, text in res["lines"]:
