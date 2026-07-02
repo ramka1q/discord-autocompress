@@ -872,7 +872,7 @@ class VideoEditor(tk.Toplevel):
         threading.Thread(target=worker, daemon=True).start()
 
     def _start_export_jokes(self):
-        self._jokes_eff = jokes.effective(self.cfg)
+        self._jokes_eff = jokes.facts_for(host.LANG)
         self._joke_i = host.kernel32.GetTickCount() % max(1, len(self._jokes_eff))
         self._rotate_export_joke()
 
@@ -881,8 +881,8 @@ class VideoEditor(tk.Toplevel):
             if not self.busy or not self.joke_lbl.winfo_exists():
                 self.joke_lbl.config(text="")
                 return
-            eff = getattr(self, "_jokes_eff", None) or ["🐮"]
-            self.joke_lbl.config(text="🐮  " + eff[self._joke_i % len(eff)])
+            eff = getattr(self, "_jokes_eff", None) or ["💡"]
+            self.joke_lbl.config(text="💡  " + eff[self._joke_i % len(eff)])
             self._joke_i += 1
         except (tk.TclError, AttributeError):
             return

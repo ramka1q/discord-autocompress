@@ -22,7 +22,7 @@ import jokes
 import monetize
 import themes
 
-APP_VERSION = "2.0"
+APP_VERSION = "1.0"
 
 
 class SettingsApp:
@@ -75,7 +75,6 @@ class SettingsApp:
         self.v_shrink = tk.BooleanVar(w, c.get("offer_shrink", True))
         self.v_sound = tk.BooleanVar(w, c.get("sound_done", True))
         self._sound_file = c.get("sound_file", "")                # свій .wav звук (пусто = звук Windows)
-        self._custom = list(c.get("custom_jokes", []) or [])      # свої жарти (вбудовані видаляти НЕ можна)
         self.v_theme = tk.StringVar(w, c.get("theme", "discord"))
         self.v_lang = tk.StringVar(w, c.get("lang", "en"))
         for v in (self.v_target, self.v_auto, self.v_block, self.v_paste, self.v_audio,
@@ -188,7 +187,7 @@ class SettingsApp:
 
         self._nav = {}
         tabs = [("general", "tab_general", "⚙"), ("media", "tab_media", "🎞"),
-                ("appearance", "tab_appearance", "🎨"), ("jokes", "tab_jokes", "🐮"),
+                ("appearance", "tab_appearance", "🎨"), ("facts", "tab_facts", "💡"),
                 ("setup", "tab_setup", "⬇"),
                 ("updates", "tab_updates", "⭳"), ("performance", "tab_performance", "⚡"),
                 ("about", "tab_about", "ⓘ")]
@@ -246,7 +245,7 @@ class SettingsApp:
         for w in self.content.winfo_children():
             w.destroy()
         {"general": self._tab_general, "media": self._tab_media,
-         "appearance": self._tab_appearance, "jokes": self._tab_jokes, "setup": self._tab_setup,
+         "appearance": self._tab_appearance, "facts": self._tab_facts, "setup": self._tab_setup,
          "updates": self._tab_updates, "performance": self._tab_performance,
          "about": self._tab_about}[key]()
 
@@ -444,59 +443,21 @@ class SettingsApp:
         except tk.TclError:
             pass
 
-    def _tab_jokes(self):
+    def _tab_facts(self):
         f = self._pad()
         P = self.P
-        self._header(f, self.T("jokes_title"))
-        self._lbl(f, self.T("jokes_hint"), size=9, muted=True).pack(anchor="w", pady=(0, 8))
+        self._header(f, self.T("facts_title"))
+        self._lbl(f, self.T("facts_hint"), size=9, muted=True).pack(anchor="w", pady=(0, 8))
         box = tk.Frame(f, bg=P["bg"]); box.pack(fill="both", expand=True)
         sb = tk.Scrollbar(box); sb.pack(side="right", fill="y")
-        self._joke_list = tk.Listbox(box, yscrollcommand=sb.set, bg=P["dark"], fg=P["text"],
-                                     selectbackground=P["accent"], selectforeground="#fff",
-                                     highlightthickness=0, bd=0, font=(themes.FONT, 10),
-                                     activestyle="none", height=9)
-        self._joke_list.pack(side="left", fill="both", expand=True)
-        sb.config(command=self._joke_list.yview)
-        self._joke_count_lbl = self._lbl(f, "", size=9, muted=True)
-        self._joke_count_lbl.pack(anchor="w", pady=(6, 8))
-        row = tk.Frame(f, bg=P["bg"]); row.pack(fill="x")
-        self._joke_entry = tk.Entry(row, bg=P["dark"], fg=P["text"], insertbackground=P["text"],
-                                    relief="flat", font=(themes.FONT, 11))
-        self._joke_entry.pack(side="left", fill="x", expand=True, ipady=5, padx=(0, 6))
-        self._joke_entry.bind("<Return>", lambda e: self._joke_add())
-        self._btn(row, self.T("jokes_add"), self._joke_add).pack(side="left")
-        row2 = tk.Frame(f, bg=P["bg"]); row2.pack(fill="x", pady=(8, 0))
-        self._btn(row2, self.T("jokes_del"), self._joke_del, primary=False).pack(side="left")
-        self._joke_refresh()
-
-    def _joke_refresh(self):
-        # у списку — ЛИШЕ свої жарти (вбудовані видаляти не можна)
-        lb = self._joke_list
-        lb.delete(0, "end")
-        for j in self._custom:
-            lb.insert("end", j)
-        try:
-            self._joke_count_lbl.config(
-                text=self.T("jokes_count", builtin=jokes.count(), custom=len(self._custom)))
-        except Exception:
-            pass
-
-    def _joke_add(self):
-        txt = self._joke_entry.get().strip()
-        if not txt:
-            return
-        self._custom.append(txt)
-        self._joke_entry.delete(0, "end")
-        self._joke_refresh()
-        self._autosave()
-
-    def _joke_del(self):
-        sel = self._joke_list.curselection()
-        if not sel or sel[0] >= len(self._custom):
-            return
-        del self._custom[sel[0]]      # видаляємо лише СВІЙ жарт
-        self._joke_refresh()
-        self._autosave()
+        lb = tk.Listbox(box, yscrollcommand=sb.set, bg=P["dark"], fg=P["text"],
+                        selectbackground=P["dark"], selectforeground=P["text"],
+                        highlightthickness=0, bd=0, font=(themes.FONT, 10),
+                        activestyle="none", height=13)
+        lb.pack(side="left", fill="both", expand=True)
+        sb.config(command=lb.yview)
+        for fact in jokes.facts_for(self.lang):     # лише читання — редагувати нема чого
+            lb.insert("end", "💡  " + fact)
 
     # ---- свій звук «готово» ----
     def _refresh_sound_lbl(self):
@@ -664,17 +625,26 @@ class SettingsApp:
 
     # ---------- збереження ----------
     def _collect(self):
-        # усі змінні існують від __init__, тож читаємо напряму (без hasattr-пасток)
+        # КОЖНЕ поле читаємо ОКРЕМО: якщо якесь tk-поле у поганому стані (напр. порожній
+        # audio_kbps -> TclError), інші (зокрема sound_file) ВСЕ ОДНО збережуться.
+        # Раніше один спільний try обнуляв усе -> свій звук не зберігався (грав лише прев'ю).
         c = dict(self.cfg)
+
+        def g(key, var):
+            try:
+                c[key] = var.get()
+            except (tk.TclError, AttributeError, ValueError):
+                pass
+
+        g("target_mb", self.v_target); g("auto_scale", self.v_auto)
+        g("block_paste", self.v_block); g("auto_paste", self.v_paste)
+        g("audio_kbps", self.v_audio)
+        g("compress_video", self.v_cv); g("compress_images", self.v_ci)
+        g("compress_audio", self.v_ca); g("keep_local", self.v_keep)
+        g("offer_shrink", self.v_shrink); g("sound_done", self.v_sound)
         try:
-            c.update(target_mb=self.v_target.get(), auto_scale=self.v_auto.get(),
-                     block_paste=self.v_block.get(), auto_paste=self.v_paste.get(),
-                     audio_kbps=self.v_audio.get(),
-                     compress_video=self.v_cv.get(), compress_images=self.v_ci.get(),
-                     compress_audio=self.v_ca.get(), keep_local=self.v_keep.get(),
-                     offer_shrink=self.v_shrink.get(), sound_done=self.v_sound.get(),
-                     sound_file=self._sound_file, custom_jokes=list(self._custom))
-        except (tk.TclError, AttributeError):
+            c["sound_file"] = self._sound_file
+        except AttributeError:
             pass
         c["theme"] = self.cfg.get("theme", "discord")
         c["lang"] = self.cfg.get("lang", "en")

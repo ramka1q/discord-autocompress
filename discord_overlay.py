@@ -207,7 +207,7 @@ def load_config() -> dict:
            "lang": "en", "theme": "discord",   # перший запуск (нема конфіга) -> англійська
            "compress_video": True, "compress_images": True, "compress_audio": True,
            "keep_local": "ask", "offer_shrink": True, "sound_done": True,
-           "sound_file": "", "custom_jokes": []}
+           "sound_file": ""}
     try:
         with open(CONFIG_PATH, encoding="utf-8") as f:
             cfg.update(json.load(f))
@@ -474,22 +474,22 @@ class Overlay(tk.Toplevel):
                                    smooth=True, fill=C_DARK, outline="", tags="dyn")
         self.fill = self.canvas.create_polygon(_rr_pts(self.bx1, self.by, self.bx1 + 1, self.by + 12, 6),
                                                smooth=True, fill=C_BLURPLE, outline="", tags="dyn")
-        # жарт про навоз і Дениса — щоб скоротати час завантаження
+        # цікавий факт про програму — щоб скоротати час завантаження
         self.joke_lbl = tk.Label(self.canvas, text="", bg=C_BG, fg=C_MUTED, font=(FONT, 9),
                                  wraplength=self.W - 84, justify="center")
         self._place(self.joke_lbl, self.W // 2, 250)
-        self._jokes_eff = jokes.effective(self.cfg)                      # вбудовані − приховані + свої
+        self._jokes_eff = jokes.facts_for(LANG)                          # факти поточною мовою
         self._joke_i = kernel32.GetTickCount() % max(1, len(self._jokes_eff))  # старт «випадковий», без random
         self._rotate_joke()
         self._btn_full(L("ov_cancel"), lambda: self.cancel.update(flag=True), 316, primary=False)
 
     def _rotate_joke(self):
-        """Крутить жарти кожні ~4.5с, поки видно екран стиснення."""
+        """Крутить цікаві факти кожні ~4.5с, поки видно екран стиснення."""
         try:
             if not self.joke_lbl.winfo_exists():
                 return
-            eff = getattr(self, "_jokes_eff", None) or ["🐮"]
-            self.joke_lbl.config(text="🐮  " + eff[self._joke_i % len(eff)])
+            eff = getattr(self, "_jokes_eff", None) or ["💡"]
+            self.joke_lbl.config(text="💡  " + eff[self._joke_i % len(eff)])
             self._joke_i += 1
         except (tk.TclError, AttributeError):
             return
