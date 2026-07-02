@@ -22,13 +22,13 @@ The app lives quietly in the system tray. When you press **Ctrl+V** in Discord a
 
 ## Install (no Python needed)
 
-1. Download the release `.exe` (or `setup.zip` and run `Install.bat`).
+1. Download the release `.exe` (or `setup.zip` and run `scripts/Install.bat`).
 2. It installs Python + ffmpeg via winget if missing, sets up autostart, and starts in the tray.
-3. Update anytime with the **Check for updates** button or `Update now.bat`.
+3. Update anytime with the **Check for updates** button or `scripts/Update now.bat`.
 
 ## Build it yourself
 
-Requires Python 3 and ffmpeg (`winget install Gyan.FFmpeg`). Run `Build EXE.bat` for a single-file executable, or run the Python entry point directly.
+Requires Python 3 and ffmpeg (`winget install Gyan.FFmpeg`). Run the app directly with `python discord_overlay.py`, or build a single-file executable with PyInstaller: `pyinstaller --onefile --noconsole launcher.py`.
 
 ---
 

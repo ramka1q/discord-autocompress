@@ -17,13 +17,13 @@
     "discord_compressor.py",
     "discord_toolbox.py",
     "update.py",
-    "Update now.bat",
+    "scripts/Update now.bat",
     "autostart_enable.ps1",
     "autostart_disable.ps1",
-    "Запустити фон (прихований).bat",
-    "Зупинити фон.bat",
-    "Налаштування.bat",
-    "Стиснути відео.bat",
-    "Авто-стиснення.bat"
+    "scripts/Запустити фон (прихований).bat",
+    "scripts/Зупинити фон.bat",
+    "scripts/Налаштування.bat",
+    "scripts/Стиснути відео.bat",
+    "scripts/Авто-стиснення.bat"
   ]
 }
