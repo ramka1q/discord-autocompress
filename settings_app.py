@@ -37,7 +37,7 @@ class SettingsApp:
         self.on_apply = on_apply
         self.on_close_cb = on_close
         self.on_restart = on_restart
-        self.lang = self.cfg.get("lang", "uk")
+        self.lang = self.cfg.get("lang", "en")
         self.P = themes.palette(self.cfg.get("theme", "discord"))
         self._or_active = True
         # якщо чогось бракує (ffmpeg) — одразу відкриваємо вкладку «Встановлення»
@@ -77,7 +77,7 @@ class SettingsApp:
         self._sound_file = c.get("sound_file", "")                # свій .wav звук (пусто = звук Windows)
         self._custom = list(c.get("custom_jokes", []) or [])      # свої жарти (вбудовані видаляти НЕ можна)
         self.v_theme = tk.StringVar(w, c.get("theme", "discord"))
-        self.v_lang = tk.StringVar(w, c.get("lang", "uk"))
+        self.v_lang = tk.StringVar(w, c.get("lang", "en"))
         for v in (self.v_target, self.v_auto, self.v_block, self.v_paste, self.v_audio,
                   self.v_cv, self.v_ci, self.v_ca, self.v_keep, self.v_shrink, self.v_sound):
             v.trace_add("write", lambda *a: self._autosave())
@@ -677,7 +677,7 @@ class SettingsApp:
         except (tk.TclError, AttributeError):
             pass
         c["theme"] = self.cfg.get("theme", "discord")
-        c["lang"] = self.cfg.get("lang", "uk")
+        c["lang"] = self.cfg.get("lang", "en")
         return c
 
     def _save(self):

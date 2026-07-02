@@ -42,7 +42,7 @@ C_RED = "#ed4245"
 C_WARN = "#faa61a"
 C_KEY = "#010203"
 FONT = "Segoe UI"
-LANG = "uk"
+LANG = "en"
 
 
 def apply_theme(name: str):
@@ -204,7 +204,7 @@ def send_ctrl_v():
 def load_config() -> dict:
     cfg = {"target_mb": 10, "audio_kbps": 128, "auto_scale": True,
            "block_paste": True, "auto_paste": True,
-           "lang": "uk", "theme": "discord",
+           "lang": "en", "theme": "discord",   # перший запуск (нема конфіга) -> англійська
            "compress_video": True, "compress_images": True, "compress_audio": True,
            "keep_local": "ask", "offer_shrink": True, "sound_done": True,
            "sound_file": "", "custom_jokes": []}
@@ -1228,7 +1228,7 @@ class Watcher:
     def __init__(self, open_settings=False):
         global LANG
         self.cfg = load_config()
-        LANG = self.cfg.get("lang", "uk")
+        LANG = self.cfg.get("lang", "en")
         apply_theme(self.cfg.get("theme", "discord"))
         threading.Thread(target=_autoupdate_bg, daemon=True).start()
         self.root = tk.Tk()
@@ -1348,7 +1348,7 @@ class Watcher:
     def _on_settings_apply(self, cfg):
         global LANG
         self.cfg = cfg
-        LANG = cfg.get("lang", "uk")
+        LANG = cfg.get("lang", "en")
         apply_theme(cfg.get("theme", "discord"))
         try:
             if self.tray:
