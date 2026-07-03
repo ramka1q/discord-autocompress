@@ -251,6 +251,10 @@ class VideoEditor(tk.Toplevel):
         self._wndproc_ref = None
         self._dropped = []           # черга перетягнутих файлів (WndProc -> Tk-поллер)
         self._frames = [os.path.join(self._tmp, "a.png"), os.path.join(self._tmp, "b.png")]
+        # ---- адаптивний розмір (вікно можна розтягнути/розгорнути на весь екран) ----
+        self.VW, self.VH, self.TW = VideoEditor.VW, VideoEditor.VH, VideoEditor.TW
+        self._rs_after = None
+        self._chrome_h = None
 
         self.title("✂ Редактор відео — Discord Auto-Compress")
         try:
@@ -266,6 +270,7 @@ class VideoEditor(tk.Toplevel):
         self._show_poster(0.0)
         self._gen_visuals(si)        # кіно-стрічка + хвиля для першого джерела
         self.after(400, self._enable_dnd)   # перетягування файлів (після мапінгу вікна)
+        self.after(600, self._arm_resize)   # адаптивний розмір (після першого лейауту)
 
     # ------------------------------------------------------------ джерела -- #
     def _new_piece(self, si, s, e):
@@ -306,18 +311,7 @@ class VideoEditor(tk.Toplevel):
         self.video = tk.Canvas(self, width=self.VW + 2 * self.VPAD,
                                height=self.VH + 2 * self.VPAD, bg=C_BG, highlightthickness=0)
         self.video.pack(pady=(8, 0))
-        m = 14
-        self.video.create_polygon(
-            host._rr_pts(self.VPAD - m, self.VPAD - m,
-                         self.VPAD + self.VW + m, self.VPAD + self.VH + m, 16),
-            smooth=True, fill=C_BG2, outline="", tags="card")
-        self.video.create_polygon(
-            host._rr_pts(self.VPAD - m, self.VPAD - m,
-                         self.VPAD + self.VW + m, self.VPAD - m + 3, 3),
-            smooth=True, fill=C_BLURPLE, outline="", tags="card")
-        self.video.create_rectangle(self.VPAD, self.VPAD, self.VPAD + self.VW,
-                                    self.VPAD + self.VH, fill="#000000", outline=C_DARK,
-                                    tags="screen")
+        self._draw_player_frame()
         self.video.bind("<Button-1>", self._video_press)
         self.video.bind("<B1-Motion>", self._video_motion)
         self.video.bind("<ButtonRelease-1>", self._video_release)
@@ -347,7 +341,7 @@ class VideoEditor(tk.Toplevel):
         self.ovl.bind("<Button-3>", self._ovl_menu)
         self.tl = tk.Canvas(tp, width=self.TW, height=TLH, bg=C_TRACK, highlightthickness=0)
         self.tl.pack(padx=10, pady=(0, 3))
-        self.WAVE_H = 58
+        self.WAVE_H = 26
         self.wave = tk.Canvas(tp, width=self.TW, height=self.WAVE_H, bg=C_TRACK, highlightthickness=0)
         self.wave.pack(padx=10, pady=(0, 10))
         self.tl.bind("<Button-1>", self._tl_press)
@@ -374,7 +368,6 @@ class VideoEditor(tk.Toplevel):
         sc = tk.Frame(self, bg=C_BG); sc.pack(pady=(0, 2))
         self._btn(sc, "◀ Пересунути", lambda: self._move(-1), primary=False, small=True).pack(side="left", padx=2)
         self._btn(sc, "Пересунути ▶", lambda: self._move(1), primary=False, small=True).pack(side="left", padx=2)
-        self._btn(sc, "► Переглянути", self._play_segment, primary=False, small=True).pack(side="left", padx=2)
         self._btn(sc, "🗑 Прибрати", self._remove, primary=False, small=True).pack(side="left", padx=2)
         self._btn(sc, "🔍−", lambda: self._zoom_step(0.8), primary=False, small=True).pack(side="left", padx=(14, 2))
         self._btn(sc, "🔍+", lambda: self._zoom_step(1.25), primary=False, small=True).pack(side="left", padx=2)
@@ -398,6 +391,77 @@ class VideoEditor(tk.Toplevel):
 
     def _btn(self, parent, text, cmd, primary=True, minw=0, small=False):
         return PillBtn(parent, text, cmd, primary=primary, minw=minw, small=small)
+
+    def _draw_player_frame(self):
+        """Картка-підложка і чорний екран плеєра (перемальовується при зміні розміру)."""
+        c = self.video
+        c.delete("card"); c.delete("screen")
+        m = 14
+        c.create_polygon(
+            host._rr_pts(self.VPAD - m, self.VPAD - m,
+                         self.VPAD + self.VW + m, self.VPAD + self.VH + m, 16),
+            smooth=True, fill=C_BG2, outline="", tags="card")
+        c.create_rectangle(self.VPAD, self.VPAD, self.VPAD + self.VW,
+                           self.VPAD + self.VH, fill="#000000", outline=C_DARK,
+                           tags="screen")
+        c.tag_lower("screen")
+        c.tag_lower("card")
+
+    # ---- адаптивний розмір: редактор можна розтягнути/розгорнути на весь екран ----
+    def _arm_resize(self):
+        """Фіксує мінімальний розмір = початковий і вмикає реакцію на розтягування."""
+        try:
+            self.update_idletasks()
+            self.minsize(self.winfo_width(), self.winfo_height())
+            self._chrome_h = self.winfo_height() - (self.VH + 2 * self.VPAD)
+            self.bind("<Configure>", self._on_resize)
+        except tk.TclError:
+            pass
+
+    def _on_resize(self, ev):
+        if ev.widget is not self or self.busy:
+            return
+        if self._rs_after:
+            try: self.after_cancel(self._rs_after)
+            except Exception: pass
+        self._rs_after = self.after(120, self._apply_resize)
+
+    def _apply_resize(self):
+        self._rs_after = None
+        try:
+            w, h = self.winfo_width(), self.winfo_height()
+        except tk.TclError:
+            return
+        if w < 200 or h < 200:
+            return
+        if self._chrome_h is None:      # скільки висоти займає все, ОКРІМ плеєра
+            self._chrome_h = h - (self.VH + 2 * self.VPAD)
+        avail_ph = h - self._chrome_h - 2 * self.VPAD
+        vw = max(480, min(w - 2 * self.VPAD - 24, int(avail_ph * 16 / 9)))
+        vh = max(270, int(vw * 9 / 16))
+        tw = max(600, w - 90)
+        if abs(vw - self.VW) < 8 and abs(tw - self.TW) < 8:
+            return
+        self.VW, self.VH, self.TW = vw, vh, tw
+        self.video.config(width=vw + 2 * self.VPAD, height=vh + 2 * self.VPAD)
+        pk = min(self.VW / self._ccw, self.VH / self._cch)
+        self._pcw = max(2, int(self._ccw * pk / 2) * 2)
+        self._pch = max(2, int(self._cch * pk / 2) * 2)
+        self._draw_player_frame()
+        for cnv in (self.ovl, self.tl, self.wave):
+            cnv.config(width=tw)
+        try:
+            self.joke_lbl.config(wraplength=vw)
+        except tk.TclError:
+            pass
+        if self._embedded:              # вікно ffplay підганяємо під новий екран
+            try:
+                _u32.MoveWindow(self._embedded, self.VPAD, self.VPAD, self.VW, self.VH, True)
+            except Exception:
+                pass
+        self._clamp_scroll(self._pps())
+        self._redraw()
+        self._show_poster(self.cur)
 
     def _show_help(self):
         """Довідка окремим маленьким вікном (замість написів у самому редакторі)."""
@@ -1378,32 +1442,12 @@ class VideoEditor(tk.Toplevel):
         if c is None:
             return
         try:
+            # великий графік звуку прибрано — хвиля видна прямо на вибраному кліпі;
+            # ця смужка лише для ДОДАНИХ звуків (зелені блоки)
             c.delete("all")
             W, H = self.TW, self.WAVE_H
-            LANE = 36                        # верх: хвиля кліпів; низ: додані звуки
-            mid = LANE / 2.0
+            LANE = 0
             c.create_rectangle(0, 0, W, H, fill=C_TRACK, outline="")
-            c.create_line(0, LANE + 1, W, LANE + 1, fill=C_DARK)
-            for slot, ix, cx1, cx2 in self._clip_rects:
-                p = self.pieces[ix]
-                src = self._src(p)
-                env = src.get("env")
-                wpx = cx2 - cx1
-                if wpx <= 0:
-                    continue
-                if not env or p["mute"]:
-                    continue
-                s, e = p["s"], p["e"]
-                span = max(0.001, e - s)
-                col = C_BLURPLE if slot == self.sel else "#4a4d57"
-                xx = max(0.0, cx1)
-                xend = min(float(W), cx2)
-                while xx < xend:
-                    a = self._env_at(env, s + (xx - cx1) / wpx * span)
-                    h = max(0.6, a * (mid - 1))
-                    c.create_line(xx, mid - h, xx, mid + h, fill=col, width=1)
-                    xx += 2
-            # ---- додані звуки (зелені блоки, тягнуться мишкою, ПКМ — меню) ----
             self._snd_rects = []
             pps = self._pps()
             for i, sn in enumerate(self.snds):
@@ -1433,9 +1477,6 @@ class VideoEditor(tk.Toplevel):
                 v = "" if sn["vol"] == 1.0 else f" · {int(sn['vol'] * 100)}%"
                 c.create_text(max(x1 + 6, 6), (LANE + H) / 2 + 1, anchor="w",
                               text=f"🎵 {nm}{v}", fill="#10121a", font=(FONT, 8, "bold"))
-            if all(not self._src(self.pieces[ix]).get("env")
-                   for _, ix, _, _ in self._clip_rects):
-                c.create_text(W // 2, mid, text="хвиля звуку відео", fill=C_MUTED, font=(FONT, 8))
             if not self.snds:
                 c.create_text(W // 2, (LANE + H) / 2 + 1,
                               text="🎵 сюди можна додати звук — ➕ або перетягни файл",
