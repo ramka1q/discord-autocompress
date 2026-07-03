@@ -77,6 +77,8 @@ C_CLIP_SEL = host.C_BLURPLE  # вибраний кліп
 C_HANDLE = "#ffffff"         # білі ручки-хендли обрізки (як у CapCut)
 C_PLAY = "#ffffff"           # плейхед
 C_SND = "#3ba55d"            # блоки доданих звуків
+C_OVL = "#a06be0"            # блоки накладок (медіа поверх відео)
+C_WAVE_IN = "#dfe6ff"        # хвиля всередині ВИБРАНОГО кліпа
 TLH = 66                     # висота доріжки монтажу
 THUMB_W = 40                 # ширина кадру кіно-стрічки
 IMG_DUR = 4.0                # скільки секунд показувати додану картинку (тягнеться ручками)
@@ -106,7 +108,13 @@ class VideoEditor(tk.Toplevel):
         self.pieces = [self._new_piece(si, 0.0, max(0.1, info["duration"]))]
         self.order = [0]
         self.sel = 0
-        self.snds = []               # додані звуки: {"path","at","dur","vol","name"}
+        self.snds = []               # додані звуки: {"path","at","dur","vol","name","env"}
+        self._sel_snd = None         # вибраний звук (його хвиля малюється в блоці)
+        # накладки ПОВЕРХ відео (картинка-в-картинці): {"src","s","e","at","zoom","nx","ny","mute"}
+        self.ovls = []
+        self.sel_ovl = None          # вибрана накладка -> рамка на прев'ю керує НЕЮ
+        self._ovl_rects = []
+        self._ovl_drag = None
 
         # ---- канвас експорту = розміри першого відео (кап 1920) ----
         w0 = int(info.get("width") or 1280) or 1280
@@ -200,7 +208,7 @@ class VideoEditor(tk.Toplevel):
 
     # ----------------------------------------------------------------- UI -- #
     def _build(self):
-        tk.Label(self, text="Клік по кліпу — вибрати · білі ручки — обрізати · клік по ВІДЕО — масштаб/позиція · ПКМ — меню · тягни файли сюди",
+        tk.Label(self, text="Клік по кліпу — вибрати · ручки — обрізати · клік по ВІДЕО — масштаб/позиція · ПКМ — меню (накладки теж) · тягни файли сюди",
                  bg=C_BG, fg=C_MUTED, font=(FONT, 9)).pack(pady=(10, 6))
         self.video = tk.Canvas(self, width=self.VW, height=self.VH, bg="black", highlightthickness=0)
         self.video.pack()
@@ -220,9 +228,17 @@ class VideoEditor(tk.Toplevel):
         self.redo_btn = self._btn(pc, "↷", self._redo_action, primary=False)
         self.redo_btn.pack(side="left", padx=3)
 
+        # ---- доріжка НАКЛАДОК (медіа поверх відео, як у CapCut) ----
+        self.OVL_H = 26
+        self.ovl = tk.Canvas(self, width=self.TW, height=self.OVL_H, bg=C_TRACK, highlightthickness=0)
+        self.ovl.pack(padx=14, pady=(4, 0))
+        self.ovl.bind("<Button-1>", self._ovl_press)
+        self.ovl.bind("<B1-Motion>", self._ovl_motion)
+        self.ovl.bind("<ButtonRelease-1>", self._ovl_release)
+        self.ovl.bind("<Button-3>", self._ovl_menu)
         # ---- доріжка монтажу: кіно-стрічка + ручки обрізки + плейхед ----
         self.tl = tk.Canvas(self, width=self.TW, height=TLH, bg=C_TRACK, highlightthickness=0)
-        self.tl.pack(padx=14, pady=(4, 2))
+        self.tl.pack(padx=14, pady=(2, 2))
         # аудіо-хвиля кліпів + смужка ДОДАНИХ звуків (тягнуться мишкою, ПКМ — меню)
         self.WAVE_H = 58
         self.wave = tk.Canvas(self, width=self.TW, height=self.WAVE_H, bg=C_TRACK, highlightthickness=0)
@@ -329,8 +345,10 @@ class VideoEditor(tk.Toplevel):
                     if d <= 0:
                         skipped += 1
                         continue
-                    self.snds.append({"path": p, "at": self._playhead_montage_t(),
-                                      "dur": d, "vol": 1.0, "name": os.path.basename(p)})
+                    sn = {"path": p, "at": self._playhead_montage_t(), "dur": d,
+                          "vol": 1.0, "name": os.path.basename(p), "env": None}
+                    self.snds.append(sn)
+                    self._gen_snd_env(sn)
                 else:
                     skipped += 1
                     continue
@@ -351,6 +369,20 @@ class VideoEditor(tk.Toplevel):
                 self.info_lbl.config(text="Цей формат не підтримується", fg=C_RED)
             except tk.TclError:
                 pass
+
+    def _gen_snd_env(self, sn):
+        """Хвиля доданого звуку — малюється всередині його блока, коли він вибраний."""
+        def work():
+            env = dc_core.audio_envelope(sn["path"], hz=100)
+            if env:
+                def apply():
+                    sn["env"] = env
+                    self._draw_wave()
+                try:
+                    self.after(0, apply)
+                except Exception:
+                    pass
+        threading.Thread(target=work, daemon=True).start()
 
     # ---- WM_DROPFILES: приймаємо перетягнуті файли БЕЗ сторонніх пакетів ----
     def _enable_dnd(self):
@@ -435,13 +467,35 @@ class VideoEditor(tk.Toplevel):
         self._frame_idx ^= 1
         png = self._frames[self._frame_idx]
         vf = self._transform_vf(piece, self._pcw, self._pch)
+        # накладки, активні на поточному монтажному часі — постер показує КОМПОЗИЦІЮ
+        mt = self._playhead_montage_t()
+        active = [dict(o) for o in self.ovls
+                  if o["at"] - 0.001 <= mt <= o["at"] + (o["e"] - o["s"]) + 0.001]
+
+        cmd = ["ffmpeg", "-y"]
+        if src["kind"] == "image":
+            cmd += ["-i", src["path"]]
+        else:
+            cmd += ["-ss", f"{t:.3f}", "-i", src["path"]]
+        if not active:
+            cmd += ["-frames:v", "1", "-vf", vf, png]
+        else:
+            fc = [f"[0:v]{vf}[b0]"]
+            vin = "[b0]"
+            for j, o in enumerate(active):
+                osrc = self.sources[o["src"]]
+                if osrc["kind"] == "image":
+                    cmd += ["-i", osrc["path"]]
+                else:
+                    tt = max(0.0, o["s"] + (mt - o["at"]))
+                    cmd += ["-ss", f"{tt:.3f}", "-i", osrc["path"]]
+                sw, sh, x, y = self._ovl_geom(o, self._pcw, self._pch)
+                fc.append(f"[{j + 1}:v]scale={sw}:{sh}[o{j}]")
+                fc.append(f"{vin}[o{j}]overlay={x}:{y}[b{j + 1}]")
+                vin = f"[b{j + 1}]"
+            cmd += ["-filter_complex", ";".join(fc), "-map", vin, "-frames:v", "1", png]
 
         def work():
-            if src["kind"] == "image":
-                cmd = ["ffmpeg", "-y", "-i", src["path"], "-frames:v", "1", "-vf", vf, png]
-            else:
-                cmd = ["ffmpeg", "-y", "-ss", f"{t:.3f}", "-i", src["path"],
-                       "-frames:v", "1", "-vf", vf, png]
             try:
                 rc = subprocess.run(cmd, capture_output=True, creationflags=dc_core.NO_WINDOW).returncode
             except Exception:
@@ -463,9 +517,15 @@ class VideoEditor(tk.Toplevel):
             pass
 
     # -------- масштаб/позиція відео на прев'ю: рамка з ручками (як у CapCut) -------- #
+    def _tf_target(self):
+        """Що редагує рамка на прев'ю: вибрана НАКЛАДКА, інакше вибраний кліп."""
+        if self.sel_ovl is not None and self.sel_ovl < len(self.ovls):
+            return self.ovls[self.sel_ovl]
+        return self._sel_piece()
+
     def _tf_rect(self):
-        """Прямокутник відео на канвасі прев'ю (з урахуванням zoom/nx/ny)."""
-        p = self._sel_piece()
+        """Прямокутник цілі рамки на канвасі прев'ю (з урахуванням zoom/nx/ny)."""
+        p = self._tf_target()
         src = self._src(p)
         iw = src["w"] or self._pcw
         ih = src["h"] or self._pch
@@ -483,13 +543,15 @@ class VideoEditor(tk.Toplevel):
         if not self._tf_on or self.playing:
             return
         x1, y1, x2, y2 = self._tf_rect()
-        c.create_rectangle(x1, y1, x2, y2, outline=C_HANDLE, width=2, tags="tf")
+        col = C_OVL if self.sel_ovl is not None else C_HANDLE
+        c.create_rectangle(x1, y1, x2, y2, outline=col, width=2, tags="tf")
         r = 7
         for hx, hy in ((x1, y1), (x2, y1), (x1, y2), (x2, y2)):    # кутові ручки
             c.create_rectangle(hx - r, hy - r, hx + r, hy + r,
-                               fill=C_HANDLE, outline=C_DARK, width=1, tags="tf")
-        c.create_text((x1 + x2) / 2, min(self.VH - 10, y2 + 14),
-                      text="тягни кут — масштаб · середину — позиція · подвійний клік — скинути",
+                               fill=col, outline=C_DARK, width=1, tags="tf")
+        what = " (накладка)" if self.sel_ovl is not None else ""
+        c.create_text((x1 + x2) / 2, min(self.VH - 10, max(12, y2 + 14)),
+                      text=f"тягни кут — масштаб · середину — позиція{what} · подвійний клік — скинути",
                       fill=C_HANDLE, font=(FONT, 8), tags="tf")
 
     def _video_press(self, ev):
@@ -497,7 +559,7 @@ class VideoEditor(tk.Toplevel):
             return
         if self.playing:
             self._pause()                 # пауза -> на постері можна редагувати рамку
-        p = self._sel_piece()
+        p = self._tf_target()
         if not self._tf_on:
             self._tf_on = True
             self._tf_drag = None
@@ -533,7 +595,7 @@ class VideoEditor(tk.Toplevel):
             self._push_undo()
             self._tf_pushed = True
         b["moved"] = True
-        p = self._sel_piece()
+        p = self._tf_target()
         if mode == "corner":
             d = max(8.0, ((ev.x - b["cx"]) ** 2 + (ev.y - b["cy"]) ** 2) ** 0.5)
             p["zoom"] = min(5.0, max(0.2, b["zoom"] * d / b["d0"]))
@@ -557,7 +619,7 @@ class VideoEditor(tk.Toplevel):
         self._redraw()                     # оновити значок 🔍 на кліпі
 
     def _tf_reset(self):
-        p = self._sel_piece()
+        p = self._tf_target()
         if p["zoom"] != 1.0 or p["nx"] or p["ny"]:
             self._push_undo()
             p["zoom"], p["nx"], p["ny"] = 1.0, 0.0, 0.0
@@ -818,7 +880,7 @@ class VideoEditor(tk.Toplevel):
     # ------------------------------------------------ скасувати / повторити --- #
     def _snapshot(self):
         return ([dict(p) for p in self.pieces], list(self.order), self.sel,
-                [dict(s) for s in self.snds])
+                [dict(s) for s in self.snds], [dict(o) for o in self.ovls])
 
     def _push_undo(self):
         self._undo.append(self._snapshot())
@@ -827,10 +889,13 @@ class VideoEditor(tk.Toplevel):
         self._redo.clear()
 
     def _apply_state(self, st):
-        pieces, order, sel, snds = st
+        pieces, order, sel, snds, ovls = st
         self.pieces = [dict(p) for p in pieces]
         self.order = list(order)
         self.snds = [dict(s) for s in snds]
+        self.ovls = [dict(o) for o in ovls]
+        self.sel_ovl = None
+        self._sel_snd = None
         self.sel = min(sel, len(self.order) - 1) if self.order else 0
         p = self._sel_piece()
         self.cur = min(max(self.cur, p["s"]), p["e"])
@@ -1073,6 +1138,16 @@ class VideoEditor(tk.Toplevel):
                               fill="#ffffff", font=(FONT, 8, "bold"))
             if sel:
                 self._sel_xs, self._sel_xe = cx1, cx2
+                # хвиля звуку прямо НА вибраному кліпі (внизу, як у CapCut)
+                env = self._src(p).get("env")
+                if env and not p["mute"]:
+                    by = TLH - 5
+                    span = max(0.001, e - s)
+                    xx = max(0.0, cx1)
+                    while xx < min(float(W), cx2):
+                        a = self._env_at(env, s + (xx - cx1) / max(1.0, cx2 - cx1) * span)
+                        c.create_line(xx, by - max(0.6, a * 17), xx, by, fill=C_WAVE_IN, width=1)
+                        xx += 2
                 self._draw_handle(c, cx1, left=True, active=self._active == "L")
                 self._draw_handle(c, cx2, left=False, active=self._active == "R")
                 if e > s:
@@ -1089,6 +1164,7 @@ class VideoEditor(tk.Toplevel):
             tx = min(max(30, tx), W - 30)
             c.create_rectangle(tx - 30, 0, tx + 30, 16, fill=C_DARK, outline=C_PLAY)
             c.create_text(tx, 8, text=self._fmt_tt(self._tip_t), fill="#ffffff", font=(FONT, 8, "bold"))
+        self._draw_ovl()
         self._draw_wave()
 
     # ---- хвиля кліпів (верх) + смужка доданих звуків (низ) ----
@@ -1141,8 +1217,21 @@ class VideoEditor(tk.Toplevel):
                 self._snd_rects.append((i, x1, x2))
                 if x2 < 0 or x1 > W:
                     continue
+                sel = i == self._sel_snd
                 c.create_polygon(host._rr_pts(x1, LANE + 3, x2, H - 2, 5),
                                  smooth=True, fill=C_SND, outline="")
+                if sel:
+                    c.create_rectangle(x1, LANE + 3, x2, H - 2, outline=C_HANDLE, width=2)
+                # хвиля вибраного звуку прямо в його блоці
+                env = sn.get("env")
+                if sel and env:
+                    smid = (LANE + H) / 2.0
+                    xx = max(0.0, x1)
+                    while xx < min(float(W), x2):
+                        a = self._env_at(env, (xx - x1) / max(1.0, x2 - x1) * sn["dur"])
+                        h = max(0.5, a * (H - LANE - 6) / 2.0)
+                        c.create_line(xx, smid - h, xx, smid + h, fill="#0d3d20", width=1)
+                        xx += 2
                 nm = sn["name"]
                 if len(nm) > 16:
                     nm = nm[:14] + "…"
@@ -1166,6 +1255,9 @@ class VideoEditor(tk.Toplevel):
 
     def _wave_press(self, ev):
         i = self._snd_hit(ev.x)
+        if i != self._sel_snd:
+            self._sel_snd = i          # вибраний звук -> його хвиля видно у блоці
+            self._draw_wave()
         if i is None:
             self._snd_drag = None
             return
@@ -1185,6 +1277,199 @@ class VideoEditor(tk.Toplevel):
 
     def _wave_release(self, _ev):
         self._snd_drag = None
+
+    # --------------------- накладки: медіа ПОВЕРХ відео (як у CapCut) ------ #
+    def _ovl_geom(self, o, cw, ch):
+        """Розмір і позиція накладки на канвасі cw×ch (для overlay= і рамки)."""
+        src = self.sources[o["src"]]
+        iw = src["w"] or cw
+        ih = src["h"] or ch
+        f0 = min(cw / float(iw), ch / float(ih))
+        sw = max(2, int(iw * f0 * o["zoom"] / 2) * 2)
+        sh = max(2, int(ih * f0 * o["zoom"] / 2) * 2)
+        x = int(round(cw / 2.0 + o["nx"] * cw - sw / 2.0))
+        y = int(round(ch / 2.0 + o["ny"] * ch - sh / 2.0))
+        return sw, sh, x, y
+
+    def _to_overlay(self):
+        """Вибраний кліп доріжки -> накладка поверх відео (на тому ж місці монтажу)."""
+        if len(self.order) <= 1 or self.busy:
+            return
+        self._push_undo()
+        slot = self.sel
+        p = self.pieces[self.order[slot]]
+        durs = self._clip_durs()
+        at = sum(durs[:slot])
+        self.ovls.append({"src": p["src"], "s": p["s"], "e": p["e"], "at": at,
+                          "zoom": 0.5, "nx": 0.28, "ny": -0.22, "mute": p["mute"]})
+        del self.order[slot]
+        self.sel = min(slot, len(self.order) - 1)
+        self.sel_ovl = len(self.ovls) - 1
+        q = self._sel_piece()
+        self.cur = min(max(self.cur, q["s"]), q["e"])
+        self._tf_on = True                       # одразу показуємо рамку накладки
+        self._show_poster(self.cur)
+        self._redraw()
+
+    def _ovl_to_track(self):
+        i = self.sel_ovl
+        if i is None:
+            return
+        self._push_undo()
+        o = self.ovls[i]
+        p = self._new_piece(o["src"], o["s"], o["e"])
+        p["mute"] = o["mute"]
+        self.pieces.append(p)
+        self.order.append(len(self.pieces) - 1)
+        del self.ovls[i]
+        self.sel_ovl = None
+        self.sel = len(self.order) - 1
+        self.cur = p["s"]
+        self._show_poster(self.cur)
+        self._redraw()
+
+    def _ovl_del(self):
+        i = self.sel_ovl
+        if i is None:
+            return
+        self._push_undo()
+        del self.ovls[i]
+        self.sel_ovl = None
+        self._show_poster(self.cur)
+        self._redraw()
+
+    def _ovl_mute(self):
+        i = self.sel_ovl
+        if i is None:
+            return
+        self._push_undo()
+        self.ovls[i]["mute"] = not self.ovls[i]["mute"]
+        self._draw_ovl()
+
+    def _draw_ovl(self):
+        c = getattr(self, "ovl", None)
+        if c is None:
+            return
+        try:
+            c.delete("all")
+            W, H = self.TW, self.OVL_H
+            c.create_rectangle(0, 0, W, H, fill=C_TRACK, outline="")
+            self._ovl_rects = []
+            pps = self._pps()
+            if not self.ovls:
+                c.create_text(W // 2, H / 2, text="накладки поверх відео: ПКМ по кліпу → «🎭 Зробити накладкою»",
+                              fill=C_MUTED, font=(FONT, 8))
+            for i, o in enumerate(self.ovls):
+                x1 = self._content_x_of(o["at"], pps) - self._scroll
+                x2 = x1 + max(10.0, (o["e"] - o["s"]) * pps)
+                self._ovl_rects.append((i, x1, x2))
+                if x2 < 0 or x1 > W:
+                    continue
+                sel = i == self.sel_ovl
+                c.create_polygon(host._rr_pts(x1, 2, x2, H - 2, 5),
+                                 smooth=True, fill=C_OVL, outline="")
+                if sel:
+                    c.create_rectangle(x1, 2, x2, H - 2, outline=C_HANDLE, width=2)
+                src = self.sources[o["src"]]
+                # хвиля вибраної накладки прямо в блоці ("на тій доріжці, яку вибрали")
+                env = src.get("env")
+                if sel and env and not o["mute"]:
+                    mid = H / 2.0
+                    span = max(0.001, o["e"] - o["s"])
+                    xx = max(0.0, x1)
+                    while xx < min(float(W), x2):
+                        a = self._env_at(env, o["s"] + (xx - x1) / (x2 - x1) * span)
+                        h = max(0.5, a * (mid - 3))
+                        c.create_line(xx, mid - h, xx, mid + h, fill="#2a0d45", width=1)
+                        xx += 2
+                nm = src["name"]
+                if len(nm) > 18:
+                    nm = nm[:16] + "…"
+                mut = " 🔇" if o["mute"] else ""
+                c.create_text(max(x1 + 6, 6), H / 2, anchor="w",
+                              text=f"🎭 {nm}{mut}", fill="#10121a", font=(FONT, 8, "bold"))
+            xh = getattr(self, "_playhead_x", 0)
+            if xh:
+                c.create_line(xh, 0, xh, H, fill=C_PLAY, width=1)
+        except tk.TclError:
+            pass
+
+    def _ovl_hit(self, x):
+        for i, x1, x2 in self._ovl_rects:
+            if x1 - 3 <= x <= x2 + 3:
+                return i, x1, x2
+        return None
+
+    def _ovl_press(self, ev):
+        hit = self._ovl_hit(ev.x)
+        if hit is None:
+            if self.sel_ovl is not None:
+                self.sel_ovl = None
+                self._show_poster(self.cur)
+                self._redraw()
+            self._ovl_drag = None
+            return
+        i, x1, x2 = hit
+        if self.playing:
+            self._pause()
+        self.sel_ovl = i
+        o = self.ovls[i]
+        edge = "L" if abs(ev.x - x1) <= 8 else ("R" if abs(ev.x - x2) <= 8 else None)
+        self._ovl_drag = [i, ev.x, dict(o), edge, False]
+        self._show_poster(self.cur)
+        self._redraw()
+
+    def _ovl_motion(self, ev):
+        if not self._ovl_drag:
+            return
+        i, x0, o0, edge, pushed = self._ovl_drag
+        if not pushed:
+            self._push_undo()
+            self._ovl_drag[4] = True
+        d = (ev.x - x0) / max(0.001, self._pps())
+        o = self.ovls[i]
+        src = self.sources[o["src"]]
+        hi = src["dur"] if src["kind"] == "video" else IMG_MAX
+        if edge == "L":      # лівий край: рухаємо і початок джерела, і позицію в монтажі
+            ns = min(max(0.0, o0["s"] + d), o0["e"] - 0.1)
+            o["s"] = ns
+            o["at"] = max(0.0, o0["at"] + (ns - o0["s"]))
+        elif edge == "R":
+            o["e"] = min(hi, max(o0["e"] + d, o0["s"] + 0.1))
+        else:
+            o["at"] = max(0.0, min(self._total() - 0.1, o0["at"] + d))
+        self._draw_ovl()
+
+    def _ovl_release(self, _ev):
+        if self._ovl_drag and self._ovl_drag[4]:
+            self._show_poster(self.cur)
+        self._ovl_drag = None
+
+    def _ovl_menu(self, ev):
+        if self.busy:
+            return
+        hit = self._ovl_hit(ev.x)
+        if hit is None:
+            return
+        i = hit[0]
+        self.sel_ovl = i
+        self._show_poster(self.cur)
+        self._redraw()
+        o = self.ovls[i]
+        src = self.sources[o["src"]]
+        m = self._menu_new()
+        m.add_command(label=f"🎭  {src['name']}", state="disabled")
+        if src["kind"] == "video" and src["has_audio"]:
+            m.add_command(label=("🔊  Увімкнути звук" if o["mute"] else "🔇  Вимкнути звук"),
+                          command=self._ovl_mute)
+        m.add_command(label="🔍  На весь екран (скинути масштаб)", command=self._tf_reset)
+        m.add_command(label="⬇  Повернути на доріжку", command=self._ovl_to_track)
+        m.add_separator()
+        m.add_command(label="🗑  Видалити накладку", command=self._ovl_del)
+        try:
+            m.tk_popup(ev.x_root, ev.y_root)
+        finally:
+            m.grab_release()
 
     # ------------------------------------------- контекстні меню (ПКМ) ----- #
     def _menu_new(self):
@@ -1218,6 +1503,8 @@ class VideoEditor(tk.Toplevel):
         m = self._menu_new()
         m.add_command(label="✂  Розрізати тут", command=lambda: self._cut_at(self.cur))
         m.add_command(label="📄  Дублювати кліп", command=self._duplicate)
+        if len(self.order) > 1:
+            m.add_command(label="🎭  Зробити накладкою (поверх відео)", command=self._to_overlay)
         if src["kind"] == "video":
             sp = self._menu_new()
             for v in (0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0):
@@ -1310,6 +1597,7 @@ class VideoEditor(tk.Toplevel):
                     self.sel = slot
                     self.cur = p["s"]
                     self._tf_on = False
+                self.sel_ovl = None          # фокус на кліпі -> рамка керує кліпом
                 self._show_poster(self.cur)
                 self._redraw()
                 return
@@ -1343,7 +1631,8 @@ class VideoEditor(tk.Toplevel):
         target = float(self.cfg["target_mb"])
         has_a = bool(self.snds) or any(
             self._src(self.pieces[ix])["has_audio"] and not self.pieces[ix]["mute"]
-            for ix in self.order)
+            for ix in self.order) or any(
+            self.sources[o["src"]]["has_audio"] and not o["mute"] for o in self.ovls)
         v = dc_core.calc_video_kbps(total, target, self.cfg["audio_kbps"], has_a) or 0
         if v >= 600: col, tag = C_GREEN, "✓ Гарна якість"
         elif v >= 150: col, tag = "#faa61a", "⚠ Нормальна якість"
@@ -1357,7 +1646,7 @@ class VideoEditor(tk.Toplevel):
     def _is_simple(self):
         """Одне (початкове) джерело, без картинок/звуків/швидкості/муту/масштабу ->
         можна старим ШВИДКИМ шляхом compress_segments."""
-        if len(self.sources) != 1 or self.snds:
+        if len(self.sources) != 1 or self.snds or self.ovls:
             return False
         for ix in self.order:
             p = self.pieces[ix]
@@ -1463,30 +1752,66 @@ class VideoEditor(tk.Toplevel):
         if prog:
             prog(92.0)
 
-        # підмішуємо додані звуки (adelay + amix; гучність кожного своя)
-        snds = [s for s in self.snds if s["at"] < total - 0.05 and os.path.isfile(s["path"])]
-        if snds:
-            cmd = ["ffmpeg", "-y", "-i", joined]
-            fc, labs = [], ""
-            for k, sn in enumerate(snds):
-                cmd += ["-i", sn["path"]]
-                ms = int(sn["at"] * 1000)
-                fc.append(f"[{k + 1}:a]aresample=44100,volume={sn['vol']:g},"
-                          f"adelay={ms}|{ms}[a{k}]")
-                labs += f"[a{k}]"
-            fc.append(f"[0:a]{labs}amix=inputs={len(snds) + 1}:duration=first:normalize=0[ao]")
-            mixed = os.path.join(tmpd, "mixed.mp4")
-            rc = subprocess.run(cmd + ["-filter_complex", ";".join(fc), "-map", "0:v",
-                                       "-map", "[ao]", "-c:v", "copy", "-c:a", "aac",
-                                       "-b:a", "192k", mixed],
-                                capture_output=True, creationflags=dc_core.NO_WINDOW).returncode
-            if rc != 0 or not os.path.exists(mixed):
-                dc_core.dlog("MONTAGE amix FAIL")
-                return None, total
-            joined = mixed
-        if prog:
+        # композиція: НАКЛАДКИ поверх відео + додані звуки — одним проходом
+        joined = self._compose(tmpd, joined, total, prog, cancel)
+        if prog and joined:
             prog(96.0)
         return joined, total
+
+    def _compose(self, tmpd, joined, total, prog, cancel):
+        """Накладає self.ovls на відео (overlay з вікном enable) і підмішує self.snds
+        (adelay+amix). Повертає новий шлях (або joined, якщо нема чого накладати; None=збій)."""
+        ovls = [o for o in self.ovls if o["at"] < total - 0.05]
+        snds = [s for s in self.snds if s["at"] < total - 0.05 and os.path.isfile(s["path"])]
+        if not ovls and not snds:
+            return joined
+        cw, ch = self._ccw, self._cch
+        cmd = ["ffmpeg", "-y", "-i", joined]
+        fc, alabs = [], []
+        vin = "[0:v]"
+        idx = 1
+        for j, o in enumerate(ovls):
+            src = self.sources[o["src"]]
+            d = min(o["e"] - o["s"], total - o["at"])
+            if src["kind"] == "image":
+                cmd += ["-loop", "1", "-t", f"{d:.3f}", "-i", src["path"]]
+            else:
+                cmd += ["-ss", f"{o['s']:.3f}", "-t", f"{d:.3f}", "-i", src["path"]]
+            sw, sh, x, y = self._ovl_geom(o, cw, ch)
+            at = o["at"]
+            fc.append(f"[{idx}:v]scale={sw}:{sh},setpts=PTS-STARTPTS+{at:.3f}/TB[ow{j}]")
+            fc.append(f"{vin}[ow{j}]overlay={x}:{y}:"
+                      f"enable='between(t,{at:.3f},{at + d:.3f})'[vb{j}]")
+            vin = f"[vb{j}]"
+            if src["kind"] == "video" and src["has_audio"] and not o["mute"]:
+                ms = int(at * 1000)
+                fc.append(f"[{idx}:a]atrim=0:{d:.3f},aresample=44100,adelay={ms}|{ms}[oa{j}]")
+                alabs.append(f"[oa{j}]")
+            idx += 1
+        for k, sn in enumerate(snds):
+            cmd += ["-i", sn["path"]]
+            ms = int(sn["at"] * 1000)
+            fc.append(f"[{idx}:a]aresample=44100,volume={sn['vol']:g},adelay={ms}|{ms}[sa{k}]")
+            alabs.append(f"[sa{k}]")
+            idx += 1
+        if alabs:
+            fc.append(f"[0:a]{''.join(alabs)}amix=inputs={len(alabs) + 1}:"
+                      f"duration=first:normalize=0[ao]")
+        out = os.path.join(tmpd, "composed.mp4")
+        cmd += ["-filter_complex", ";".join(fc)]
+        cmd += ["-map", vin] if ovls else ["-map", "0:v"]
+        cmd += ["-map", "[ao]"] if alabs else ["-map", "0:a"]
+        if ovls:   # відео змінилось -> перекодовуємо; без накладок можна copy
+            cmd += ["-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
+                    "-pix_fmt", "yuv420p"]
+        else:
+            cmd += ["-c:v", "copy"]
+        cmd += ["-c:a", "aac", "-b:a", "192k", out]
+        rc = dc_core._run_pass(cmd, total, 92.0, 4.0, prog, cancel)
+        if rc != 0 or not os.path.exists(out):
+            dc_core.dlog("MONTAGE compose FAIL")
+            return None
+        return out
 
     def _render_and_compress(self, out_path, target, prog, cancel):
         tmpd = tempfile.mkdtemp(prefix="dmix_")
