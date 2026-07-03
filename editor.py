@@ -1144,8 +1144,13 @@ class VideoEditor(tk.Toplevel):
             p = self.pieces[ix]
             s, e = p["s"], p["e"]
             w = max(6.0, (e - s) / p["speed"] * pps)
-            cx1, cx2 = x, x + w
             sel = slot == self.sel
+            # обрізка ЛІВОЮ ручкою: поки тягнеш — правий край і сусідні кліпи СТОЯТЬ,
+            # а лівий край іде за мишкою (як у CapCut); при відпусканні все припаковується
+            w_alloc = w
+            if sel and self._drag == "L" and getattr(self, "_d0", None):
+                w_alloc = max(w, (e - self._d0["s0"]) / p["speed"] * pps)
+            cx1, cx2 = x + (w_alloc - w), x + w_alloc
             c.create_rectangle(cx1, 3, cx2, TLH - 3, fill=C_CLIP, outline="")
             self._draw_clip_strip(c, cx1, cx2, p)
             if not sel:
@@ -1182,7 +1187,7 @@ class VideoEditor(tk.Toplevel):
                     c.create_line(xh, 3, xh, TLH, fill=C_PLAY, width=2)
                     c.create_polygon(xh - 5, 0, xh + 5, 0, xh, 7, fill=C_PLAY, outline="")
             self._clip_rects.append((slot, ix, cx1, cx2))
-            x = cx2 + gap
+            x = x + w_alloc + gap
         if self._tip_t is not None:
             tx = (self._sel_xe if self._active == "R"
                   else self._sel_xs if self._active == "L" else self._playhead_x)
@@ -1647,7 +1652,10 @@ class VideoEditor(tk.Toplevel):
         self._redraw()
 
     def _tl_release(self, _ev):
+        was_l = self._drag == "L"
         self._drag = None
+        if was_l:
+            self._redraw()       # відпустив ліву ручку -> кліпи припаковуються назад
         if self._tip_t is not None:
             self._schedule_tip_clear()
 
