@@ -91,6 +91,84 @@ def fmt(t):
     return f"{int(t // 60)}:{int(t % 60):02d}.{int((t * 10) % 10)}"
 
 
+class PillBtn(tk.Canvas):
+    """Кнопка-пігулка в стилі оверлея (заокруглений полігон на канвасі).
+    Підтримує .config(text=..., state=...) — як tk.Button, тож стара логіка
+    (play_btn/export_btn) працює без змін."""
+
+    def __init__(self, parent, text, cmd, primary=True, minw=0, small=False):
+        self._txt = text
+        self._cmd = cmd
+        self._fill = C_BLURPLE if primary else C_BG2
+        self._hov = C_BLURPLE_H if primary else C_DARK
+        self._fg = "#ffffff" if primary else C_TEXT
+        self._h = 30 if small else 38
+        self._fs = 9 if small else 10
+        self._minw = minw
+        self._state = "normal"
+        self._hover = False
+        try:
+            pbg = parent.cget("bg")
+        except tk.TclError:
+            pbg = C_BG
+        super().__init__(parent, height=self._h, bg=pbg, highlightthickness=0,
+                         cursor="hand2")
+        self._draw()
+        self.bind("<Enter>", lambda e: self._set_hover(True))
+        self.bind("<Leave>", lambda e: self._set_hover(False))
+        self.bind("<Button-1>", self._click)
+
+    def _click(self, _ev):
+        if self._state == "normal" and self._cmd:
+            self._cmd()
+
+    def _set_hover(self, on):
+        self._hover = on
+        self._draw()
+
+    def _measure(self):
+        try:
+            tw = int(self.tk.call("font", "measure", (FONT, self._fs, "bold"), self._txt))
+        except tk.TclError:
+            tw = 8 * len(self._txt)
+        return max(self._minw, tw + (22 if self._h < 34 else 30))
+
+    def _draw(self):
+        w = self._measure()
+        tk.Canvas.configure(self, width=w)
+        self.delete("all")
+        if self._state != "normal":
+            fill, fg = C_DARK, C_MUTED
+        elif self._hover:
+            fill, fg = self._hov, self._fg
+        else:
+            fill, fg = self._fill, self._fg
+        r = self._h // 2 - 1
+        self.create_polygon(host._rr_pts(1, 1, w - 1, self._h - 1, r), smooth=True,
+                            fill=fill, outline="")
+        self.create_text(w / 2, self._h / 2, text=self._txt, fill=fg,
+                         font=(FONT, self._fs, "bold"))
+
+    def config(self, cnf=None, **kw):
+        redraw = False
+        if "text" in kw and kw["text"] != self._txt:
+            self._txt = kw.pop("text"); redraw = True
+        else:
+            kw.pop("text", None)
+        if "state" in kw:
+            st = str(kw.pop("state"))
+            if st != self._state:
+                self._state = st; redraw = True
+        for k in ("bg", "activebackground", "fg", "activeforeground"):
+            kw.pop(k, None)
+        if kw or cnf:
+            tk.Canvas.configure(self, cnf, **kw)
+        if redraw:
+            self._draw()
+
+    configure = config
+
+
 class VideoEditor(tk.Toplevel):
     VW, VH = 480, 270
     VPAD = 52        # поля навколо екрана плеєра — рамка масштабу видно й ЗА плеєром
@@ -223,15 +301,20 @@ class VideoEditor(tk.Toplevel):
 
     # ----------------------------------------------------------------- UI -- #
     def _build(self):
-        hints = tk.Frame(self, bg=C_BG); hints.pack(pady=(8, 4))
-        tk.Label(hints, text="🎬 Кліп: клік — вибрати · білі ручки з боків — обрізати · ✂ — розрізати · права кнопка миші — всі дії",
-                 bg=C_BG, fg=C_MUTED, font=(FONT, 9)).pack()
-        tk.Label(hints, text="🔍 Клік по відео — масштаб і позиція · ➕ або перетягни файли — додати медіа · порожні місця зникнуть при збереженні",
-                 bg=C_BG, fg=C_MUTED, font=(FONT, 9)).pack()
+        # ---- плеєр на заокругленій «картці» з акцентною смужкою (як в оверлеї) ----
         # канвас ШИРШИЙ за екран плеєра (поля VPAD) -> рамка масштабу не обрізається
         self.video = tk.Canvas(self, width=self.VW + 2 * self.VPAD,
                                height=self.VH + 2 * self.VPAD, bg=C_BG, highlightthickness=0)
-        self.video.pack()
+        self.video.pack(pady=(8, 0))
+        m = 14
+        self.video.create_polygon(
+            host._rr_pts(self.VPAD - m, self.VPAD - m,
+                         self.VPAD + self.VW + m, self.VPAD + self.VH + m, 16),
+            smooth=True, fill=C_BG2, outline="", tags="card")
+        self.video.create_polygon(
+            host._rr_pts(self.VPAD - m, self.VPAD - m,
+                         self.VPAD + self.VW + m, self.VPAD - m + 3, 3),
+            smooth=True, fill=C_BLURPLE, outline="", tags="card")
         self.video.create_rectangle(self.VPAD, self.VPAD, self.VPAD + self.VW,
                                     self.VPAD + self.VH, fill="#000000", outline=C_DARK,
                                     tags="screen")
@@ -240,32 +323,33 @@ class VideoEditor(tk.Toplevel):
         self.video.bind("<ButtonRelease-1>", self._video_release)
         self.video.bind("<Double-Button-1>", lambda e: self._tf_reset())
 
-        pc = tk.Frame(self, bg=C_BG); pc.pack(pady=6)
-        self.play_btn = self._btn(pc, "▶ Грати", self._toggle_play)
-        self.play_btn.pack(side="left", padx=3)
+        # ---- транспорт ----
+        pc = tk.Frame(self, bg=C_BG); pc.pack(pady=(8, 6))
         self._btn(pc, "⏮", self._to_start, primary=False).pack(side="left", padx=3)
-        self._btn(pc, "✂ Розрізати", self._cut_here).pack(side="left", padx=3)
-        self._btn(pc, "➕ Додати", self._add_dialog, primary=False).pack(side="left", padx=(12, 3))
+        self.play_btn = self._btn(pc, "▶ Грати", self._toggle_play, minw=118)
+        self.play_btn.pack(side="left", padx=3)
+        self._btn(pc, "✂ Розрізати", self._cut_here, primary=False).pack(side="left", padx=3)
+        self._btn(pc, "➕ Додати", self._add_dialog, primary=False).pack(side="left", padx=(14, 3))
         self.undo_btn = self._btn(pc, "↶", self._undo_action, primary=False)
-        self.undo_btn.pack(side="left", padx=(12, 3))
+        self.undo_btn.pack(side="left", padx=(14, 3))
         self.redo_btn = self._btn(pc, "↷", self._redo_action, primary=False)
         self.redo_btn.pack(side="left", padx=3)
 
-        # ---- доріжка НАКЛАДОК (медіа поверх відео, як у CapCut) ----
+        # ---- панель доріжок (накладки / відео / звук) на спільній підложці ----
+        tp = tk.Frame(self, bg=C_BG2)
+        tp.pack(padx=14, pady=(2, 4))
         self.OVL_H = 26
-        self.ovl = tk.Canvas(self, width=self.TW, height=self.OVL_H, bg=C_TRACK, highlightthickness=0)
-        self.ovl.pack(padx=14, pady=(4, 0))
+        self.ovl = tk.Canvas(tp, width=self.TW, height=self.OVL_H, bg=C_TRACK, highlightthickness=0)
+        self.ovl.pack(padx=10, pady=(10, 3))
         self.ovl.bind("<Button-1>", self._ovl_press)
         self.ovl.bind("<B1-Motion>", self._ovl_motion)
         self.ovl.bind("<ButtonRelease-1>", self._ovl_release)
         self.ovl.bind("<Button-3>", self._ovl_menu)
-        # ---- доріжка монтажу: кіно-стрічка + ручки обрізки + плейхед ----
-        self.tl = tk.Canvas(self, width=self.TW, height=TLH, bg=C_TRACK, highlightthickness=0)
-        self.tl.pack(padx=14, pady=(2, 2))
-        # аудіо-хвиля кліпів + смужка ДОДАНИХ звуків (тягнуться мишкою, ПКМ — меню)
+        self.tl = tk.Canvas(tp, width=self.TW, height=TLH, bg=C_TRACK, highlightthickness=0)
+        self.tl.pack(padx=10, pady=(0, 3))
         self.WAVE_H = 58
-        self.wave = tk.Canvas(self, width=self.TW, height=self.WAVE_H, bg=C_TRACK, highlightthickness=0)
-        self.wave.pack(padx=14, pady=(0, 8))
+        self.wave = tk.Canvas(tp, width=self.TW, height=self.WAVE_H, bg=C_TRACK, highlightthickness=0)
+        self.wave.pack(padx=10, pady=(0, 10))
         self.tl.bind("<Button-1>", self._tl_press)
         self.tl.bind("<B1-Motion>", self._tl_motion)
         self.tl.bind("<ButtonRelease-1>", self._tl_release)
@@ -276,11 +360,6 @@ class VideoEditor(tk.Toplevel):
         self.wave.bind("<B1-Motion>", self._wave_motion)
         self.wave.bind("<ButtonRelease-1>", self._wave_release)
         self.wave.bind("<Button-3>", self._wave_menu)
-        zc = tk.Frame(self, bg=C_BG); zc.pack(pady=(0, 2))
-        self._btn(zc, "🔍−", lambda: self._zoom_step(0.8), primary=False).pack(side="left", padx=3)
-        self._btn(zc, "🔍+", lambda: self._zoom_step(1.25)).pack(side="left", padx=3)
-        tk.Label(zc, text="◀ ▶ стрілки — точно по кадру (Shift = 1с)", bg=C_BG, fg=C_MUTED,
-                 font=(FONT, 8)).pack(side="left", padx=8)
         self.bind("<Left>", lambda e: self._nudge(-1, big=False))
         self.bind("<Right>", lambda e: self._nudge(1, big=False))
         self.bind("<Shift-Left>", lambda e: self._nudge(-1, big=True))
@@ -291,11 +370,15 @@ class VideoEditor(tk.Toplevel):
         except tk.TclError:
             pass
 
-        sc = tk.Frame(self, bg=C_BG); sc.pack(pady=2)
-        self._btn(sc, "◀ Пересунути", lambda: self._move(-1), primary=False).pack(side="left", padx=3)
-        self._btn(sc, "Пересунути ▶", lambda: self._move(1), primary=False).pack(side="left", padx=3)
-        self._btn(sc, "► Переглянути", self._play_segment, primary=False).pack(side="left", padx=3)
-        self._btn(sc, "🗑 Прибрати", self._remove, primary=False).pack(side="left", padx=3)
+        # ---- дії з кліпом + зум + довідка (все дрібними пігулками в один рядок) ----
+        sc = tk.Frame(self, bg=C_BG); sc.pack(pady=(0, 2))
+        self._btn(sc, "◀ Пересунути", lambda: self._move(-1), primary=False, small=True).pack(side="left", padx=2)
+        self._btn(sc, "Пересунути ▶", lambda: self._move(1), primary=False, small=True).pack(side="left", padx=2)
+        self._btn(sc, "► Переглянути", self._play_segment, primary=False, small=True).pack(side="left", padx=2)
+        self._btn(sc, "🗑 Прибрати", self._remove, primary=False, small=True).pack(side="left", padx=2)
+        self._btn(sc, "🔍−", lambda: self._zoom_step(0.8), primary=False, small=True).pack(side="left", padx=(14, 2))
+        self._btn(sc, "🔍+", lambda: self._zoom_step(1.25), primary=False, small=True).pack(side="left", padx=2)
+        self._btn(sc, "❓", self._show_help, primary=False, small=True).pack(side="left", padx=(14, 2))
 
         self.bind("<Control-z>", lambda e: self._undo_action())
         self.bind("<Control-y>", lambda e: self._redo_action())
@@ -313,14 +396,38 @@ class VideoEditor(tk.Toplevel):
         self.gif_btn.pack(side="left", padx=4)
         self._btn(ec, "Скасувати", self._close, primary=False).pack(side="left", padx=4)
 
-    def _btn(self, parent, text, cmd, primary=True):
-        bg, hov = (C_BLURPLE, C_BLURPLE_H) if primary else (C_BG2, C_DARK)
-        b = tk.Button(parent, text=text, command=cmd, bg=bg, fg=C_TEXT,
-                      activebackground=hov, activeforeground=C_TEXT, relief="flat",
-                      font=(FONT, 10, "bold"), bd=0, padx=12, pady=7, cursor="hand2")
-        b.bind("<Enter>", lambda e: b.config(bg=hov))
-        b.bind("<Leave>", lambda e: b.config(bg=bg))
-        return b
+    def _btn(self, parent, text, cmd, primary=True, minw=0, small=False):
+        return PillBtn(parent, text, cmd, primary=primary, minw=minw, small=small)
+
+    def _show_help(self):
+        """Довідка окремим маленьким вікном (замість написів у самому редакторі)."""
+        w = tk.Toplevel(self)
+        w.title("Як користуватись")
+        try:
+            appicon.set_window_icon(w)
+        except Exception:
+            pass
+        w.configure(bg=C_BG)
+        w.resizable(False, False)
+        w.attributes("-topmost", True)
+        w.geometry(f"+{self.winfo_rootx() + 60}+{self.winfo_rooty() + 60}")
+        tips = [
+            "🎬  Клік по кліпу — вибрати · білі ручки з боків — обрізати",
+            "✂  «Розрізати» ділить кліп по плейхеду",
+            "🖱  Права кнопка миші по кліпу / накладці / звуку — всі дії",
+            "🔍  Клік по відео — масштаб і позиція (кут — розмір, середина — рухати,",
+            "      подвійний клік — скинути)",
+            "➕  Кнопка «Додати» або перетягни файли у вікно — відео / картинки / звуки",
+            "🕳  Порожні місця лишаються на доріжці й зникають при збереженні",
+            "⌨  ◀ ▶ — точно по кадру (Shift = 1с) · Ctrl+Z / Ctrl+Y — скасувати / повторити",
+            "🖲  Ctrl+колесо — зум доріжки · колесо — прокрутка · Delete — прибрати кліп",
+        ]
+        box = tk.Frame(w, bg=C_BG2)
+        box.pack(padx=14, pady=(14, 8))
+        for t in tips:
+            tk.Label(box, text=t, bg=C_BG2, fg=C_TEXT, font=(FONT, 9),
+                     justify="left", anchor="w").pack(fill="x", padx=14, pady=2)
+        PillBtn(w, "Зрозуміло", w.destroy, primary=True).pack(pady=(4, 12))
 
     # ----------------------------------------- додавання медіа (➕ і перетяг) -- #
     def _add_dialog(self):
@@ -537,6 +644,7 @@ class VideoEditor(tk.Toplevel):
                                     image=self._img, tags="frame")
             self.video.tag_lower("frame")       # рамка масштабу лишається поверх кадру
             self.video.tag_lower("screen")      # чорний екран — під кадром
+            self.video.tag_lower("card")        # картка-підложка — на самому дні
             self._draw_tfbox()
         except tk.TclError:
             pass
@@ -1002,7 +1110,7 @@ class VideoEditor(tk.Toplevel):
                 if env:
                     def apply():
                         src["env"] = env
-                        self._draw_wave()
+                        self._draw_track()   # і хвиля в кліпі, і нижня смужка
                     self.after(0, apply)
             threading.Thread(target=work_env, daemon=True).start()
 
