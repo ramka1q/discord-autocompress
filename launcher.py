@@ -171,32 +171,36 @@ def unregister_uninstall():
 
 
 # ------------------------------------------------------------ встановлення --- #
-def install_to(dstdir: str, desktop=True, autostart=True, shortcuts=True, log=None):
+def install_to(dstdir: str, desktop=True, autostart=True, shortcuts=True, log=None,
+               lang=None):
     """Ставить програму у dstdir: копія exe + всі .py з GitHub (видимі файли) +
-    маркер + ярлики + реєстрація деінсталятора. Повертає (ok, повідомлення)."""
+    маркер + ярлики + реєстрація деінсталятора. Повертає (ok, повідомлення).
+    lang — вибрана в інсталяторі мова: пишеться у конфіг ПРОГРАМИ (щоб вона
+    одразу стартувала цією мовою)."""
     log = log or (lambda s: None)
+    T = INST_L.get(lang or "uk", INST_L["en"])
     dstdir = os.path.abspath(dstdir)
     try:
         os.makedirs(dstdir, exist_ok=True)
     except OSError as e:
-        return False, f"Не вдалося створити папку: {e}"
+        return False, T["err_dir"] + str(e)
 
     dst_exe = os.path.join(dstdir, "DiscordAutoCompress.exe")
     src = exe_path()
     if getattr(sys, "frozen", False) and os.path.normcase(src) != os.path.normcase(dst_exe):
-        log("Копіюю програму…")
+        log(T["copying"])
         try:
             shutil.copy2(src, dst_exe)
         except OSError as e:
-            return False, f"Не вдалося скопіювати exe: {e}"
+            return False, T["err_copy"] + str(e)
     elif not getattr(sys, "frozen", False):
         dst_exe = src   # dev-режим (тести): «exe» = цей .py
 
-    log("Скачую файли програми з GitHub…")
+    log(T["downloading"])
     n = sync_code(dstdir, log)
     if not os.path.exists(os.path.join(dstdir, "discord_overlay.py")):
-        return False, "Не вдалося скачати файли — перевір інтернет і спробуй ще раз."
-    log(f"Готово: файли на місці (оновлено {max(0, n)}).")
+        return False, T["err_net"]
+    log(T["files_ok"].format(n=max(0, n)))
 
     # маркер установки (пам'ятає вибір автозапуску)
     try:
@@ -205,9 +209,11 @@ def install_to(dstdir: str, desktop=True, autostart=True, shortcuts=True, log=No
         open(os.path.join(dstdir, ".autoupdate"), "w").close()
     except OSError:
         pass
+    if lang:
+        _write_lang(lang)   # мова з інсталятора -> конфіг програми (зберігається і в ній)
 
     if shortcuts and getattr(sys, "frozen", False):
-        log("Створюю ярлики…")
+        log(T["mk_short"])
         if desktop:
             make_lnk(_desktop_lnk(), dst_exe)
         if autostart:
@@ -216,11 +222,11 @@ def install_to(dstdir: str, desktop=True, autostart=True, shortcuts=True, log=No
             sm = _startmenu_dir()
             os.makedirs(sm, exist_ok=True)
             make_lnk(os.path.join(sm, "Discord Auto-Compress.lnk"), dst_exe)
-            make_lnk(os.path.join(sm, "Видалити Discord Auto-Compress.lnk"),
-                     dst_exe, "--uninstall", desc="Видалити програму")
+            make_lnk(os.path.join(sm, "Uninstall Discord Auto-Compress.lnk"),
+                     dst_exe, "--uninstall", desc="Uninstall")
         except OSError:
             pass
-        log("Реєструю в «Програми та засоби»…")
+        log(T["reg"])
         register_uninstall(dstdir, dst_exe)
     return True, dst_exe
 
@@ -260,6 +266,99 @@ def do_uninstall(dstdir: str, purge_cfg=False, shortcuts=True, delete_dir=True):
                          shell=True, creationflags=NO_WINDOW)
 
 
+# ------------------------------------------------- мова інсталятора/програми --- #
+CONFIG_NAME = ".discord_overlay.json"
+
+INST_L = {
+    "uk": dict(win="Встановлення", sub="Інсталятор скачає всі файли програми у вибрану папку\n(все видно, без прихованих тек) і додасть деінсталятор.",
+               folder="Папка встановлення:", browse="Огляд…",
+               desk="Ярлик на робочому столі",
+               auto="Запускати разом з Windows (фонове стиснення)",
+               install="Встановити  ⬇", cancel="Скасувати", installing="Встановлюю…",
+               done="Готово! Програма встановлена ✓", installed_in="Встановлено у: ",
+               launch="Запустити зараз  ▶", close="Закрити",
+               copying="Копіюю програму…", downloading="Скачую файли програми з GitHub…",
+               files_ok="Готово: файли на місці (оновлено {n}).",
+               mk_short="Створюю ярлики…", reg="Реєструю в «Програми та засоби»…",
+               err_dir="Не вдалося створити папку: ", err_copy="Не вдалося скопіювати exe: ",
+               err_net="Не вдалося скачати файли — перевір інтернет і спробуй ще раз.",
+               u_q="Видалити Discord Auto-Compress?",
+               u_body="Буде прибрано ярлики, автозапуск і папку:\n",
+               u_purge="Видалити також мої налаштування і статистику",
+               u_del="Видалити", u_done="Видалено. Папка зникне за кілька секунд. 👋"),
+    "ru": dict(win="Установка", sub="Инсталлятор скачает все файлы программы в выбранную папку\n(всё видно, без скрытых папок) и добавит деинсталлятор.",
+               folder="Папка установки:", browse="Обзор…",
+               desk="Ярлык на рабочем столе",
+               auto="Запускать вместе с Windows (фоновое сжатие)",
+               install="Установить  ⬇", cancel="Отмена", installing="Устанавливаю…",
+               done="Готово! Программа установлена ✓", installed_in="Установлено в: ",
+               launch="Запустить сейчас  ▶", close="Закрыть",
+               copying="Копирую программу…", downloading="Скачиваю файлы программы с GitHub…",
+               files_ok="Готово: файлы на месте (обновлено {n}).",
+               mk_short="Создаю ярлыки…", reg="Регистрирую в «Программы и компоненты»…",
+               err_dir="Не удалось создать папку: ", err_copy="Не удалось скопировать exe: ",
+               err_net="Не удалось скачать файлы — проверь интернет и попробуй ещё раз.",
+               u_q="Удалить Discord Auto-Compress?",
+               u_body="Будут убраны ярлыки, автозапуск и папка:\n",
+               u_purge="Удалить также мои настройки и статистику",
+               u_del="Удалить", u_done="Удалено. Папка исчезнет через пару секунд. 👋"),
+    "en": dict(win="Setup", sub="The installer downloads all program files into the chosen folder\n(everything visible, no hidden dirs) and adds an uninstaller.",
+               folder="Install folder:", browse="Browse…",
+               desk="Desktop shortcut",
+               auto="Start with Windows (background compression)",
+               install="Install  ⬇", cancel="Cancel", installing="Installing…",
+               done="Done! The app is installed ✓", installed_in="Installed to: ",
+               launch="Launch now  ▶", close="Close",
+               copying="Copying the app…", downloading="Downloading program files from GitHub…",
+               files_ok="All files in place (updated {n}).",
+               mk_short="Creating shortcuts…", reg="Registering in Apps & Features…",
+               err_dir="Could not create the folder: ", err_copy="Could not copy the exe: ",
+               err_net="Could not download files — check your internet and try again.",
+               u_q="Uninstall Discord Auto-Compress?",
+               u_body="Shortcuts, autostart and this folder will be removed:\n",
+               u_purge="Also delete my settings and statistics",
+               u_del="Uninstall", u_done="Removed. The folder disappears in a few seconds. 👋"),
+}
+LANG_NAMES = (("uk", "Українська"), ("ru", "Русский"), ("en", "English"))
+
+
+def _sys_lang() -> str:
+    try:
+        lid = ctypes.windll.kernel32.GetUserDefaultUILanguage() & 0x3FF
+        return {0x22: "uk", 0x19: "ru"}.get(lid, "en")
+    except Exception:
+        return "en"
+
+
+def _cfg_lang() -> str:
+    """Мова з конфіга програми (якщо вже є), інакше — мова Windows."""
+    try:
+        with open(os.path.join(os.path.expanduser("~"), CONFIG_NAME), encoding="utf-8") as f:
+            lang = json.load(f).get("lang")
+        if lang in INST_L:
+            return lang
+    except Exception:
+        pass
+    return _sys_lang()
+
+
+def _write_lang(lang: str, home: str = None):
+    """Зберігає вибрану мову в конфіг ПРОГРАМИ (utf-8 БЕЗ BOM — BOM валить json.load).
+    Конфіг частковий — load_config сам доллє решту дефолтів."""
+    p = os.path.join(home or os.path.expanduser("~"), CONFIG_NAME)
+    try:
+        cfg = {}
+        if os.path.exists(p):
+            with open(p, encoding="utf-8") as f:
+                cfg = json.load(f)
+        cfg["lang"] = lang
+        with open(p, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, ensure_ascii=False, indent=1)
+        return True
+    except Exception:
+        return False
+
+
 # --------------------------------------------------------- GUI інсталятора --- #
 BG, PANEL, DARK = "#313338", "#2b2d31", "#1e1f22"
 ACCENT, ACCENT_H, TEXT, MUTED = "#5865f2", "#4752c4", "#f2f3f5", "#b5bac1"
@@ -289,105 +388,133 @@ def _btn(parent, text, cmd, primary=True):
 
 
 def run_installer():
-    r = _win(f"Встановлення — {APP_TITLE}", 560, 470)
-    tkinter.Label(r, text="⬇  Discord Auto-Compress", bg=BG, fg=TEXT,
-                  font=(F, 16, "bold")).pack(pady=(18, 2))
-    tkinter.Label(r, text="Інсталятор скачає всі файли програми у вибрану папку\n"
-                          "(все видно, без прихованих тек) і додасть деінсталятор.",
-                  bg=BG, fg=MUTED, font=(F, 9), justify="center").pack()
-
-    row = tkinter.Frame(r, bg=BG); row.pack(fill="x", padx=24, pady=(16, 4))
-    tkinter.Label(row, text="Папка встановлення:", bg=BG, fg=TEXT,
-                  font=(F, 9, "bold")).pack(anchor="w")
-    row2 = tkinter.Frame(r, bg=BG); row2.pack(fill="x", padx=24)
-    path_var = tkinter.StringVar(value=DEFAULT_DIR)
-    ent = tkinter.Entry(row2, textvariable=path_var, bg=DARK, fg=TEXT,
-                        insertbackground=TEXT, relief="flat", font=(F, 10))
-    ent.pack(side="left", fill="x", expand=True, ipady=6)
-
-    def browse():
-        d = _fd.askdirectory(parent=r, title="Куди встановити?")
-        if d:
-            path_var.set(os.path.join(os.path.abspath(d), "DiscordAutoCompress")
-                         if os.path.basename(d).lower() != "discordautocompress" else d)
-    _btn(row2, "Огляд…", browse, primary=False).pack(side="left", padx=(8, 0))
-
+    state = {"lang": _cfg_lang(), "busy": False}
+    path_var_holder = {}
+    r = _win(f"Setup — {APP_TITLE}", 560, 512)
     v_desk = tkinter.BooleanVar(value=True)
     v_auto = tkinter.BooleanVar(value=True)
-    for v, t in ((v_desk, "Ярлик на робочому столі"),
-                 (v_auto, "Запускати разом з Windows (фонове стиснення)")):
-        tkinter.Checkbutton(r, text=t, variable=v, bg=BG, fg=TEXT, selectcolor=DARK,
-                            activebackground=BG, activeforeground=TEXT,
-                            font=(F, 9), cursor="hand2").pack(anchor="w", padx=24, pady=1)
-
-    logbox = tkinter.Text(r, height=7, bg=DARK, fg=MUTED, relief="flat",
-                          font=("Consolas", 8), state="disabled")
-    logbox.pack(fill="x", padx=24, pady=(10, 6))
-    status = tkinter.Label(r, text="", bg=BG, fg=MUTED, font=(F, 9, "bold"))
-    status.pack()
-
+    path_var = tkinter.StringVar(value=DEFAULT_DIR)
+    body = tkinter.Frame(r, bg=BG)
+    body.pack(fill="both", expand=True)
     lines = []
 
-    def log(s):
-        lines.append(s)
+    def render():
+        T = INST_L[state["lang"]]
+        r.title(f'{T["win"]} — {APP_TITLE}')
+        for w in body.winfo_children():
+            w.destroy()
+        # ---- вибір мови: перше, що бачить юзер; вибір зберігається і в програмі ----
+        lrow = tkinter.Frame(body, bg=BG); lrow.pack(pady=(14, 0))
+        for code, name in LANG_NAMES:
+            act = code == state["lang"]
+            b = tkinter.Button(lrow, text=name, relief="flat", bd=0, cursor="hand2",
+                               bg=ACCENT if act else PANEL, fg=TEXT,
+                               activebackground=ACCENT_H, activeforeground=TEXT,
+                               font=(F, 9, "bold"), padx=12, pady=4,
+                               command=lambda c=code: switch(c))
+            b.pack(side="left", padx=3)
+        tkinter.Label(body, text="⬇  Discord Auto-Compress", bg=BG, fg=TEXT,
+                      font=(F, 16, "bold")).pack(pady=(10, 2))
+        tkinter.Label(body, text=T["sub"], bg=BG, fg=MUTED, font=(F, 9),
+                      justify="center").pack()
 
-    def pump():
-        if lines:
-            logbox.config(state="normal")
-            while lines:
-                logbox.insert("end", lines.pop(0) + "\n")
-            logbox.see("end")
-            logbox.config(state="disabled")
-        r.after(150, pump)
-    pump()
+        row = tkinter.Frame(body, bg=BG); row.pack(fill="x", padx=24, pady=(14, 4))
+        tkinter.Label(row, text=T["folder"], bg=BG, fg=TEXT,
+                      font=(F, 9, "bold")).pack(anchor="w")
+        row2 = tkinter.Frame(body, bg=BG); row2.pack(fill="x", padx=24)
+        ent = tkinter.Entry(row2, textvariable=path_var, bg=DARK, fg=TEXT,
+                            insertbackground=TEXT, relief="flat", font=(F, 10))
+        ent.pack(side="left", fill="x", expand=True, ipady=6)
 
-    btns = tkinter.Frame(r, bg=BG); btns.pack(pady=8)
-    ib = _btn(btns, "Встановити  ⬇", lambda: start())
-    ib.pack(side="left", padx=6)
-    _btn(btns, "Скасувати", r.destroy, primary=False).pack(side="left", padx=6)
+        def browse():
+            d = _fd.askdirectory(parent=r)
+            if d:
+                path_var.set(os.path.join(os.path.abspath(d), "DiscordAutoCompress")
+                             if os.path.basename(d).lower() != "discordautocompress" else d)
+        _btn(row2, T["browse"], browse, primary=False).pack(side="left", padx=(8, 0))
 
-    def start():
-        ib.config(state="disabled")
-        status.config(text="Встановлюю…", fg=TEXT)
+        for v, t in ((v_desk, T["desk"]), (v_auto, T["auto"])):
+            tkinter.Checkbutton(body, text=t, variable=v, bg=BG, fg=TEXT, selectcolor=DARK,
+                                activebackground=BG, activeforeground=TEXT,
+                                font=(F, 9), cursor="hand2").pack(anchor="w", padx=24, pady=1)
 
-        def work():
-            ok, msg = install_to(path_var.get().strip() or DEFAULT_DIR,
-                                 desktop=v_desk.get(), autostart=v_auto.get(), log=log)
-            def done():
-                if ok:
-                    status.config(text="Готово! Програма встановлена ✓", fg=GREEN)
-                    log("Встановлено у: " + os.path.dirname(msg))
-                    for w in btns.winfo_children():
-                        w.destroy()
-                    def launch():
-                        try:
-                            subprocess.Popen([msg], cwd=os.path.dirname(msg),
-                                             close_fds=True)
-                        except OSError:
-                            pass
-                        r.destroy()
-                    _btn(btns, "Запустити зараз  ▶", launch).pack(side="left", padx=6)
-                    _btn(btns, "Закрити", r.destroy, primary=False).pack(side="left", padx=6)
-                else:
-                    status.config(text=msg, fg=RED)
-                    ib.config(state="normal")
-            r.after(0, done)
-        threading.Thread(target=work, daemon=True).start()
+        logbox = tkinter.Text(body, height=7, bg=DARK, fg=MUTED, relief="flat",
+                              font=("Consolas", 8), state="disabled")
+        logbox.pack(fill="x", padx=24, pady=(10, 6))
+        status = tkinter.Label(body, text="", bg=BG, fg=MUTED, font=(F, 9, "bold"))
+        status.pack()
+        btns = tkinter.Frame(body, bg=BG); btns.pack(pady=8)
+        ib = _btn(btns, T["install"], lambda: start())
+        ib.pack(side="left", padx=6)
+        _btn(btns, T["cancel"], r.destroy, primary=False).pack(side="left", padx=6)
 
+        def pump():
+            try:
+                if lines:
+                    logbox.config(state="normal")
+                    while lines:
+                        logbox.insert("end", lines.pop(0) + "\n")
+                    logbox.see("end")
+                    logbox.config(state="disabled")
+                r.after(150, pump)
+            except tkinter.TclError:
+                pass
+        pump()
+
+        def start():
+            if state["busy"]:
+                return
+            state["busy"] = True
+            ib.config(state="disabled")
+            status.config(text=T["installing"], fg=TEXT)
+
+            def work():
+                ok, msg = install_to(path_var.get().strip() or DEFAULT_DIR,
+                                     desktop=v_desk.get(), autostart=v_auto.get(),
+                                     log=lines.append, lang=state["lang"])
+                def done():
+                    state["busy"] = False
+                    if ok:
+                        status.config(text=T["done"], fg=GREEN)
+                        lines.append(T["installed_in"] + os.path.dirname(msg))
+                        for w in btns.winfo_children():
+                            w.destroy()
+                        def launch():
+                            try:
+                                subprocess.Popen([msg], cwd=os.path.dirname(msg),
+                                                 close_fds=True)
+                            except OSError:
+                                pass
+                            r.destroy()
+                        _btn(btns, T["launch"], launch).pack(side="left", padx=6)
+                        _btn(btns, T["close"], r.destroy, primary=False).pack(side="left", padx=6)
+                    else:
+                        status.config(text=msg, fg=RED)
+                        ib.config(state="normal")
+                r.after(0, done)
+            threading.Thread(target=work, daemon=True).start()
+
+    def switch(code):
+        if not state["busy"] and code != state["lang"]:
+            state["lang"] = code
+            render()
+
+    path_var_holder["v"] = path_var
+    render()
     r.mainloop()
 
 
 def run_uninstaller():
     d = exe_dir()
-    r = _win(f"Видалення — {APP_TITLE}", 480, 260)
-    tkinter.Label(r, text="🗑  Видалити Discord Auto-Compress?", bg=BG, fg=TEXT,
+    T = INST_L[_cfg_lang()]   # мовою, яку юзер обрав при встановленні/у програмі
+    r = _win(f'{T["u_del"]} — {APP_TITLE}', 480, 260)
+    tkinter.Label(r, text="🗑  " + T["u_q"], bg=BG, fg=TEXT,
                   font=(F, 14, "bold")).pack(pady=(24, 4))
-    tkinter.Label(r, text="Буде прибрано ярлики, автозапуск і папку:\n" + d,
-                  bg=BG, fg=MUTED, font=(F, 9), justify="center").pack()
+    tkinter.Label(r, text=T["u_body"] + d, bg=BG, fg=MUTED, font=(F, 9),
+                  justify="center").pack()
     v_purge = tkinter.BooleanVar(value=False)
-    tkinter.Checkbutton(r, text="Видалити також мої налаштування і статистику",
-                        variable=v_purge, bg=BG, fg=TEXT, selectcolor=DARK,
-                        activebackground=BG, activeforeground=TEXT,
+    tkinter.Checkbutton(r, text=T["u_purge"], variable=v_purge, bg=BG, fg=TEXT,
+                        selectcolor=DARK, activebackground=BG, activeforeground=TEXT,
                         font=(F, 9), cursor="hand2").pack(pady=10)
     btns = tkinter.Frame(r, bg=BG); btns.pack(pady=6)
 
@@ -395,16 +522,16 @@ def run_uninstaller():
         do_uninstall(d, purge_cfg=v_purge.get())
         for w in btns.winfo_children():
             w.destroy()
-        tkinter.Label(r, text="Видалено. Папка зникне за кілька секунд. 👋",
-                      bg=BG, fg=GREEN, font=(F, 10, "bold")).pack()
+        tkinter.Label(r, text=T["u_done"], bg=BG, fg=GREEN,
+                      font=(F, 10, "bold")).pack()
         r.after(1800, r.destroy)
 
-    b = _btn(btns, "Видалити", go)
+    b = _btn(btns, T["u_del"], go)
     b.config(bg=RED, activebackground="#c93235")
     b.bind("<Enter>", lambda e: b.config(bg="#c93235"))
     b.bind("<Leave>", lambda e: b.config(bg=RED))
     b.pack(side="left", padx=6)
-    _btn(btns, "Скасувати", r.destroy, primary=False).pack(side="left", padx=6)
+    _btn(btns, T["cancel"], r.destroy, primary=False).pack(side="left", padx=6)
     r.mainloop()
 
 
@@ -500,6 +627,13 @@ if __name__ == "__main__":
         ok, msg = install_to(d, desktop=False, autostart=False, shortcuts=False,
                              log=lambda s: print(s))
         print("INSTALL", "OK" if ok else "FAIL", msg)
+        sys.exit(0 if ok else 2)
+    if "--test-lang" in sys.argv:
+        i = sys.argv.index("--test-lang")
+        lang, home = sys.argv[i + 1], sys.argv[i + 2]
+        ok = _write_lang(lang, home)
+        print("WRITE", ok,
+              open(os.path.join(home, CONFIG_NAME), encoding="utf-8").read())
         sys.exit(0 if ok else 2)
     if "--test-uninstall" in sys.argv:
         d = sys.argv[sys.argv.index("--test-uninstall") + 1]
