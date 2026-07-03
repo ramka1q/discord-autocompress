@@ -191,8 +191,14 @@ class VideoEditor(tk.Toplevel):
 
     # ------------------------------------------------------------ джерела -- #
     def _new_piece(self, si, s, e):
-        return {"src": si, "s": float(s), "e": float(e),
+        # gap = порожнє місце ПЕРЕД кліпом (сек монтажу): з'являється при обрізці
+        # лівою ручкою, лишається на доріжці і зникає лише при збереженні
+        return {"src": si, "s": float(s), "e": float(e), "gap": 0.0,
                 "zoom": 1.0, "nx": 0.0, "ny": 0.0, "speed": 1.0, "mute": False}
+
+    @staticmethod
+    def _gapof(p):
+        return max(0.0, p.get("gap", 0.0))
 
     def _add_source(self, path, kind, info):
         """Реєструє джерело (відео/картинку); повертає його індекс. Дублікати переюзуємо."""
@@ -217,8 +223,11 @@ class VideoEditor(tk.Toplevel):
 
     # ----------------------------------------------------------------- UI -- #
     def _build(self):
-        tk.Label(self, text="Клік по кліпу — вибрати · ручки — обрізати · клік по ВІДЕО — масштаб/позиція · ПКМ — меню (накладки теж) · тягни файли сюди",
-                 bg=C_BG, fg=C_MUTED, font=(FONT, 9)).pack(pady=(10, 6))
+        hints = tk.Frame(self, bg=C_BG); hints.pack(pady=(8, 4))
+        tk.Label(hints, text="🎬 Кліп: клік — вибрати · білі ручки з боків — обрізати · ✂ — розрізати · права кнопка миші — всі дії",
+                 bg=C_BG, fg=C_MUTED, font=(FONT, 9)).pack()
+        tk.Label(hints, text="🔍 Клік по відео — масштаб і позиція · ➕ або перетягни файли — додати медіа · порожні місця зникнуть при збереженні",
+                 bg=C_BG, fg=C_MUTED, font=(FONT, 9)).pack()
         # канвас ШИРШИЙ за екран плеєра (поля VPAD) -> рамка масштабу не обрізається
         self.video = tk.Canvas(self, width=self.VW + 2 * self.VPAD,
                                height=self.VH + 2 * self.VPAD, bg=C_BG, highlightthickness=0)
@@ -854,6 +863,7 @@ class VideoEditor(tk.Toplevel):
         self._push_undo()
         right = dict(p)
         right["s"] = t
+        right["gap"] = 0.0            # права половина йде впритул до лівої
         p["e"] = t
         self.pieces.append(right)
         self.order.insert(slot + 1, len(self.pieces) - 1)
@@ -882,6 +892,7 @@ class VideoEditor(tk.Toplevel):
     def _duplicate(self):
         self._push_undo()
         p = dict(self._sel_piece())
+        p["gap"] = 0.0
         self.pieces.append(p)
         self.order.insert(self.sel + 1, len(self.pieces) - 1)
         self._redraw()
@@ -897,6 +908,17 @@ class VideoEditor(tk.Toplevel):
         p = self._sel_piece()
         self._push_undo()
         p["mute"] = not p["mute"]
+        self._redraw()
+
+    def _gap_remove(self):
+        self._push_undo()
+        self._sel_piece()["gap"] = 0.0
+        self._redraw()
+
+    def _gaps_remove_all(self):
+        self._push_undo()
+        for ix in self.order:
+            self.pieces[ix]["gap"] = 0.0
         self._redraw()
 
     # ------------------------------------------------ скасувати / повторити --- #
@@ -1032,7 +1054,29 @@ class VideoEditor(tk.Toplevel):
                 for ix in self.order]
 
     def _total(self):
-        return max(0.1, sum(self._clip_durs()))
+        return max(0.1, sum(self._clip_durs()))   # тривалість ЕКСПОРТУ (без пропусків)
+
+    def _layout_total(self):
+        """Тривалість доріжки ЯК ВИДНО (з порожніми місцями)."""
+        return max(0.1, sum(self._gapof(self.pieces[ix]) for ix in self.order)
+                   + sum(self._clip_durs()))
+
+    def _gapless(self, t):
+        """Час доріжки (з пропусками) -> час ЕКСПОРТУ (пропуски стиснуто).
+        Так звуки/накладки лягають у готовому відео саме туди, де їх видно."""
+        acc = out = 0.0
+        for ix in self.order:
+            p = self.pieces[ix]
+            g = self._gapof(p)
+            d = (p["e"] - p["s"]) / p["speed"]
+            if t <= acc + g:
+                return out                     # у порожньому місці -> початок кліпа
+            acc += g
+            if t <= acc + d:
+                return out + (t - acc)
+            acc += d
+            out += d
+        return out
 
     def _pps(self):
         # ФІКСОВАНИЙ масштаб (px/сек від тривалості ПЕРШОГО відео, не від поточного
@@ -1042,25 +1086,30 @@ class VideoEditor(tk.Toplevel):
 
     def _content_width(self, pps):
         ds = self._clip_durs()
-        return 4.0 + sum(d * pps for d in ds) + 3 * max(0, len(ds) - 1)
+        gaps = sum(self._gapof(self.pieces[ix]) for ix in self.order)
+        return 4.0 + (sum(ds) + gaps) * pps + 3 * max(0, len(ds) - 1)
 
-    def _content_x_of(self, montage_t, pps):
-        x, acc, gap = 2.0, 0.0, 3
-        for d in self._clip_durs():
-            if montage_t <= acc + d:
-                return x + (montage_t - acc) * pps
-            x += d * pps + gap
-            acc += d
+    def _content_x_of(self, layout_t, pps):
+        """Час доріжки (з пропусками) -> x у контенті."""
+        x, acc, gpx = 2.0, 0.0, 3
+        for ix in self.order:
+            p = self.pieces[ix]
+            for span in (self._gapof(p), (p["e"] - p["s"]) / p["speed"]):
+                if layout_t <= acc + span:
+                    return x + (layout_t - acc) * pps
+                x += span * pps
+                acc += span
+            x += gpx
         return x
 
     def _playhead_montage_t(self):
         acc = 0.0
         for slot in range(len(self.order)):
             p = self.pieces[self.order[slot]]
-            d = (p["e"] - p["s"]) / p["speed"]
+            acc += self._gapof(p)
             if slot == self.sel:
                 return acc + (min(max(self.cur, p["s"]), p["e"]) - p["s"]) / p["speed"]
-            acc += d
+            acc += (p["e"] - p["s"]) / p["speed"]
         return acc
 
     def _clamp_scroll(self, pps):
@@ -1103,6 +1152,7 @@ class VideoEditor(tk.Toplevel):
             self._push_undo(); self._nudge_active = True
         if self._active == "L":
             ns = min(max(lo, p["s"] + direction * step), p["e"] - eps)
+            p["gap"] = max(0.0, self._gapof(p) + (ns - p["s"]) / p["speed"])
             p["s"] = ns; self.cur = self._tip_t = ns
         elif self._active == "R":
             ne = max(min(hi, p["e"] + direction * step), p["s"] + eps)
@@ -1145,12 +1195,19 @@ class VideoEditor(tk.Toplevel):
             s, e = p["s"], p["e"]
             w = max(6.0, (e - s) / p["speed"] * pps)
             sel = slot == self.sel
-            # обрізка ЛІВОЮ ручкою: поки тягнеш — правий край і сусідні кліпи СТОЯТЬ,
-            # а лівий край іде за мишкою (як у CapCut); при відпусканні все припаковується
-            w_alloc = w
-            if sel and self._drag == "L" and getattr(self, "_d0", None):
-                w_alloc = max(w, (e - self._d0["s0"]) / p["speed"] * pps)
-            cx1, cx2 = x + (w_alloc - w), x + w_alloc
+            # порожнє місце перед кліпом: лишається на доріжці (зникне при збереженні)
+            gpx = self._gapof(p) * pps
+            if gpx > 0.5:
+                gx1, gx2 = x, x + gpx
+                if gx2 > 0 and gx1 < W:
+                    c.create_rectangle(gx1, 3, gx2, TLH - 3, fill="#101116", outline="")
+                    c.create_rectangle(gx1, 3, gx2, TLH - 3, fill=C_CLIP,
+                                       stipple="gray12", outline="")
+                    if gpx > 76:
+                        c.create_text((gx1 + gx2) / 2, TLH / 2, text="порожньо",
+                                      fill=C_MUTED, font=(FONT, 8))
+                x += gpx
+            cx1, cx2 = x, x + w
             c.create_rectangle(cx1, 3, cx2, TLH - 3, fill=C_CLIP, outline="")
             self._draw_clip_strip(c, cx1, cx2, p)
             if not sel:
@@ -1187,7 +1244,7 @@ class VideoEditor(tk.Toplevel):
                     c.create_line(xh, 3, xh, TLH, fill=C_PLAY, width=2)
                     c.create_polygon(xh - 5, 0, xh + 5, 0, xh, 7, fill=C_PLAY, outline="")
             self._clip_rects.append((slot, ix, cx1, cx2))
-            x = x + w_alloc + gap
+            x = cx2 + gap
         if self._tip_t is not None:
             tx = (self._sel_xe if self._active == "R"
                   else self._sel_xs if self._active == "L" else self._playhead_x)
@@ -1268,9 +1325,13 @@ class VideoEditor(tk.Toplevel):
                 v = "" if sn["vol"] == 1.0 else f" · {int(sn['vol'] * 100)}%"
                 c.create_text(max(x1 + 6, 6), (LANE + H) / 2 + 1, anchor="w",
                               text=f"🎵 {nm}{v}", fill="#10121a", font=(FONT, 8, "bold"))
-            if not self.snds and all(not self._src(self.pieces[ix]).get("env")
-                                     for _, ix, _, _ in self._clip_rects):
-                c.create_text(W // 2, mid, text="без звуку", fill=C_MUTED, font=(FONT, 8))
+            if all(not self._src(self.pieces[ix]).get("env")
+                   for _, ix, _, _ in self._clip_rects):
+                c.create_text(W // 2, mid, text="хвиля звуку відео", fill=C_MUTED, font=(FONT, 8))
+            if not self.snds:
+                c.create_text(W // 2, (LANE + H) / 2 + 1,
+                              text="🎵 сюди можна додати звук — ➕ або перетягни файл",
+                              fill=C_MUTED, font=(FONT, 8))
             xh = getattr(self, "_playhead_x", 0)
             if xh:
                 c.create_line(xh, 0, xh, H, fill=C_PLAY, width=2)
@@ -1302,7 +1363,7 @@ class VideoEditor(tk.Toplevel):
             self._snd_drag[3] = True
         pps = self._pps()
         at = at0 + (ev.x - x0) / max(0.001, pps)
-        self.snds[i]["at"] = max(0.0, min(self._total() - 0.1, at))
+        self.snds[i]["at"] = max(0.0, min(self._layout_total() - 0.1, at))
         self._draw_wave()
 
     def _wave_release(self, _ev):
@@ -1328,8 +1389,11 @@ class VideoEditor(tk.Toplevel):
         self._push_undo()
         slot = self.sel
         p = self.pieces[self.order[slot]]
-        durs = self._clip_durs()
-        at = sum(durs[:slot])
+        at = 0.0                       # позиція кліпа на доріжці (з урахуванням пропусків)
+        for sl in range(slot):
+            q = self.pieces[self.order[sl]]
+            at += self._gapof(q) + (q["e"] - q["s"]) / q["speed"]
+        at += self._gapof(p)
         self.ovls.append({"src": p["src"], "s": p["s"], "e": p["e"], "at": at,
                           "zoom": 0.5, "nx": 0.28, "ny": -0.22, "mute": p["mute"]})
         del self.order[slot]
@@ -1467,7 +1531,7 @@ class VideoEditor(tk.Toplevel):
         elif edge == "R":
             o["e"] = min(hi, max(o0["e"] + d, o0["s"] + 0.1))
         else:
-            o["at"] = max(0.0, min(self._total() - 0.1, o0["at"] + d))
+            o["at"] = max(0.0, min(self._layout_total() - 0.1, o0["at"] + d))
         self._draw_ovl()
 
     def _ovl_release(self, _ev):
@@ -1546,6 +1610,12 @@ class VideoEditor(tk.Toplevel):
                               command=self._toggle_mute)
         if self._is_transformed(p):
             m.add_command(label="🔍  Скинути масштаб/позицію", command=self._tf_reset)
+        if self._gapof(p) > 0.01:
+            m.add_command(label="🧹  Прибрати порожнє місце перед кліпом",
+                          command=self._gap_remove)
+        if any(self._gapof(self.pieces[ix]) > 0.01 for ix in self.order):
+            m.add_command(label="🧹  Прибрати всі порожні місця",
+                          command=self._gaps_remove_all)
         m.add_separator()
         m.add_command(label="◀  Пересунути лівіше", command=lambda: self._move(-1))
         m.add_command(label="▶  Пересунути правіше", command=lambda: self._move(1))
@@ -1607,7 +1677,7 @@ class VideoEditor(tk.Toplevel):
             self._active = self._drag
             self._nudge_active = True         # drag уже штовхнув undo -> стрілки не дублюють
             self._tip_t = p["s"] if self._drag == "L" else p["e"]
-            self._d0 = {"x0": ev.x, "s0": p["s"], "e0": p["e"],
+            self._d0 = {"x0": ev.x, "s0": p["s"], "e0": p["e"], "g0": self._gapof(p),
                         "pps": (self._sel_xe - self._sel_xs) / max(0.001, p["e"] - p["s"])}
             self._redraw()
             return
@@ -1645,6 +1715,8 @@ class VideoEditor(tk.Toplevel):
         if self._drag == "L":
             ns = max(lo, min(d0["s0"] + dsrc, d0["e0"] - 0.1))
             p["s"] = ns; self.cur = self._tip_t = ns
+            # зрізане зліва лишає ПОРОЖНЄ МІСЦЕ на доріжці (зникне при збереженні)
+            p["gap"] = max(0.0, d0["g0"] + (ns - d0["s0"]) / p["speed"])
         else:
             ne = min(hi, max(d0["e0"] + dsrc, d0["s0"] + 0.1))
             p["e"] = ne; self.cur = self._tip_t = ne
@@ -1652,10 +1724,7 @@ class VideoEditor(tk.Toplevel):
         self._redraw()
 
     def _tl_release(self, _ev):
-        was_l = self._drag == "L"
         self._drag = None
-        if was_l:
-            self._redraw()       # відпустив ліву ручку -> кліпи припаковуються назад
         if self._tip_t is not None:
             self._schedule_tip_clear()
 
@@ -1794,8 +1863,11 @@ class VideoEditor(tk.Toplevel):
     def _compose(self, tmpd, joined, total, prog, cancel):
         """Накладає self.ovls на відео (overlay з вікном enable) і підмішує self.snds
         (adelay+amix). Повертає новий шлях (або joined, якщо нема чого накладати; None=збій)."""
-        ovls = [o for o in self.ovls if o["at"] < total - 0.05]
-        snds = [s for s in self.snds if s["at"] < total - 0.05 and os.path.isfile(s["path"])]
+        # позиції на доріжці (з пропусками) -> час ЕКСПОРТУ (пропуски стиснуто)
+        ovls = [(o, self._gapless(o["at"])) for o in self.ovls]
+        ovls = [(o, at) for o, at in ovls if at < total - 0.05]
+        snds = [(s, self._gapless(s["at"])) for s in self.snds if os.path.isfile(s["path"])]
+        snds = [(s, at) for s, at in snds if at < total - 0.05]
         if not ovls and not snds:
             return joined
         cw, ch = self._ccw, self._cch
@@ -1803,15 +1875,14 @@ class VideoEditor(tk.Toplevel):
         fc, alabs = [], []
         vin = "[0:v]"
         idx = 1
-        for j, o in enumerate(ovls):
+        for j, (o, at) in enumerate(ovls):
             src = self.sources[o["src"]]
-            d = min(o["e"] - o["s"], total - o["at"])
+            d = min(o["e"] - o["s"], total - at)
             if src["kind"] == "image":
                 cmd += ["-loop", "1", "-t", f"{d:.3f}", "-i", src["path"]]
             else:
                 cmd += ["-ss", f"{o['s']:.3f}", "-t", f"{d:.3f}", "-i", src["path"]]
             sw, sh, x, y = self._ovl_geom(o, cw, ch)
-            at = o["at"]
             fc.append(f"[{idx}:v]scale={sw}:{sh},setpts=PTS-STARTPTS+{at:.3f}/TB[ow{j}]")
             fc.append(f"{vin}[ow{j}]overlay={x}:{y}:"
                       f"enable='between(t,{at:.3f},{at + d:.3f})'[vb{j}]")
@@ -1821,9 +1892,9 @@ class VideoEditor(tk.Toplevel):
                 fc.append(f"[{idx}:a]atrim=0:{d:.3f},aresample=44100,adelay={ms}|{ms}[oa{j}]")
                 alabs.append(f"[oa{j}]")
             idx += 1
-        for k, sn in enumerate(snds):
+        for k, (sn, at) in enumerate(snds):
             cmd += ["-i", sn["path"]]
-            ms = int(sn["at"] * 1000)
+            ms = int(at * 1000)
             fc.append(f"[{idx}:a]aresample=44100,volume={sn['vol']:g},adelay={ms}|{ms}[sa{k}]")
             alabs.append(f"[sa{k}]")
             idx += 1
