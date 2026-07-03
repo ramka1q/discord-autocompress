@@ -39,7 +39,7 @@ def have_ffmpeg() -> bool:
         return False
 
 
-BUILD = "2026-07-02-cutdiag"   # маркер версії коду — щоб у логах бачити, чи юзер на новому коді
+BUILD = "2026-07-03-multitrack"   # маркер версії коду — щоб у логах бачити, чи юзер на новому коді
 
 
 def probe_diag(path: str) -> str:

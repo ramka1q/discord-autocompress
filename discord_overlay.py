@@ -450,7 +450,14 @@ class Overlay(tk.Toplevel):
             self._btn_full(L("ov_trim"), self._open_trim, 238, primary=False)
             self._btn_full(L("close"), self._close, 286, primary=False)
             return
-        self._text(f"{self.size_mb:.1f} {u}   →   ≈{self.cfg['target_mb']} {u}", 146, 11, C_BLURPLE)
+        # рядок розміру КЛІКАБЕЛЬНИЙ (✏) — можна ввести свій розмір у МБ (не менше ліміту)
+        tag = "custmb"
+        self.canvas.create_text(self.W // 2, 146,
+                                text=f"{self.size_mb:.1f} {u}   →   ≈{self.cfg['target_mb']} {u}   ✏",
+                                fill=C_BLURPLE, font=(FONT, 11, "bold"), tags=("dyn", tag))
+        self.canvas.tag_bind(tag, "<Button-1>", lambda e: self._custom_input())
+        self.canvas.tag_bind(tag, "<Enter>", lambda e: self.canvas.config(cursor="hand2"))
+        self.canvas.tag_bind(tag, "<Leave>", lambda e: self.canvas.config(cursor=""))
         if self.kind == "video":
             self._btn_full(L("ov_compress"), self._start, 190)
             self._btn_full(L("ov_split"), lambda: self._start_split(balanced=False), 238, primary=False)
@@ -596,8 +603,8 @@ class Overlay(tk.Toplevel):
         out_path = media.audio_out_name(self.file_path, float(self.cfg["target_mb"]))
         self._run_media(media.compress_audio, out_path)
 
-    def _run_media(self, fn, out_path):
-        target = float(self.cfg["target_mb"])
+    def _run_media(self, fn, out_path, target_override=None):
+        target = float(target_override) if target_override else float(self.cfg["target_mb"])
         self.cancel["flag"] = False
         self._show_progress(title=L("ov_working"))
 
@@ -692,6 +699,53 @@ class Overlay(tk.Toplevel):
             return self.shrink_err.config(text=L("ov_shrink_bad"))
         if val >= self.size_mb:
             return self.shrink_err.config(text=L("ov_shrink_toobig", max=f"{self.size_mb:.1f}"))
+        self._start(target_override=val)
+
+    # ---- свій розмір у МБ з екрана пропозиції (✏ на рядку розміру) ----
+    def _custom_input(self):
+        """Екран вводу СВОГО розміру: не менше ліміту з налаштувань, менше за сам файл."""
+        lim = float(self.cfg["target_mb"])
+        self._clear()
+        self._badge("✏", 62)
+        self._text(L("ov_custom_type", min=f"{lim:g}", max=f"{self.size_mb:.1f}"), 116, 12, C_TEXT)
+        cx, cy = self.W // 2, 158
+        self.canvas.create_polygon(_rr_pts(cx - 74, cy - 22, cx + 74, cy + 22, 12),
+                                   smooth=True, fill=C_DARK, outline=C_BLURPLE, width=1, tags="dyn")
+        self.mb_entry = tk.Entry(self.canvas, width=6, font=(FONT, 18, "bold"), justify="center",
+                                 bg=C_DARK, fg=C_TEXT, insertbackground=C_TEXT, relief="flat",
+                                 highlightthickness=0, bd=0)
+        self.mb_entry.insert(0, f"{lim:g}")
+        self._place(self.mb_entry, cx - 18, cy)
+        self._text(L("unit_mb"), cy, 13, C_MUTED, bold=False, x=cx + 42)
+        self.shrink_err = self._label("", 9, C_RED)
+        self._place(self.shrink_err, cx, 194)
+        self.mb_entry.bind("<Return>", lambda e: self._do_custom_typed())
+        self._btn_full(L("ov_compress"), self._do_custom_typed, 236)
+        self._btn_full(L("close"), self._show_offer, 284, primary=False)
+        try:
+            self.focus_force()
+            self.mb_entry.focus_set()
+            self.mb_entry.select_range(0, "end")
+        except tk.TclError:
+            pass
+
+    def _do_custom_typed(self):
+        lim = float(self.cfg["target_mb"])
+        txt = self.mb_entry.get().strip().replace(",", ".")
+        try:
+            val = float(txt)
+        except ValueError:
+            return self.shrink_err.config(text=L("ov_shrink_bad"))
+        if val < lim:      # не можна нижче за ліміт із налаштувань
+            return self.shrink_err.config(text=L("ov_custom_low", min=f"{lim:g}"))
+        if val >= self.size_mb:
+            return self.shrink_err.config(text=L("ov_shrink_toobig", max=f"{self.size_mb:.1f}"))
+        if self.kind == "image":
+            out = media.image_out_name(self.file_path, val)
+            return self._run_media(media.compress_image, out, target_override=val)
+        if self.kind == "audio":
+            out = media.audio_out_name(self.file_path, val)
+            return self._run_media(media.compress_audio, out, target_override=val)
         self._start(target_override=val)
 
     def _start(self, target_override=None):
