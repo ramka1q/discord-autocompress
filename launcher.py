@@ -366,6 +366,34 @@ GREEN, RED = "#3ba55d", "#f23f43"
 F = "Segoe UI"
 
 
+def _set_win_icon(r):
+    """Наша іконка в рамці вікна інсталятора/деінсталятора.
+    Якщо код уже на місці — через appicon; для СВІЖОГО інсталятора (файлів ще нема)
+    витягуємо іконку з самого exe (вона вшита PyInstaller-ом через --icon)."""
+    try:
+        sys.path.insert(0, exe_dir())
+        import appicon
+        appicon.set_window_icon(r)
+        return
+    except Exception:
+        pass
+    if not getattr(sys, "frozen", False):
+        return
+    try:
+        r.update_idletasks()
+        hwnd = ctypes.windll.user32.GetParent(r.winfo_id())
+        big, small = ctypes.c_void_p(), ctypes.c_void_p()
+        ctypes.windll.shell32.ExtractIconExW(sys.executable, 0,
+                                             ctypes.byref(big), ctypes.byref(small), 1)
+        WM_SETICON = 0x0080
+        if small.value:
+            ctypes.windll.user32.SendMessageW(hwnd, WM_SETICON, 0, small)
+        if big.value:
+            ctypes.windll.user32.SendMessageW(hwnd, WM_SETICON, 1, big)
+    except Exception:
+        pass
+
+
 def _win(title, w, h):
     r = tkinter.Tk()
     r.title(title)
@@ -374,6 +402,7 @@ def _win(title, w, h):
     sw, sh = r.winfo_screenwidth(), r.winfo_screenheight()
     r.geometry(f"{w}x{h}+{(sw - w) // 2}+{(sh - h) // 2}")
     r.attributes("-topmost", True)
+    _set_win_icon(r)
     return r
 
 

@@ -24,6 +24,7 @@ import time
 import tkinter as tk
 from tkinter import filedialog
 
+import appicon
 import dc_core
 import discord_overlay as host
 import jokes
@@ -174,6 +175,10 @@ class VideoEditor(tk.Toplevel):
         self._frames = [os.path.join(self._tmp, "a.png"), os.path.join(self._tmp, "b.png")]
 
         self.title("✂ Редактор відео — Discord Auto-Compress")
+        try:
+            appicon.set_window_icon(self)   # наша іконка в рамці вікна
+        except Exception:
+            pass
         self.configure(bg=C_BG)
         self.attributes("-topmost", True)
         self.protocol("WM_DELETE_WINDOW", self._close)
