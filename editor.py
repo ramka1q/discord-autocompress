@@ -92,6 +92,7 @@ def fmt(t):
 
 class VideoEditor(tk.Toplevel):
     VW, VH = 480, 270
+    VPAD = 52        # поля навколо екрана плеєра — рамка масштабу видно й ЗА плеєром
     TW = 600
 
     def __init__(self, master, file_path, info, cfg, discord_hwnd, watcher, on_close):
@@ -123,6 +124,9 @@ class VideoEditor(tk.Toplevel):
         self._ccw = max(2, int(w0 * k / 2) * 2)
         self._cch = max(2, int(h0 * k / 2) * 2)
         self._cfps = min(60.0, float(info.get("fps", 30) or 30))
+        # базовий масштаб доріжки: перше відео рівно вміщується у TW (далі НЕ перераховується
+        # при обрізці — фіксований px/сек, як у CapCut)
+        self._base_pps = self.TW / max(0.1, info["duration"])
         pk = min(self.VW / self._ccw, self.VH / self._cch)
         self._pcw = max(2, int(self._ccw * pk / 2) * 2)   # прев'ю-канвас (вписаний у 480x270)
         self._pch = max(2, int(self._cch * pk / 2) * 2)
@@ -210,8 +214,13 @@ class VideoEditor(tk.Toplevel):
     def _build(self):
         tk.Label(self, text="Клік по кліпу — вибрати · ручки — обрізати · клік по ВІДЕО — масштаб/позиція · ПКМ — меню (накладки теж) · тягни файли сюди",
                  bg=C_BG, fg=C_MUTED, font=(FONT, 9)).pack(pady=(10, 6))
-        self.video = tk.Canvas(self, width=self.VW, height=self.VH, bg="black", highlightthickness=0)
+        # канвас ШИРШИЙ за екран плеєра (поля VPAD) -> рамка масштабу не обрізається
+        self.video = tk.Canvas(self, width=self.VW + 2 * self.VPAD,
+                               height=self.VH + 2 * self.VPAD, bg=C_BG, highlightthickness=0)
         self.video.pack()
+        self.video.create_rectangle(self.VPAD, self.VPAD, self.VPAD + self.VW,
+                                    self.VPAD + self.VH, fill="#000000", outline=C_DARK,
+                                    tags="screen")
         self.video.bind("<Button-1>", self._video_press)
         self.video.bind("<B1-Motion>", self._video_motion)
         self.video.bind("<ButtonRelease-1>", self._video_release)
@@ -510,8 +519,10 @@ class VideoEditor(tk.Toplevel):
         try:
             self._img = tk.PhotoImage(file=png)
             self.video.delete("frame")
-            self.video.create_image(self.VW // 2, self.VH // 2, image=self._img, tags="frame")
+            self.video.create_image(self.VPAD + self.VW // 2, self.VPAD + self.VH // 2,
+                                    image=self._img, tags="frame")
             self.video.tag_lower("frame")       # рамка масштабу лишається поверх кадру
+            self.video.tag_lower("screen")      # чорний екран — під кадром
             self._draw_tfbox()
         except tk.TclError:
             pass
@@ -531,8 +542,8 @@ class VideoEditor(tk.Toplevel):
         ih = src["h"] or self._pch
         f0 = min(self._pcw / iw, self._pch / ih)
         sw, sh = iw * f0 * p["zoom"], ih * f0 * p["zoom"]
-        ox = (self.VW - self._pcw) / 2.0
-        oy = (self.VH - self._pch) / 2.0
+        ox = self.VPAD + (self.VW - self._pcw) / 2.0
+        oy = self.VPAD + (self.VH - self._pch) / 2.0
         cx = ox + self._pcw / 2.0 + p["nx"] * self._pcw
         cy = oy + self._pch / 2.0 + p["ny"] * self._pch
         return cx - sw / 2, cy - sh / 2, cx + sw / 2, cy + sh / 2
@@ -543,14 +554,23 @@ class VideoEditor(tk.Toplevel):
         if not self._tf_on or self.playing:
             return
         x1, y1, x2, y2 = self._tf_rect()
+        CW = self.VW + 2 * self.VPAD
+        CH = self.VH + 2 * self.VPAD
         col = C_OVL if self.sel_ovl is not None else C_HANDLE
         c.create_rectangle(x1, y1, x2, y2, outline=col, width=2, tags="tf")
         r = 7
-        for hx, hy in ((x1, y1), (x2, y1), (x1, y2), (x2, y2)):    # кутові ручки
-            c.create_rectangle(hx - r, hy - r, hx + r, hy + r,
+        # ручки КЛАМПЛЯТЬСЯ у межі канваса: навіть коли рамка більша за поля —
+        # кут завжди видно і можна схопити (масштаб рахується від центру, не від ручки)
+        self._tf_handles = []
+        for hx, hy in ((x1, y1), (x2, y1), (x1, y2), (x2, y2)):
+            hxc = min(max(hx, r + 2), CW - r - 2)
+            hyc = min(max(hy, r + 2), CH - r - 2)
+            self._tf_handles.append((hxc, hyc))
+            c.create_rectangle(hxc - r, hyc - r, hxc + r, hyc + r,
                                fill=col, outline=C_DARK, width=1, tags="tf")
         what = " (накладка)" if self.sel_ovl is not None else ""
-        c.create_text((x1 + x2) / 2, min(self.VH - 10, max(12, y2 + 14)),
+        ty = min(CH - 9, max(10, y2 + 14))
+        c.create_text(CW / 2, ty,
                       text=f"тягни кут — масштаб · середину — позиція{what} · подвійний клік — скинути",
                       fill=C_HANDLE, font=(FONT, 8), tags="tf")
 
@@ -568,7 +588,7 @@ class VideoEditor(tk.Toplevel):
         x1, y1, x2, y2 = self._tf_rect()
         cxm, cym = (x1 + x2) / 2, (y1 + y2) / 2
         corner = None
-        for hx, hy in ((x1, y1), (x2, y1), (x1, y2), (x2, y2)):
+        for hx, hy in getattr(self, "_tf_handles", None) or ((x1, y1), (x2, y1), (x1, y2), (x2, y2)):
             if abs(ev.x - hx) <= 12 and abs(ev.y - hy) <= 12:
                 corner = (hx, hy)
                 break
@@ -666,8 +686,7 @@ class VideoEditor(tk.Toplevel):
                 pass
             self._play_progress()
             return
-        w = self.video.winfo_width() or self.VW
-        h = self.video.winfo_height() or self.VH
+        w, h = self.VW, self.VH          # ffplay = рівно екран плеєра (канвас ширший на поля)
         self._embed_title = f"dac_play_{os.getpid()}_{int(start * 1000)}"
         cmd = ["ffplay", "-hide_banner", "-loglevel", "error", "-stats", "-noborder", "-autoexit",
                "-left", "32000", "-top", "32000",   # спавн за межами екрана — без спалаху
@@ -741,9 +760,7 @@ class VideoEditor(tk.Toplevel):
                 parent = self.video.winfo_id()
                 _SetWinLong(hwnd, _GWL_STYLE, _WS_CHILD | _WS_VISIBLE)
                 _u32.SetParent(hwnd, parent)
-                w = self.video.winfo_width() or self.VW
-                h = self.video.winfo_height() or self.VH
-                _u32.MoveWindow(hwnd, 0, 0, w, h, True)
+                _u32.MoveWindow(hwnd, self.VPAD, self.VPAD, self.VW, self.VH, True)
                 self._embedded = hwnd
                 # РЕСИНХ запасного годинника на момент появи вікна ffplay.
                 self._play_t0 = time.monotonic()
@@ -1013,7 +1030,10 @@ class VideoEditor(tk.Toplevel):
         return max(0.1, sum(self._clip_durs()))
 
     def _pps(self):
-        return (self.TW / self._total()) * self._zoom
+        # ФІКСОВАНИЙ масштаб (px/сек від тривалості ПЕРШОГО відео, не від поточного
+        # монтажу) — як у CapCut: обрізаєш кліп -> він КОРОТШАЄ, а не тягнеться
+        # на всю доріжку. Зум/скрол — поверх цієї бази.
+        return self._base_pps * self._zoom
 
     def _content_width(self, pps):
         ds = self._clip_durs()
@@ -1045,7 +1065,7 @@ class VideoEditor(tk.Toplevel):
         old = self._pps()
         ft = self._playhead_montage_t()
         screen_x = self._content_x_of(ft, old) - self._scroll
-        self._zoom = min(60.0, max(1.0, self._zoom * factor))
+        self._zoom = min(60.0, max(0.15, self._zoom * factor))   # 0.15 = зум-аут, коли монтаж довгий
         new = self._pps()
         self._scroll = self._content_x_of(ft, new) - screen_x
         self._clamp_scroll(new)
@@ -1101,7 +1121,7 @@ class VideoEditor(tk.Toplevel):
         except Exception: pass
 
     def _on_scroll(self, ev):
-        if self._zoom <= 1.0:
+        if self._content_width(self._pps()) <= self.TW:
             return
         self._scroll -= (ev.delta / 120.0) * 60
         self._clamp_scroll(self._pps())
