@@ -22,9 +22,12 @@ The app lives quietly in the system tray. When you press **Ctrl+V** in Discord a
 
 ## Install (no Python needed)
 
-1. Download the release `.exe` (or `setup.zip` and run `scripts/Install.bat`).
-2. It installs Python + ffmpeg via winget if missing, sets up autostart, and starts in the tray.
-3. Update anytime with the **Check for updates** button or `scripts/Update now.bat`.
+1. Download the release `DiscordAutoCompress.exe` and run it — a **graphical installer** opens.
+2. Pick a folder (all program files are installed there, fully visible — no hidden stuff), choose desktop shortcut / autostart, click **Install**.
+3. Uninstall anytime from **Windows Settings → Apps** ("Discord Auto-Compress"), the Start-menu **Uninstall** shortcut, or `DiscordAutoCompress.exe --uninstall`.
+4. Update anytime with the **Check for updates** button in Settings (code auto-syncs from GitHub on every launch).
+
+> Alternative for Python users: `setup.zip` + `scripts/Install.bat` (installs Python + ffmpeg via winget).
 
 ## Build it yourself
 

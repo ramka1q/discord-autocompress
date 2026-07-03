@@ -491,6 +491,10 @@ def main():
 
 if __name__ == "__main__":
     # приховані тест-режими (без GUI) — для перевірки установки/видалення
+    try:      # консоль Windows (cp1251) падає на ✓ у принтах — робимо вивід стійким
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
     if "--test-install" in sys.argv:
         d = sys.argv[sys.argv.index("--test-install") + 1]
         ok, msg = install_to(d, desktop=False, autostart=False, shortcuts=False,
