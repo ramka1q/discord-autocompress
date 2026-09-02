@@ -28,7 +28,39 @@ def _winget_ffmpeg_dirs():
                     dirs.append(root)
     except Exception:
         pass
+    # If several WinGet versions are left on disk, prefer the newest install.
+    try:
+        dirs.sort(key=os.path.getmtime, reverse=True)
+    except OSError:
+        pass
     return dirs
+
+
+def _prepend_path_dirs(dirs):
+    """Move *dirs* to the front of PATH, even when they already occur later.
+
+    Merely checking ``if d not in PATH`` is not enough: an unrelated program can
+    install an ancient ffmpeg earlier in PATH while the current WinGet build is
+    already present near the end.  In that case shutil.which() keeps selecting
+    the ancient executable.  De-duplicate by normalized path and explicitly
+    rebuild PATH in the desired order.
+    """
+    current = [p for p in os.environ.get("PATH", "").split(os.pathsep) if p]
+    wanted = [p for p in dirs if p and os.path.isdir(p)]
+
+    def key(path):
+        return os.path.normcase(os.path.normpath(path.strip().strip('"')))
+
+    wanted_keys = {key(p) for p in wanted}
+    rest = []
+    seen = set(wanted_keys)
+    for path in current:
+        norm = key(path)
+        if norm in seen:
+            continue
+        seen.add(norm)
+        rest.append(path)
+    os.environ["PATH"] = os.pathsep.join(wanted + rest)
 
 
 def refresh_path():
@@ -55,11 +87,10 @@ def refresh_path():
     except Exception:
         pass
     # запасний варіант: додаємо теку ffmpeg від winget напряму
-    cur = os.environ.get("PATH", "")
-    for d in _winget_ffmpeg_dirs():
-        if d not in cur:
-            os.environ["PATH"] = d + os.pathsep + cur
-            cur = os.environ["PATH"]
+    # Always MOVE the bundled/current WinGet build to the front.  Previously we
+    # only prepended it when absent, so an ffmpeg from Python's Scripts folder
+    # (in this case a 2013 build) could continue shadowing ffmpeg 8.x forever.
+    _prepend_path_dirs(_winget_ffmpeg_dirs())
 
 
 def check(refresh=False) -> dict:

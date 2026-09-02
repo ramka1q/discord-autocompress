@@ -61,7 +61,7 @@ STR = {
 
     # ---- ліміт ----
     "limit_title":      {"uk": "Ідеальний розмір (ліміт Discord)", "ru": "Идеальный размер (лимит Discord)", "en": "Target size (Discord limit)"},
-    "limit_10":         {"uk": "10 МБ (без Nitro)",  "ru": "10 МБ (без Nitro)",  "en": "10 MB (no Nitro)"},
+    "limit_20":         {"uk": "20 МБ (без Nitro)",  "ru": "20 МБ (без Nitro)",  "en": "20 MB (no Nitro)"},
     "limit_25":         {"uk": "25 МБ",              "ru": "25 МБ",              "en": "25 MB"},
     "limit_50":         {"uk": "50 МБ (Nitro Basic)","ru": "50 МБ (Nitro Basic)","en": "50 MB (Nitro Basic)"},
     "limit_500":        {"uk": "500 МБ (Nitro)",     "ru": "500 МБ (Nitro)",     "en": "500 MB (Nitro)"},

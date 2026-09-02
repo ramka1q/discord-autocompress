@@ -34,6 +34,7 @@ import jokes
 import stats
 
 CONFIG_PATH = os.path.join(os.path.expanduser("~"), ".discord_overlay.json")
+FREE_LIMIT_MB = 20
 
 # ---- кольори теми (заповнюються apply_theme; імена лишаються C_* для сумісності) ----
 C_BG, C_BG2, C_DARK = "#313338", "#2b2d31", "#1e1f22"
@@ -203,7 +204,8 @@ def send_ctrl_v():
 #  Конфіг
 # --------------------------------------------------------------------------- #
 def load_config() -> dict:
-    cfg = {"target_mb": 10, "audio_kbps": 128, "auto_scale": True,
+    cfg = {"target_mb": FREE_LIMIT_MB, "free_limit_mb": FREE_LIMIT_MB,
+           "audio_kbps": 128, "auto_scale": True,
            "block_paste": True, "auto_paste": True,
            "lang": "en", "theme": "discord",   # перший запуск (нема конфіга) -> англійська
            "compress_video": True, "compress_images": True, "compress_audio": True,
@@ -211,7 +213,17 @@ def load_config() -> dict:
            "sound_file": ""}
     try:
         with open(CONFIG_PATH, encoding="utf-8") as f:
-            cfg.update(json.load(f))
+            saved = json.load(f)
+        # Migrate users who had the old free-tier preset selected.  Remembering
+        # the free limit separately makes the same migration safe next time
+        # Discord changes it, while preserving 25/50/500 MB choices.
+        previous_free = saved.get("free_limit_mb", 10)
+        if saved.get("target_mb", previous_free) == previous_free and previous_free < FREE_LIMIT_MB:
+            saved["target_mb"] = FREE_LIMIT_MB
+        if saved.get("free_limit_mb") != FREE_LIMIT_MB:
+            saved["free_limit_mb"] = FREE_LIMIT_MB
+        cfg.update(saved)
+        save_config(cfg)
     except Exception:
         pass
     return cfg

@@ -7,7 +7,7 @@ Discord Video Compressor
 бітрейту під заданий розмір).
 
 Ліміти Discord:
-    10 МБ  — без Nitro
+    20 МБ  — без Nitro
     25 МБ  — буст рівень 2 / старі акаунти
     50 МБ  — Nitro Basic
     500 МБ — Nitro
@@ -30,7 +30,7 @@ APP_TITLE = "Discord Video Compressor"
 NO_WINDOW = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
 
 PRESETS = [
-    ("Без Nitro — 10 МБ", 10),
+    ("Без Nitro — 20 МБ", 20),
     ("25 МБ", 25),
     ("Nitro Basic — 50 МБ", 50),
     ("Nitro — 500 МБ", 500),
@@ -71,7 +71,7 @@ class Compressor(tk.Tk):
 
         self.in_path = tk.StringVar()
         self.info: dict | None = None
-        self.size_var = tk.IntVar(value=10)
+        self.size_var = tk.IntVar(value=20)
         self.scale_var = tk.IntVar(value=720)
         self.audio_kbps = tk.IntVar(value=128)
         self.worker: threading.Thread | None = None

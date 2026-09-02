@@ -14,6 +14,15 @@ import subprocess
 import tempfile
 import time
 
+# Prefer the current WinGet ffmpeg before any stale copy another application may
+# have placed earlier in PATH.  All video entry points import dc_core, so doing
+# this here also repairs the auto-overlay, watcher and editor in one place.
+try:
+    import deps
+    deps.refresh_path()
+except Exception:
+    pass
+
 NO_WINDOW = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
 
 DEBUG_LOG = os.path.join(tempfile.gettempdir(), "dac_debug.log")
@@ -125,7 +134,9 @@ def _run_pass(cmd, duration, base_pct, span, progress_cb, should_cancel):
     cmd = cmd + ["-progress", "pipe:1", "-nostats", "-loglevel", "error"]
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                             text=True, creationflags=NO_WINDOW)
+    error_tail = []
     for line in proc.stdout:
+        line = line.rstrip()
         if should_cancel and should_cancel():
             proc.terminate()
             break
@@ -134,7 +145,12 @@ def _run_pass(cmd, duration, base_pct, span, progress_cb, should_cancel):
             hh, mn, ss = m.groups()
             done = int(hh) * 3600 + int(mn) * 60 + float(ss)
             progress_cb(base_pct + min(1.0, done / duration) * span)
+        elif line and "=" not in line:
+            error_tail.append(line)
+            del error_tail[:-8]
     proc.wait()
+    if proc.returncode != 0 and error_tail:
+        dlog("ffmpeg failed rc=%s: %s" % (proc.returncode, " | ".join(error_tail)))
     return proc.returncode
 
 

@@ -19,7 +19,8 @@ import dc_core
 
 APP_TITLE = "Discord Auto-Compress"
 CONFIG_PATH = os.path.join(os.path.expanduser("~"), ".discord_autowatch.json")
-PRESETS = [("10 МБ (без Nitro)", 10), ("25 МБ", 25), ("50 МБ (Nitro Basic)", 50), ("500 МБ (Nitro)", 500)]
+FREE_LIMIT_MB = 20
+PRESETS = [("20 МБ (без Nitro)", 20), ("25 МБ", 25), ("50 МБ (Nitro Basic)", 50), ("500 МБ (Nitro)", 500)]
 
 
 def default_folders() -> list[str]:
@@ -40,7 +41,7 @@ class AutoWatcher(tk.Tk):
         self.minsize(560, 480)
 
         self.folders: list[str] = []
-        self.target_mb = tk.IntVar(value=10)
+        self.target_mb = tk.IntVar(value=FREE_LIMIT_MB)
         self.audio_kbps = tk.IntVar(value=128)
         self.auto_scale = tk.BooleanVar(value=True)
 
@@ -282,7 +283,9 @@ class AutoWatcher(tk.Tk):
             with open(CONFIG_PATH, encoding="utf-8") as f:
                 c = json.load(f)
             self.folders = [d for d in c.get("folders", []) if os.path.isdir(d)]
-            self.target_mb.set(c.get("target_mb", 10))
+            target = c.get("target_mb", FREE_LIMIT_MB)
+            # 10 MB was the old free-tier preset, so migrate it for existing users.
+            self.target_mb.set(FREE_LIMIT_MB if target == 10 else target)
             self.audio_kbps.set(c.get("audio_kbps", 128))
             self.auto_scale.set(c.get("auto_scale", True))
         except Exception:

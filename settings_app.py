@@ -76,7 +76,7 @@ class SettingsApp:
         до них — тож перемикання вкладок НІКОЛИ не скидає вибране. Кожна зміна —
         авто-збереження (не треба тиснути «Зберегти»)."""
         c, w = self.cfg, self.win
-        self.v_target = tk.IntVar(w, c.get("target_mb", 10))
+        self.v_target = tk.IntVar(w, c.get("target_mb", 20))
         self.v_auto = tk.BooleanVar(w, c.get("auto_scale", True))
         self.v_block = tk.BooleanVar(w, c.get("block_paste", True))
         self.v_paste = tk.BooleanVar(w, c.get("auto_paste", True))
@@ -301,7 +301,7 @@ class SettingsApp:
     def _tab_general(self):
         f = self._pad()
         self._header(f, self.T("limit_title"))
-        for tkey, mb in (("limit_10", 10), ("limit_25", 25), ("limit_50", 50), ("limit_500", 500)):
+        for tkey, mb in (("limit_20", 20), ("limit_25", 25), ("limit_50", 50), ("limit_500", 500)):
             self._radio(f, self.T(tkey), self.v_target, mb)
 
         tk.Frame(f, bg=self.P["bg"], height=12).pack()
