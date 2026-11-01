@@ -304,6 +304,12 @@ class Overlay(tk.Toplevel):
         self._draw_card()
         self.canvas.tag_bind("drag", "<Button-1>", self._drag_start)
         self.canvas.tag_bind("drag", "<B1-Motion>", self._drag)
+        self._hover_tag = None
+        self.canvas.bind("<Motion>", self._btn_motion)
+        self.canvas.bind("<Enter>", self._btn_motion)
+        self.canvas.bind("<Leave>", self._btn_leave)
+        self.canvas.bind("<ButtonPress-1>", self._btn_press)
+        self.canvas.bind("<ButtonRelease-1>", self._btn_release)
         self.bind("<Escape>", lambda e: self._esc())
 
         self._show_offer()
@@ -474,6 +480,7 @@ class Overlay(tk.Toplevel):
                 pass
         self._widgets.clear()
         self._btns.clear()
+        self._hover_tag = None
         self.canvas.delete("dyn")
         try:
             self.canvas.config(cursor="")
@@ -528,34 +535,54 @@ class Overlay(tk.Toplevel):
         self._btns[tag] = {"text": text, "cmd": cmd, "cx": cx, "cy": cy, "w": w, "kind": kind,
                            "hover": False, "down": False}
         self._draw_btn(tag)
-        c = self.canvas
-        c.tag_bind(tag, "<Enter>", lambda e: self._btn_state(tag, hover=True))
-        c.tag_bind(tag, "<Leave>", lambda e: self._btn_state(tag, hover=False, down=False))
-        c.tag_bind(tag, "<ButtonPress-1>", lambda e: self._btn_state(tag, down=True))
-        c.tag_bind(tag, "<ButtonRelease-1>", lambda e: self._btn_click(tag))
         return tag
 
-    def _btn_state(self, tag, hover=None, down=None):
-        b = self._btns.get(tag)
-        if not b:
-            return
-        if hover is not None:
-            b["hover"] = hover
-            try:
-                self.canvas.config(cursor="hand2" if hover else "")
-            except tk.TclError:
-                pass
-        if down is not None:
-            b["down"] = down
-        self._draw_btn(tag)
+    # Наведення/натискання рахуємо за КООРДИНАТАМИ миші на всьому канвасі, а не
+    # через <Enter>/<Leave> самих елементів кнопки: кнопка при наведенні
+    # перемальовується (delete + create), а видалення елемента під курсором Tk
+    # сприймає як <Leave>, нового — як <Enter> -> нескінченна злива подій, і вікно
+    # зависало зі 100% CPU, щойно курсор опинявся над кнопкою.
+    def _btn_at(self, x, y):
+        for tag, b in self._btns.items():
+            if abs(x - b["cx"]) <= b["w"] / 2 and abs(y - b["cy"]) <= self.BTN_H / 2:
+                return tag
+        return None
 
-    def _btn_click(self, tag):
-        b = self._btns.get(tag)
-        if not b or not b["down"]:
+    def _btn_motion(self, e):
+        tag = self._btn_at(e.x, e.y)
+        if tag == self._hover_tag:
             return
-        b["down"] = False
-        self._draw_btn(tag)
-        b["cmd"]()
+        old, self._hover_tag = self._hover_tag, tag
+        for t, hov in ((old, False), (tag, True)):
+            b = self._btns.get(t)
+            if b:
+                b["hover"] = hov
+                if not hov:
+                    b["down"] = False
+                self._draw_btn(t)
+        try:
+            self.canvas.config(cursor="hand2" if tag else "")
+        except tk.TclError:
+            pass
+
+    def _btn_leave(self, _e):
+        self._btn_motion(type("Ev", (), {"x": -9999, "y": -9999})())
+
+    def _btn_press(self, e):
+        tag = self._btn_at(e.x, e.y)
+        b = self._btns.get(tag)
+        if b:
+            b["down"] = True
+            self._draw_btn(tag)
+
+    def _btn_release(self, e):
+        tag = self._btn_at(e.x, e.y)
+        pressed = [t for t, b in self._btns.items() if b["down"]]
+        for t in pressed:
+            self._btns[t]["down"] = False
+            self._draw_btn(t)
+        if tag and tag in pressed:
+            self._btns[tag]["cmd"]()
 
     def _draw_btn(self, tag):
         b = self._btns[tag]
