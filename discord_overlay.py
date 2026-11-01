@@ -214,7 +214,8 @@ def load_config() -> dict:
            "lang": "en", "theme": "discord",   # перший запуск (нема конфіга) -> англійська
            "compress_video": True, "compress_images": True, "compress_audio": True,
            "keep_local": "ask", "offer_shrink": True, "sound_done": True,
-           "sound_file": ""}
+           "sound_file": "", "notify_done": True,
+           "encoder": "auto", "encoder_best": "", "gpu_seen": False}
     try:
         with open(CONFIG_PATH, encoding="utf-8") as f:
             saved = json.load(f)
@@ -809,6 +810,7 @@ class Overlay(tk.Toplevel):
         if pct > 0:
             self._text(f"−{pct}%", 200, 24, col)
         self._text(f"{self.size_mb:.1f} {u}  →  {final_mb:.2f} {u}", 236, 10, C_MUTED, bold=False)
+        self._notify_done(f"{self.size_mb:.1f} → {final_mb:.2f} {u}", pasted)
         msg = L("ov_pasted") if pasted else L("ov_in_clip")
         self._chip(cx, 268, msg, ui.ink(ui.mix(C_BG2, col, 0.35)), ui.mix(C_BG2, col, 0.35), size=9)
         y = self._total_saved_line(298, milestone)
@@ -827,6 +829,17 @@ class Overlay(tk.Toplevel):
             self._btn_full(L("ov_done"), self._close, y + 40)
             self._set_height(y + 96)
             self._autoclose(6000, y + 72)
+
+    def _notify_done(self, sizes, pasted):
+        """Сповіщення Windows «Готово ✓», якщо вікно зараз сховане (юзер пішов з Discord)."""
+        if not self.cfg.get("notify_done", True) or self._visible or not self.watcher:
+            return
+        name = os.path.basename(self.file_path)
+        if len(name) > 48:
+            name = name[:45] + "…"
+        self.watcher.notify(L("ntf_done_title"),
+                            L("ntf_done_body", name=name, sizes=sizes,
+                              state=L("ntf_pasted") if pasted else L("ntf_clip")))
 
     def _done_ring(self, cx, cy, col, step=0):
         """Галочка «Готово»: кільце швидко замикається, а значок легенько «пружинить»."""
@@ -1237,6 +1250,7 @@ class Overlay(tk.Toplevel):
         self._clear()
         self._screen = "done_split"
         play_done_sound(self.cfg)
+        self._notify_done(L("ov_done_parts", n=n), pasted)
         cx = self.W // 2
         self._glow(cx, 100, 34, C_GREEN, 0.3)
         self._done_ring(cx, 100, C_GREEN)
@@ -1468,10 +1482,21 @@ _AUTO_MOVED_TO_WATCHER = True   # авто-оновлення без вікон;
 class Watcher:
     def __init__(self, open_settings=False):
         global LANG
+        first_run = not os.path.exists(CONFIG_PATH)
         self.cfg = load_config()
         LANG = self.cfg.get("lang", "en")
         dc_core.LANG = LANG
+        dc_core.configure(self.cfg)
         apply_theme(self.cfg.get("theme", "discord"))
+        # «Що нового»: показуємо ОДИН раз після оновлення (не на першому запуску).
+        # Позначку ставимо одразу — до відкриття меню, яке має свою копію конфіга.
+        import changelog
+        show_news = (not first_run) and self.cfg.get("seen_version") != changelog.VERSION
+        if self.cfg.get("seen_version") != changelog.VERSION:
+            self.cfg["seen_version"] = changelog.VERSION
+            save_config(self.cfg)
+        # енкодер відеокарти визначаємо у фоні, щоб перше стиснення не чекало
+        threading.Thread(target=dc_core.hw_encoder, daemon=True).start()
         self.root = tk.Tk()
         self.root.withdraw()
         self.q = queue.Queue()
@@ -1484,6 +1509,25 @@ class Watcher:
         self._start_tray()
         if open_settings:
             self.root.after(200, self.open_settings)
+        if show_news:
+            self.root.after(1400, self.show_whats_new)
+
+    def show_whats_new(self):
+        try:
+            import whatsnew
+            whatsnew.WhatsNew(self.root, LANG, THEME,
+                              on_open_tab=lambda tab: self.open_settings(tab=tab))
+        except Exception as e:
+            import traceback
+            dc_core.dlog("whatsnew FAILED: " + repr(e) + "\n" + traceback.format_exc())
+
+    def notify(self, title, text):
+        """Сповіщення Windows із трею (коли вікно програми сховане)."""
+        try:
+            if self.tray:
+                self.tray.notify(title, text)
+        except Exception:
+            pass
 
     # ---- системний трей ----
     def _tray_texts(self):
@@ -1494,6 +1538,7 @@ class Watcher:
             import tray
             self.tray = tray.Tray(
                 on_open=lambda: self.root.after(0, self.open_settings),
+                on_balloon=lambda: self.root.after(0, lambda: self.open_settings(tab="stats")),
                 on_quit=lambda: self.root.after(0, self.quit_app),
                 texts=self._tray_texts())
             self.tray.start()
@@ -1561,9 +1606,11 @@ class Watcher:
             self.quit_app()
 
     # ---- меню налаштувань ----
-    def open_settings(self):
+    def open_settings(self, tab=None):
         if self.settings_win is not None:
             try:
+                if tab:
+                    self.settings_win._show_tab(tab)
                 self.settings_win.win.deiconify()
                 self.settings_win.win.lift()
                 self.settings_win.win.attributes("-topmost", True)
@@ -1583,7 +1630,8 @@ class Watcher:
 
         self.settings_win = settings_app.SettingsApp(
             self.root, self.cfg, on_save=self._on_settings_save,
-            on_apply=self._on_settings_apply, on_close=_closed, on_restart=self.restart_app)
+            on_apply=self._on_settings_apply, on_close=_closed, on_restart=self.restart_app,
+            tab=tab)
 
     def _on_settings_save(self, cfg):
         self.cfg = cfg
@@ -1595,6 +1643,7 @@ class Watcher:
         self.cfg = cfg
         LANG = cfg.get("lang", "en")
         dc_core.LANG = LANG
+        dc_core.configure(cfg)
         apply_theme(cfg.get("theme", "discord"))
         try:
             if self.tray:

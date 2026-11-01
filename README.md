@@ -13,6 +13,8 @@ The app lives quietly in the system tray. When you press **Ctrl+V** in Discord a
 ## Features
 
 - **Auto-compress on paste** — catches Ctrl+V in Discord, compresses, re-pastes. Guaranteed to fit the limit.
+- **Graphics-card encoding** — NVIDIA NVENC / Intel Quick Sync / AMD AMF, 2–4× faster; a built-in speed test picks the fastest option and falls back to the CPU automatically.
+- **What's new** — after every update the app shows what changed, with links to each feature.
 - **Video, images and audio** — x264 for video, WebP for images, MP3 for audio.
 - **Split long videos** into parts that each fit the limit, or "compress & split" for fewer files.
 - **Built-in editor** — trim, cut, reorder and remove clips on a CapCut-style timeline with a live **audio waveform that follows your zoom, cuts and moves**. Preview with sound; export to MP4 or GIF.

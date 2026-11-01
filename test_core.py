@@ -129,6 +129,34 @@ class EncodeTests(unittest.TestCase):
         loops = int.from_bytes(data[anim + 12:anim + 14], "little")
         self.assertEqual(loops, 0)            # 0 = крутиться без кінця
 
+    def test_cpu_mode_and_forced_encoders(self):
+        src = os.path.join(self.tmp, "enc.mp4")
+        _ff("-f", "lavfi", "-i", "testsrc2=s=640x360:r=30:d=3", "-c:v", "libx264", "-pix_fmt", "yuv420p", src)
+        info = dc_core.ffprobe_info(src)
+        dc_core.configure({"encoder": "cpu"})
+        try:
+            self.assertEqual(dc_core.active_hw(), "")
+            out = os.path.join(self.tmp, "cpu.mp4")
+            ok, msg, mb = dc_core.compress(src, out, 0.5, 0, 0, info)
+            self.assertTrue(ok, msg)
+            self.assertLessEqual(mb, dc_core.target_ceiling(0.5))
+        finally:
+            dc_core.configure({})
+        hw = dc_core.hw_encoder()
+        if hw:
+            out = os.path.join(self.tmp, "gpu.mp4")
+            ok, msg, mb = dc_core.compress(src, out, 0.5, 0, 0, info, force_enc=hw)
+            self.assertTrue(ok, msg)
+            self.assertLessEqual(mb, dc_core.target_ceiling(0.5))
+            self.assertEqual(_probe(out, "stream=pix_fmt"), "yuv420p")
+
+    def test_auto_mode_follows_benchmark(self):
+        dc_core.configure({"encoder": "auto", "encoder_best": "x264"})
+        try:
+            self.assertEqual(dc_core.active_hw(), "")
+        finally:
+            dc_core.configure({})
+
     def test_big_image_fits_limit(self):
         src = os.path.join(self.tmp, "noise.png")
         _ff("-f", "lavfi", "-i", "nullsrc=s=2400x1800,geq=random(1)*255:128:128", "-frames:v", "1", src)

@@ -29,7 +29,9 @@ WM_LBUTTONDBLCLK = 0x0203
 WM_CONTEXTMENU = 0x007B
 
 NIM_ADD, NIM_MODIFY, NIM_DELETE = 0, 1, 2
-NIF_MESSAGE, NIF_ICON, NIF_TIP = 0x01, 0x02, 0x04
+NIF_MESSAGE, NIF_ICON, NIF_TIP, NIF_INFO = 0x01, 0x02, 0x04, 0x10
+NIIF_USER, NIIF_LARGE_ICON = 0x04, 0x20
+NIN_BALLOONUSERCLICK = 0x0405     # клік по сповіщенню
 TPM_RIGHTBUTTON, TPM_RETURNCMD = 0x0002, 0x0100
 MF_STRING, MF_SEPARATOR = 0x0000, 0x0800
 
@@ -121,9 +123,10 @@ def signal_open():
 
 
 class Tray:
-    def __init__(self, on_open, on_quit, texts):
-        """texts = (open_label, quit_label, tooltip)."""
+    def __init__(self, on_open, on_quit, texts, on_balloon=None):
+        """texts = (open_label, quit_label, tooltip); on_balloon — клік по сповіщенню."""
         self.on_open, self.on_quit = on_open, on_quit
+        self.on_balloon = on_balloon or on_open
         self.open_text, self.quit_text, self.tip = texts
         self.hwnd = None
         self.hicon = None
@@ -150,6 +153,22 @@ class Tray:
                 shell32.Shell_NotifyIconW(NIM_MODIFY, ctypes.byref(self._nid))
             except Exception:
                 pass
+
+    def notify(self, title, text):
+        """Сповіщення Windows (тост біля годинника) з нашим значком."""
+        if not self._nid:
+            return
+        try:
+            nid = self._nid
+            nid.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP | NIF_INFO
+            nid.szInfoTitle = (title or "")[:63]
+            nid.szInfo = (text or "")[:255]
+            nid.dwInfoFlags = NIIF_USER | NIIF_LARGE_ICON
+            nid.hBalloonIcon = appicon.get_hicon(48) or self.hicon
+            shell32.Shell_NotifyIconW(NIM_MODIFY, ctypes.byref(nid))
+            nid.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP    # наступні MODIFY не повторюють тост
+        except Exception:
+            pass
 
     # ---------- внутрішнє ----------
     def _run(self):
@@ -189,6 +208,8 @@ class Tray:
                 self._show_menu()
             elif ev == WM_LBUTTONDBLCLK:
                 self._safe(self.on_open)
+            elif ev == NIN_BALLOONUSERCLICK:
+                self._safe(self.on_balloon)
             return 0
         if msg == OPEN_MENU:
             self._safe(self.on_open)

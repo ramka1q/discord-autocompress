@@ -66,6 +66,106 @@ def cfr_args() -> list:
     return list(_CFR_ARGS)
 
 
+# ---- кодування на ВІДЕОКАРТІ: NVIDIA NVENC / Intel Quick Sync / AMD AMF ----
+HW_ENCODE = True   # False = завжди процесор (режим «cpu» з вкладки «Відеокарта»)
+ENCODER_MODE = "auto"   # "auto" | "gpu" | "cpu" — з налаштувань
+ENCODER_BEST = ""       # переможець тесту швидкості ("x264" або h264_*), "" = тест не робили
+_HW = None         # знайдений енкодер ("" = нема), визначається один раз
+HW_NAMES = {"h264_nvenc": "NVIDIA NVENC", "h264_qsv": "Intel Quick Sync", "h264_amf": "AMD AMF"}
+
+
+def _hw_args(enc, kbps):
+    """Параметри енкодера відеокарти під заданий бітрейт (VBR з обмеженням піку)."""
+    mx, buf = f"{int(kbps * 1.5)}k", f"{kbps * 2}k"
+    if enc == "h264_nvenc":
+        return ["-c:v", enc, "-preset", "p5", "-tune", "hq", "-rc", "vbr",
+                "-multipass", "fullres", "-b:v", f"{kbps}k", "-maxrate", mx, "-bufsize", buf]
+    if enc == "h264_qsv":
+        return ["-c:v", enc, "-preset", "medium", "-b:v", f"{kbps}k", "-maxrate", mx,
+                "-bufsize", buf]
+    return ["-c:v", enc, "-quality", "balanced", "-rc", "vbr_peak", "-b:v", f"{kbps}k",
+            "-maxrate", mx, "-bufsize", buf]
+
+
+def configure(cfg):
+    """Застосовує вибір з вкладки «Відеокарта» (викликає overlay при старті/зміні)."""
+    global ENCODER_MODE, ENCODER_BEST, HW_ENCODE
+    ENCODER_MODE = cfg.get("encoder", "auto") if cfg.get("encoder") in ("auto", "gpu", "cpu") else "auto"
+    ENCODER_BEST = cfg.get("encoder_best", "") or ""
+    HW_ENCODE = ENCODER_MODE != "cpu"
+
+
+def active_hw() -> str:
+    """Яким енкодером відеокарти стискати ЗАРАЗ ("" = процесор)."""
+    if ENCODER_MODE == "cpu" or not HW_ENCODE:
+        return ""
+    if ENCODER_MODE == "auto" and ENCODER_BEST == "x264":
+        return ""      # тест показав, що процесор тут швидший
+    return hw_encoder()
+
+
+def benchmark(progress_cb=None, should_cancel=None):
+    """Тест «що стискає найшвидше»: те саме 8-секундне 1080p-відео стискаємо під 4 МБ
+    процесором (x264, 2 проходи) і кожною відеокартою, що є. Повертає
+    [{"enc": "x264"|h264_*, "sec": float|None, "mb": float}] — від найшвидшого."""
+    import time as _time
+    tmp = tempfile.mkdtemp(prefix="dac_bench_")
+    src = os.path.join(tmp, "src.mp4")
+    try:
+        subprocess.run(["ffmpeg", "-y", "-f", "lavfi", "-i", "testsrc2=s=1920x1080:r=30:d=8",
+                        "-f", "lavfi", "-i", "sine=d=8", "-c:v", "libx264", "-preset", "ultrafast",
+                        "-crf", "12", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", src],
+                       capture_output=True, creationflags=NO_WINDOW)
+        info = ffprobe_info(src)
+        cands = ["x264"]
+        for enc in ("h264_nvenc", "h264_qsv", "h264_amf"):
+            if enc == hw_encoder() or _probe_hw(enc):
+                cands.append(enc)
+        res = []
+        for i, enc in enumerate(cands):
+            if should_cancel and should_cancel():
+                break
+            base, span = i * 100.0 / len(cands), 100.0 / len(cands)
+            out = os.path.join(tmp, f"o_{enc}.mp4")
+            t0 = _time.monotonic()
+            ok, _msg, mb = compress(src, out, 4, 0, 128, info, force_enc=enc,
+                                    progress_cb=(lambda p, b=base, s=span: progress_cb(b + p * s / 100))
+                                    if progress_cb else None, should_cancel=should_cancel)
+            res.append({"enc": enc, "sec": (_time.monotonic() - t0) if ok else None, "mb": mb})
+        if progress_cb:
+            progress_cb(100.0)
+        res.sort(key=lambda r: r["sec"] if r["sec"] else 1e9)
+        return res
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _probe_hw(enc) -> bool:
+    try:
+        return subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi",
+                               "-i", "testsrc=s=320x240:d=0.4", *_hw_args(enc, 800),
+                               "-pix_fmt", "yuv420p", "-f", "null", "-"],
+                              capture_output=True, creationflags=NO_WINDOW,
+                              timeout=25).returncode == 0
+    except Exception:
+        return False
+
+
+def hw_encoder() -> str:
+    """Перший енкодер відеокарти, що РЕАЛЬНО кодує на цьому ПК (тест на 0.4 с відео),
+    або "" — тоді працює процесор (x264). Результат кешується."""
+    global _HW
+    if _HW is None:
+        found = ""
+        for enc in ("h264_nvenc", "h264_qsv", "h264_amf"):
+            if _probe_hw(enc):
+                found = enc
+                break
+        _HW = found
+        dlog(f"hw_encoder detected: {found or 'none'}")
+    return _HW
+
+
 # ---- куди класти результат: поруч з оригіналом, а якщо там не можна писати —
 #      у %TEMP%\DiscordAutoCompress (напр. відео з read-only теки, архіву чи мережі) ----
 FALLBACK_DIR = os.path.join(tempfile.gettempdir(), "DiscordAutoCompress")
@@ -228,11 +328,12 @@ def _run_pass(cmd, duration, base_pct, span, progress_cb, should_cancel):
 
 
 def compress(path, out_path, target_mb, scale, audio_kbps, info,
-             progress_cb=None, should_cancel=None, start=None, dur=None):
+             progress_cb=None, should_cancel=None, start=None, dur=None, force_enc=None):
     """Двопрохідне H.264 з ГАРАНТІЄЮ розміру під ліміт Discord.
     Цілиться у стелю (target_ceiling), а після кодування перевіряє реальний розмір і,
     якщо трохи перевищив — знижує бітрейт і перекодовує (лише pass 2, лог pass 1 переюзуємо).
     start/dur (сек) — необовʼязковий сегмент для обрізки.
+    force_enc — "x264" або h264_* (для тесту швидкості); None = за налаштуваннями.
     Повертає (ok: bool, message: str, final_mb: float)."""
     duration = dur if dur is not None else info["duration"]
     has_audio = info["has_audio"] and audio_kbps > 0
@@ -266,6 +367,35 @@ def compress(path, out_path, target_mb, scale, audio_kbps, info,
         return ["ffmpeg", "-y", *inss, "-i", path, *outdur, *cfr, "-c:v", "libx264",
                 "-b:v", f"{kbps}k", "-preset", "medium", *vf, "-pix_fmt", "yuv420p"]
 
+    audio_args = ["-c:a", "aac", "-b:a", f"{audio_kbps}k"] if has_audio else ["-an"]
+
+    # ---- ВІДЕОКАРТА (NVENC / Quick Sync / AMF): один прохід, у 3–4 рази швидше ----
+    hw = (("" if force_enc == "x264" else force_enc) if force_enc else active_hw())
+    if hw:
+        kb = v_kbps
+        final_mb = 0.0
+        for attempt in range(4):
+            rc = _run_pass(["ffmpeg", "-y", *inss, "-i", path, *outdur, *cfr, *vf,
+                            *_hw_args(hw, kb), "-pix_fmt", "yuv420p", *audio_args,
+                            "-movflags", "+faststart", out_path],
+                           duration, 0.0, 100.0, progress_cb, should_cancel)
+            if should_cancel and should_cancel():
+                return False, cancelled_msg(), 0.0
+            if rc != 0 or not os.path.exists(out_path):
+                # драйвер/ліміт сесій/непідтримуваний формат -> тихо падаємо на процесор
+                dlog(f"HW encode {hw} failed rc={rc} -> fallback to x264")
+                if force_enc:          # тест швидкості: чесно кажемо, що цей енкодер не зміг
+                    return False, _t("core_pass2"), 0.0
+                break
+            final_mb = os.path.getsize(out_path) / 1024 / 1024
+            if final_mb <= ceiling_mb or kb <= 50:
+                return True, "OK", final_mb
+            kb = max(50, int(kb * (ceiling_mb / final_mb) * 0.95))
+        else:
+            return True, "OK", final_mb
+        if progress_cb:
+            progress_cb(0.0)
+
     try:
         # ---- pass 1: аналіз складності (не залежить від бітрейту, робимо один раз) ----
         rc = _run_pass(venc(v_kbps) + ["-pass", "1", "-passlogfile", passlog,
@@ -276,7 +406,6 @@ def compress(path, out_path, target_mb, scale, audio_kbps, info,
         if rc != 0:
             return False, _t("core_pass1"), 0.0
 
-        audio_args = ["-c:a", "aac", "-b:a", f"{audio_kbps}k"] if has_audio else ["-an"]
         # ---- pass 2 з перевіркою розміру: до 4 спроб, щоразу знижуючи бітрейт ----
         final_mb = 0.0
         for attempt in range(4):
@@ -566,6 +695,8 @@ def split_compress(path, target_mb, auto_scale, audio_kbps, info,
     scale = pick_auto_scale(info, target_mb, audio_kbps) if auto_scale else 0
     if workers is None:
         workers = auto_workers(n)
+        if active_hw():
+            workers = min(workers, 3)   # відеокарти мають ліміт одночасних сесій кодування
     dlog(f"split_compress start: n={n} workers={workers} cpu={os.cpu_count()} dur={duration:.1f}")
 
     # план: (індекс, старт, тривалість, вихідний файл)

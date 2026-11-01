@@ -26,10 +26,11 @@ import monetize
 import stats
 import themes
 import ui
+import changelog
 
-APP_VERSION = "2.0"
-# коли вийшла ця версія (дата і час публікації на GitHub) — оновлюється з кожним релізом
-APP_RELEASED = "2026-11-01 19:25"
+APP_VERSION = changelog.VERSION
+# коли вийшла ця версія (дата і час публікації на GitHub) — з changelog.py
+APP_RELEASED = changelog.RELEASED
 REPO_URL = "https://github.com/ramka1q/discord-autocompress"
 F = themes.FONT
 
@@ -38,7 +39,8 @@ class SettingsApp:
     W, H = 920, 640
     SIDE_W = 224
 
-    def __init__(self, master, cfg, on_save, on_apply=None, on_close=None, on_restart=None):
+    def __init__(self, master, cfg, on_save, on_apply=None, on_close=None, on_restart=None,
+                 tab=None):
         """cfg — робоча копія конфіга; on_save(cfg) — зберегти; on_apply(cfg) —
         миттєво застосувати тему/мову (overlay+трей); on_close() — закрити;
         on_restart() — перезапустити всю програму (для кнопки після оновлення)."""
@@ -51,7 +53,8 @@ class SettingsApp:
         self.P = themes.palette(self.cfg.get("theme", "discord"))
         self._or_active = True
         # якщо чогось бракує (ffmpeg) — одразу відкриваємо вкладку «Встановлення»
-        self._active_tab = "general" if deps.all_ok() else "setup"
+        self._active_tab = tab or ("general" if deps.all_ok() else "setup")
+        self._bench_busy = False
         self._toast_after = None
         self._upd_state = None          # результат перевірки оновлень (переживає перемикання вкладок)
 
@@ -89,11 +92,14 @@ class SettingsApp:
         self.v_keep = tk.StringVar(w, c.get("keep_local", "ask"))
         self.v_shrink = tk.BooleanVar(w, c.get("offer_shrink", True))
         self.v_sound = tk.BooleanVar(w, c.get("sound_done", True))
+        self.v_notify = tk.BooleanVar(w, c.get("notify_done", True))
+        self.v_encoder = tk.StringVar(w, c.get("encoder", "auto"))
         self._sound_file = c.get("sound_file", "")                # свій .wav звук (пусто = звук Windows)
         self.v_theme = tk.StringVar(w, c.get("theme", "discord"))
         self.v_lang = tk.StringVar(w, c.get("lang", "en"))
         for v in (self.v_target, self.v_auto, self.v_block, self.v_paste, self.v_audio,
-                  self.v_cv, self.v_ci, self.v_ca, self.v_keep, self.v_shrink, self.v_sound):
+                  self.v_cv, self.v_ci, self.v_ca, self.v_keep, self.v_shrink, self.v_sound,
+                  self.v_notify, self.v_encoder):
             v.trace_add("write", lambda *a: self._autosave())
 
     def _autosave(self):
@@ -258,8 +264,10 @@ class SettingsApp:
         self._toast_cv = tk.Canvas(self.content, height=28, bg=P["bg"], highlightthickness=0)
 
         self._nav = {}
-        self._tabs = [("general", "tab_general", "⚙"), ("media", "tab_media", "🎞"),
+        self._tabs = [("general", "tab_general", "⚙"), ("gpu", "tab_gpu", "🎮"),
+                      ("media", "tab_media", "🎞"),
                       ("stats", "tab_stats", "📊"), ("appearance", "tab_appearance", "🎨"),
+                      ("whatsnew", "tab_whatsnew", "✨"),
                       ("setup", "tab_setup", "🧩"), ("updates", "tab_updates", "⟳"),
                       ("performance", "tab_performance", "⚡"), ("facts", "tab_facts", "💡"),
                       ("about", "tab_about", "ⓘ")]
@@ -291,7 +299,7 @@ class SettingsApp:
     def _nav_item(self, key, icon, text):
         """Пункт бічного меню: заокруглена підсвітка + градієнтна смужка у активного."""
         P = self.P
-        w, h = self.SIDE_W - 20, 40
+        w, h = self.SIDE_W - 20, 36
         cv = tk.Canvas(self.side, width=w, height=h, bg=P["sidebar"], highlightthickness=0,
                        cursor="hand2")
         cv.pack(padx=10, pady=1)
@@ -312,6 +320,11 @@ class SettingsApp:
             cv.create_text(24, h / 2, text=icon, fill=fg, font=(F, 12))
             cv.create_text(44, h / 2, text=text, anchor="w", fill=fg,
                            font=(F, 10, "bold" if act else "normal"))
+            # «!» — новий розділ, який ще не відкривали (вкладка «Відеокарта»)
+            if key == "gpu" and not self.cfg.get("gpu_seen"):
+                bx = w - 20
+                cv.create_oval(bx - 10, h / 2 - 10, bx + 10, h / 2 + 10, fill=P["warn"], outline="")
+                cv.create_text(bx, h / 2, text="!", fill=ui.ink(P["warn"]), font=(F, 11, "bold"))
 
         cv.bind("<Enter>", lambda e: (setattr(cv, "_hover", True), draw()))
         cv.bind("<Leave>", lambda e: (setattr(cv, "_hover", False), draw()))
@@ -343,6 +356,9 @@ class SettingsApp:
         except Exception:
             pass
         self._active_tab = key
+        if key == "gpu" and not self.cfg.get("gpu_seen"):
+            self.cfg["gpu_seen"] = True       # «!» зникає, щойно вкладку відкрили
+            self._autosave()
         for draw in self._nav.values():
             draw()
         for w in self.content.winfo_children():
@@ -356,7 +372,9 @@ class SettingsApp:
                   "updates": ("tab_updates", "update_hint"),
                   "performance": ("tab_performance", "perf_hint"),
                   "facts": ("facts_title", "facts_hint"),
-                  "about": ("tab_about", None)}
+                  "about": ("tab_about", None),
+                  "gpu": ("tab_gpu", "st_gpu_sub"),
+                  "whatsnew": ("tab_whatsnew", "st_whatsnew_sub")}
         tkey, skey = titles[key]
         head = tk.Frame(self.content, bg=self.P["bg"])
         head.pack(fill="x", padx=30, pady=(24, 14))
@@ -430,6 +448,7 @@ class SettingsApp:
 
         c = self._card(f, self.T("st_extras"))
         self._setting_row(c, self.T("opt_shrink"), self.T("st_shrink_d"), self.v_shrink, first=True)
+        self._setting_row(c, self.T("opt_notify"), self.T("st_notify_d"), self.v_notify)
         self._setting_row(c, self.T("opt_sound"), None, self.v_sound)
         srow = tk.Frame(c, bg=c.cget("bg")); srow.pack(anchor="w", fill="x", pady=(10, 0))
         self._btn(srow, self.T("sound_pick"), self._pick_sound, primary=False, small=True).pack(side="left")
@@ -960,11 +979,242 @@ class SettingsApp:
         c = self._card(f, self.T("st_how"))
         self._lbl(c, self.T("about_body"), size=10, wrap=self._content_w() - 60).pack(anchor="w")
 
+        c = self._card(f, self.T("st_report_title"), self.T("st_report_d"))
+        row = tk.Frame(c, bg=c.cget("bg")); row.pack(anchor="w", fill="x")
+        self._btn(row, self.T("st_report_btn"), self._make_report).pack(side="left")
+        self._report_lbl = self._lbl(row, "", size=9, wrap=self._content_w() - 300)
+        self._report_lbl.pack(side="left", padx=12)
+
         c = self._card(f, self.T("st_donate_title"), self.T("st_donate_d"))
         row = tk.Frame(c, bg=c.cget("bg")); row.pack(anchor="w")
         self._btn(row, self.T("st_donate_btn"), self._open_donate).pack(side="left")
         self._btn(row, "GitHub  ↗", lambda: monetize.open_url(REPO_URL), primary=False)\
             .pack(side="left", padx=8)
+
+    # ===== Звіт про помилку =====
+    def _make_report(self):
+        self._report_lbl.config(text=self.T("checking"), fg=self.P["muted"])
+
+        def work():
+            try:
+                import report
+                path = report.build(self._collect(), APP_VERSION, self._released())
+            except Exception as e:
+                path, err = None, str(e)[:80]
+            else:
+                err = ""
+            self.win.after(0, lambda: self._report_done(path, err))
+        threading.Thread(target=work, daemon=True).start()
+
+    def _report_done(self, path, err):
+        try:
+            if not path:
+                return self._report_lbl.config(text=self.T("st_report_fail") + " " + err,
+                                               fg=self.P["red"])
+            try:   # файл — у буфер обміну: Ctrl+V у Discord і звіт відправлено
+                import discord_overlay as _ov
+                _ov.set_clipboard_files([path])
+            except Exception:
+                pass
+            self._report_lbl.config(text=self.T("st_report_ok"), fg=self.P["green"])
+            subprocess.Popen(["explorer", "/select,", os.path.normpath(path)])
+        except tk.TclError:
+            pass
+
+    # ===== Відеокарта =====
+    def _tab_gpu(self, f):
+        P = self.P
+        c = self._card(f, self.T("st_enc_title"), self.T("st_enc_d"))
+        ui.Segmented(c, [("auto", self.T("enc_auto")), ("gpu", self.T("enc_gpu")),
+                         ("cpu", self.T("enc_cpu"))], self.v_encoder, P, min_seg=130,
+                     command=lambda: self.win.after(50, self._gpu_now)).pack(anchor="w")
+        self._gpu_now_lbl = self._lbl(c, self.T("st_gpu_checking"), size=10, bold=True)
+        self._gpu_now_lbl.pack(anchor="w", pady=(12, 0))
+
+        c = self._card(f, self.T("st_devices"))
+        self._dev_box = tk.Frame(c, bg=c.cget("bg")); self._dev_box.pack(fill="x")
+        self._lbl(self._dev_box, self.T("st_gpu_checking"), size=10, muted=True).pack(anchor="w")
+
+        c = self._card(f, self.T("st_bench_title"), self.T("st_bench_d"))
+        self._bench_btn = self._btn(c, self.T("st_bench_btn"), self._run_bench)
+        self._bench_btn.pack(anchor="w")
+        self._bench_box = tk.Frame(c, bg=c.cget("bg")); self._bench_box.pack(fill="x", pady=(12, 0))
+        if self.cfg.get("bench"):
+            self._bench_show(self.cfg["bench"])
+
+        def detect():
+            dc_core.hw_encoder()
+            self.win.after(0, self._gpu_detected)
+        threading.Thread(target=detect, daemon=True).start()
+
+    def _enc_name(self, enc):
+        return self.T("enc_cpu_name") if enc in ("x264", "", None) else dc_core.HW_NAMES.get(enc, enc)
+
+    def _gpu_detected(self):
+        try:
+            hw = dc_core.hw_encoder()
+            box = self._dev_box
+            for w in box.winfo_children():
+                w.destroy()
+            bg = box.cget("bg")
+            rows = [(True, self.T("enc_cpu_name"), self.T("st_dev_cpu", n=os.cpu_count() or 1))]
+            rows.append((bool(hw), dc_core.HW_NAMES.get(hw, self.T("st_dev_gpu_none")),
+                         self.T("st_dev_gpu_ok") if hw else self.T("st_dev_gpu_no")))
+            for ok, name, note in rows:
+                row = tk.Frame(box, bg=bg); row.pack(anchor="w", fill="x", pady=3)
+                col = self.P["green"] if ok else self.P["muted"]
+                dot = tk.Canvas(row, width=22, height=22, bg=bg, highlightthickness=0)
+                dot.pack(side="left", padx=(0, 10))
+                dot.create_oval(1, 1, 21, 21, fill=ui.mix(bg, col, 0.25), outline="")
+                dot.create_text(11, 11, text="✓" if ok else "—", fill=col, font=(F, 9, "bold"))
+                self._lbl(row, name, size=10, bold=True).pack(side="left")
+                self._lbl(row, "  —  " + note, size=10, muted=True).pack(side="left")
+            self._gpu_now()
+        except tk.TclError:
+            pass
+
+    def _gpu_now(self):
+        """Підпис «Зараз стискає: …» під перемикачем режиму."""
+        try:
+            mode = self.v_encoder.get()
+            hw = dc_core.hw_encoder() if dc_core._HW is not None else None
+            if hw is None:
+                return
+            if mode == "cpu" or not hw:
+                enc = "x264"
+            elif mode == "gpu":
+                enc = hw
+            else:
+                best = self.cfg.get("encoder_best", "")
+                enc = "x264" if best == "x264" else hw
+            txt = self.T("st_gpu_now", name=self._enc_name(enc))
+            if mode == "gpu" and not hw:
+                txt += "  ·  " + self.T("st_dev_gpu_no")
+            self._gpu_now_lbl.config(text=txt, fg=self.P["text"])
+        except (tk.TclError, AttributeError):
+            pass
+
+    def _run_bench(self):
+        if self._bench_busy:
+            return
+        self._bench_busy = True
+        self._bench_btn.config(state="disabled", text=self.T("st_bench_running"))
+        box = self._bench_box
+        for w in box.winfo_children():
+            w.destroy()
+        self._bench_bar = tk.Canvas(box, width=440, height=10, bg=box.cget("bg"), highlightthickness=0)
+        self._bench_bar.pack(anchor="w")
+        self._bench_prog(0)
+
+        def work():
+            try:
+                res = dc_core.benchmark(lambda p: self.win.after(0, lambda p=p: self._bench_prog(p)))
+            except Exception as e:
+                dc_core.dlog("benchmark EXCEPTION: " + repr(e))
+                res = []
+            self.win.after(0, lambda: self._bench_done(res))
+        threading.Thread(target=work, daemon=True).start()
+
+    def _bench_prog(self, pct):
+        try:
+            b = self._bench_bar
+            b.delete("all")
+            ui.round_rect(b, 0, 0, 440, 10, 5, fill=self.P["dark"], outline="")
+            xe = 440 * max(0, min(100, pct)) / 100
+            if xe > 6:
+                ui.grad_round_rect(b, 0, 0, xe, 10, 5, self.P["accent"], ui.accent2(self.P))
+        except (tk.TclError, AttributeError):
+            pass
+
+    def _bench_done(self, res):
+        self._bench_busy = False
+        ok = [r for r in res if r.get("sec")]
+        if ok:
+            self.cfg["encoder_best"] = ok[0]["enc"]
+            self.cfg["bench"] = [{"enc": r["enc"], "sec": round(r["sec"], 2) if r.get("sec") else None}
+                                 for r in res]
+            self.cfg["bench_at"] = time.strftime("%d.%m.%Y %H:%M")
+            self._autosave()
+        try:
+            self._bench_btn.config(state="normal", text=self.T("st_bench_btn"))
+            self._bench_show(self.cfg.get("bench") or [])
+            self._gpu_now()
+        except tk.TclError:
+            pass
+
+    def _bench_show(self, res):
+        box = self._bench_box
+        for w in box.winfo_children():
+            w.destroy()
+        bg = box.cget("bg")
+        P = self.P
+        ok = [r for r in res if r.get("sec")]
+        if not ok:
+            self._lbl(box, self.T("st_bench_fail"), size=10, bold=True).pack(anchor="w")
+            return
+        slow = max(r["sec"] for r in ok)
+        for i, r in enumerate(res):
+            row = tk.Frame(box, bg=bg); row.pack(fill="x", pady=4)
+            top = tk.Frame(row, bg=bg); top.pack(fill="x")
+            name = ("🏆 " if i == 0 and r.get("sec") else "") + self._enc_name(r["enc"])
+            self._lbl(top, name, size=10, bold=True).pack(side="left")
+            val = f"{r['sec']:.1f} {self.T('unit_sec')}" if r.get("sec") else self.T("st_bench_err")
+            self._lbl(top, val, size=10, bold=(i == 0)).pack(side="right")
+            bar = tk.Canvas(row, height=8, bg=bg, highlightthickness=0)
+            bar.pack(fill="x", pady=(3, 0))
+
+            def draw(_e=None, bar=bar, r=r, first=(i == 0)):
+                bar.delete("all")
+                w = max(20, bar.winfo_width())
+                ui.round_rect(bar, 0, 0, w, 8, 4, fill=P["dark"], outline="")
+                if r.get("sec"):
+                    fr = r["sec"] / slow
+                    if first:
+                        ui.grad_round_rect(bar, 0, 0, max(8, w * fr), 8, 4, P["green"],
+                                           ui.lighten(P["green"], 0.3))
+                    else:
+                        ui.round_rect(bar, 0, 0, max(8, w * fr), 8, 4,
+                                      fill=ui.mix(P["dark"], P["muted"], 0.6), outline="")
+            bar.bind("<Configure>", draw)
+        best = ok[0]
+        msg = self.T("st_bench_result", name=self._enc_name(best["enc"]))
+        if len(ok) > 1:
+            msg += "  " + self.T("st_bench_faster", x=f"{slow / best['sec']:.1f}")
+        if self.cfg.get("bench_at"):
+            msg += "\n" + self.T("st_bench_when", d=self.cfg["bench_at"])
+        self._lbl(box, msg, size=10, bold=True, wrap=self._content_w() - 60)\
+            .pack(anchor="w", pady=(10, 0))
+        box.winfo_children()[-1].config(fg=P["green"])
+
+    # ===== Що нового =====
+    def _tab_whatsnew(self, f):
+        P = self.P
+        row = tk.Frame(f, bg=P["bg"]); row.pack(anchor="w", pady=(0, 14))
+        self._btn(row, self.T("wn_replay"), self._replay_news).pack(side="left")
+        self._btn(row, self.T("wn_site"), lambda: monetize.open_url(changelog.release_url()),
+                  primary=False).pack(side="left", padx=8)
+        for entry in changelog.CHANGES:
+            d, t = changelog.fmt_date(entry["date"])
+            c = self._card(f, f"v{entry['v']}", self.T("released", d=d, t=t))
+            for i, (icon, title, desc, tab) in enumerate(changelog.items(entry, self.lang)):
+                if i:
+                    tk.Frame(c, bg=ui.mix(c.cget("bg"), P["text"], 0.06), height=1).pack(fill="x", pady=8)
+                r = tk.Frame(c, bg=c.cget("bg")); r.pack(fill="x")
+                self._lbl(r, icon, size=14).pack(side="left", anchor="n", padx=(0, 12))
+                if tab and tab != "whatsnew":
+                    self._btn(r, self.T("wn_show"), lambda t=tab: self._show_tab(t),
+                              primary=False, small=True).pack(side="right", anchor="n", padx=(8, 0))
+                tx = tk.Frame(r, bg=c.cget("bg")); tx.pack(side="left", fill="x", expand=True)
+                self._lbl(tx, title, size=10, bold=True).pack(anchor="w")
+                self._lbl(tx, desc, size=9, muted=True, wrap=self._content_w() - 220).pack(anchor="w")
+
+    def _replay_news(self):
+        try:
+            import whatsnew
+            whatsnew.WhatsNew(self.win, self.lang, self.cfg.get("theme", "discord"),
+                              on_open_tab=lambda tab: self._show_tab(tab))
+        except Exception as e:
+            dc_core.dlog("whatsnew replay FAILED: " + repr(e))
 
     def _open_donate(self):
         if monetize.has_donate():
@@ -988,6 +1238,7 @@ class SettingsApp:
         g("compress_video", self.v_cv); g("compress_images", self.v_ci)
         g("compress_audio", self.v_ca); g("keep_local", self.v_keep)
         g("offer_shrink", self.v_shrink); g("sound_done", self.v_sound)
+        g("notify_done", self.v_notify); g("encoder", self.v_encoder)
         try:   # аудіо-бітрейт завжди в розумних межах (раніше можна було ввести будь-що)
             c["audio_kbps"] = max(0, min(320, int(c.get("audio_kbps", 128))))
         except (TypeError, ValueError):

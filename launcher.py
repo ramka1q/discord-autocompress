@@ -41,6 +41,8 @@ import re                 # noqa: F401
 import math               # noqa: F401
 import datetime           # noqa: F401
 import struct             # noqa: F401  (appicon малює .ico)
+import random             # noqa: F401  (конфеті у вікні «Що нового»)
+import base64             # noqa: F401  (значок програми в меню — PNG у PhotoImage)
 import zlib               # noqa: F401  (appicon пакує PNG у .ico)
 import winreg
 
@@ -695,6 +697,9 @@ if __name__ == "__main__":
             import update             # noqa: F401
             import themes             # noqa: F401
             import ui                 # noqa: F401
+            import changelog          # noqa: F401
+            import whatsnew           # noqa: F401
+            import report             # noqa: F401
             import i18n               # noqa: F401
             import appicon            # noqa: F401
             import media              # noqa: F401
