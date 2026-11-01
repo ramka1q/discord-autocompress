@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
-settings_app.py — красиве меню налаштувань у стилі Discord.
-Кастомний заголовок (значок + згорнути + закрити), бічна навігація з вкладками,
-живий вибір теми й мови, перевірка оновлень і тест оптимізації.
-Відкривається як Toplevel на прихованому root вартового (або як окреме вікно).
-Тільки стандартна бібліотека Tk.
+settings_app.py — меню налаштувань.
+Вікно без системної рамки (але з кнопкою в панелі завдань і заокругленими кутами
+Windows 11): власний заголовок, бічна навігація, вміст на заокруглених картках,
+тумблери, сегментовані перемикачі, повзунок, прев'ю тем. Кожна зміна зберігається
+автоматично. Відкривається як Toplevel на прихованому root вартового.
+Тільки стандартна бібліотека Tk (див. ui.py).
 """
 import ctypes
 import os
@@ -24,12 +25,16 @@ import jokes
 import monetize
 import stats
 import themes
+import ui
 
-APP_VERSION = "1.0"
+APP_VERSION = "2.0"
+REPO_URL = "https://github.com/ramka1q/discord-autocompress"
+F = themes.FONT
 
 
 class SettingsApp:
-    W, H = 760, 560
+    W, H = 920, 640
+    SIDE_W = 224
 
     def __init__(self, master, cfg, on_save, on_apply=None, on_close=None, on_restart=None):
         """cfg — робоча копія конфіга; on_save(cfg) — зберегти; on_apply(cfg) —
@@ -45,38 +50,33 @@ class SettingsApp:
         self._or_active = True
         # якщо чогось бракує (ffmpeg) — одразу відкриваємо вкладку «Встановлення»
         self._active_tab = "general" if deps.all_ok() else "setup"
+        self._toast_after = None
+        self._upd_state = None          # результат перевірки оновлень (переживає перемикання вкладок)
 
         self.win = tk.Toplevel(master) if master is not None else tk.Tk()
         self.win.title(i18n.tr(self.lang, "app_title"))
-        self.win.geometry(f"{self.W}x{self.H}")
-        self.win.minsize(680, 480)
-        self.win.configure(bg=self.P["dark"])
+        sh = self.win.winfo_screenheight()
+        self.H = min(self.H, sh - 80)
+        self.win.configure(bg=self.P["bg"])
         appicon.set_window_icon(self.win)
         self._center()
         self.win.overrideredirect(True)
         self.win.attributes("-topmost", True)
         self.win.after(300, lambda: self.win.attributes("-topmost", False))
         self.win.bind("<Map>", self._on_map)
+        self.win.bind("<Escape>", lambda e: self._close())
 
         self._init_vars()      # усі змінні — ОДИН раз (щоб стан не губився між вкладками)
         self._build()
-        self._fade_in()
-
-    def _fade_in(self, a=0.0):
-        """Плавна поява вікна (~150 мс) — замість різкого «вистрибування»."""
-        try:
-            self.win.attributes("-alpha", a)
-        except tk.TclError:
-            return
-        if a < 1.0:
-            self.win.after(25, lambda: self._fade_in(min(1.0, a + 0.2)))
+        ui.win_chrome(self.win, taskbar=True, rounded=True, dark=ui.luminance(self.P["bg"]) < 128)
+        ui.fade_in(self.win, 180)
 
     def _init_vars(self):
         """Створює всі змінні налаштувань один раз. Віджети вкладок лише прив'язуються
         до них — тож перемикання вкладок НІКОЛИ не скидає вибране. Кожна зміна —
         авто-збереження (не треба тиснути «Зберегти»)."""
         c, w = self.cfg, self.win
-        self.v_target = tk.IntVar(w, c.get("target_mb", 20))
+        self.v_target = tk.IntVar(w, int(c.get("target_mb", 20)))
         self.v_auto = tk.BooleanVar(w, c.get("auto_scale", True))
         self.v_block = tk.BooleanVar(w, c.get("block_paste", True))
         self.v_paste = tk.BooleanVar(w, c.get("auto_paste", True))
@@ -100,22 +100,16 @@ class SettingsApp:
             self.on_save(self.cfg)
         except Exception:
             pass
-        self._flash_saved()
+        self._toast(self.T("saved"))
 
-    def _flash_saved(self):
-        try:
-            self.status.config(text=self.T("saved"))
-            if getattr(self, "_flash_after", None):
-                self.win.after_cancel(self._flash_after)
-            self._flash_after = self.win.after(1500, lambda: self.status.config(text=""))
-        except (tk.TclError, AttributeError):
-            pass
+    def T(self, key, **kw):
+        return i18n.tr(self.lang, key, **kw)
 
     # ---------- вікно ----------
     def _center(self):
         self.win.update_idletasks()
         sw, sh = self.win.winfo_screenwidth(), self.win.winfo_screenheight()
-        self.win.geometry(f"{self.W}x{self.H}+{(sw - self.W)//2}+{(sh - self.H)//2}")
+        self.win.geometry(f"{self.W}x{self.H}+{(sw - self.W)//2}+{max(0, (sh - self.H)//2 - 20)}")
 
     def _minimize(self):
         self.win.overrideredirect(False)
@@ -126,137 +120,208 @@ class SettingsApp:
         if not self._or_active and str(self.win.state()) == "normal":
             self.win.overrideredirect(True)
             self._or_active = True
+            self.win.after(30, lambda: ui.win_chrome(
+                self.win, taskbar=True, rounded=True, dark=ui.luminance(self.P["bg"]) < 128))
 
     def _close(self):
         try:
-            self._autosave()      # нічого не губимо навіть якщо не тиснув «Зберегти»
+            self._autosave()      # нічого не губимо
         except Exception:
             pass
-        if self.on_close_cb:
-            self.on_close_cb()
-        else:
-            try:
-                self.win.destroy()
-            except Exception:
-                pass
 
-    def T(self, key, **kw):
-        return i18n.tr(self.lang, key, **kw)
-
-    # ---------- фабрики віджетів ----------
-    def _btn(self, parent, text, cmd, primary=True, small=False):
-        P = self.P
-        bg, hov = (P["accent"], P["accent_h"]) if primary else (P["panel"], P["dark"])
-        b = tk.Button(parent, text=text, command=cmd, bg=bg, fg=P["text"],
-                      activebackground=hov, activeforeground=P["text"], relief="flat",
-                      font=(themes.FONT, 9 if small else 11, "bold"), bd=0,
-                      padx=12 if small else 18, pady=6 if small else 9, cursor="hand2")
-        b.bind("<Enter>", lambda e: b.config(bg=hov))
-        b.bind("<Leave>", lambda e: b.config(bg=bg))
-        return b
-
-    def _lbl(self, parent, text, size=10, bold=False, muted=False, bg=None):
-        P = self.P
-        return tk.Label(parent, text=text, bg=bg or P["bg"],
-                        fg=P["muted"] if muted else P["text"],
-                        font=(themes.FONT, size, "bold" if bold else "normal"))
-
-    # ---------- каркас ----------
-    def _build(self):
-        for w in self.win.winfo_children():
-            w.destroy()
-        P = self.P
-        # --- кастомний заголовок ---
-        title = tk.Frame(self.win, bg=P["title_bg"], height=40)
-        title.pack(fill="x")
-        title.pack_propagate(False)
-        tk.Label(title, text="  ◆  " + self.T("app_title"), bg=P["title_bg"], fg=P["text"],
-                 font=(themes.FONT, 11, "bold")).pack(side="left", padx=6)
-        for w in (title,):
-            w.bind("<Button-1>", self._drag_start)
-            w.bind("<B1-Motion>", self._drag_move)
-
-        xbtn = tk.Button(title, text="✕", command=self._close, bg=P["title_bg"], fg=P["muted"],
-                         activebackground=P["red"], activeforeground="#fff", relief="flat",
-                         bd=0, font=(themes.FONT, 12), width=4, cursor="hand2")
-        xbtn.pack(side="right", fill="y")
-        xbtn.bind("<Enter>", lambda e: xbtn.config(bg=P["red"], fg="#fff"))
-        xbtn.bind("<Leave>", lambda e: xbtn.config(bg=P["title_bg"], fg=P["muted"]))
-        mbtn = tk.Button(title, text="—", command=self._minimize, bg=P["title_bg"], fg=P["muted"],
-                         activebackground=P["panel"], activeforeground=P["text"], relief="flat",
-                         bd=0, font=(themes.FONT, 12), width=4, cursor="hand2")
-        mbtn.pack(side="right", fill="y")
-        mbtn.bind("<Enter>", lambda e: mbtn.config(bg=P["panel"], fg=P["text"]))
-        mbtn.bind("<Leave>", lambda e: mbtn.config(bg=P["title_bg"], fg=P["muted"]))
-
-        # --- тіло: сайдбар + контент ---
-        body = tk.Frame(self.win, bg=P["bg"])
-        body.pack(fill="both", expand=True)
-        self.side = tk.Frame(body, bg=P["sidebar"], width=190)
-        self.side.pack(side="left", fill="y")
-        self.side.pack_propagate(False)
-        self.content = tk.Frame(body, bg=P["bg"])
-        self.content.pack(side="left", fill="both", expand=True)
-
-        self._nav = {}
-        tabs = [("general", "tab_general", "⚙"), ("stats", "tab_stats", "📊"),
-                ("media", "tab_media", "🎞"),
-                ("appearance", "tab_appearance", "🎨"), ("facts", "tab_facts", "💡"),
-                ("setup", "tab_setup", "⬇"),
-                ("updates", "tab_updates", "⭳"), ("performance", "tab_performance", "⚡"),
-                ("about", "tab_about", "ⓘ")]
-        tk.Frame(self.side, bg=P["sidebar"], height=10).pack()
-        for key, tkey, icon in tabs:
-            self._nav_btn(key, f"  {icon}  " + self.T(tkey))
-        tk.Label(self.side, text=f"v{APP_VERSION}", bg=P["sidebar"], fg=P["muted"],
-                 font=(themes.FONT, 8)).pack(side="bottom", pady=8)
-
-        # --- футер із «Зберегти» ---
-        footer = tk.Frame(self.win, bg=P["title_bg"], height=52)
-        footer.pack(fill="x", side="bottom")
-        footer.pack_propagate(False)
-        tk.Label(footer, text=self.T("autosave_hint"), bg=P["title_bg"], fg=P["muted"],
-                 font=(themes.FONT, 9)).pack(side="left", padx=16)
-        self.status = tk.Label(footer, text="", bg=P["title_bg"], fg=P["green"],
-                               font=(themes.FONT, 10, "bold"))
-        self.status.pack(side="left")
-        self._btn(footer, self.T("save"), self._save).pack(side="right", padx=16, pady=8)
-
-        self._show_tab(self._active_tab)
-
-    def _nav_btn(self, key, text):
-        """Вкладка сайдбара у стилі Discord: активна = панель + акцентна смужка
-        зліва (спокійніше за суцільну заливку), наведення підсвічує."""
-        P = self.P
-        active = key == self._active_tab
-        row = tk.Frame(self.side, bg=P["sidebar"])
-        row.pack(fill="x", padx=8, pady=2)
-        ind = tk.Frame(row, width=3, bg=P["accent"] if active else P["sidebar"])
-        ind.pack(side="left", fill="y")
-        b = tk.Button(row, text=text, anchor="w", command=lambda: self._show_tab(key),
-                      bg=P["panel"] if active else P["sidebar"], fg=P["text"],
-                      activebackground=P["panel"], activeforeground=P["text"],
-                      relief="flat", bd=0,
-                      font=(themes.FONT, 11, "bold" if active else "normal"),
-                      padx=12, pady=10, cursor="hand2")
-        b.pack(side="left", fill="x", expand=True)
-
-        def _enter(_e, b=b, key=key):
-            if key != self._active_tab:
-                b.config(bg=P["panel"])
-
-        def _leave(_e, b=b, key=key):
-            if key != self._active_tab:
-                b.config(bg=P["sidebar"])
-        b.bind("<Enter>", _enter)
-        b.bind("<Leave>", _leave)
-        self._nav[key] = (b, ind)
+        def done():
+            if self.on_close_cb:
+                self.on_close_cb()
+            else:
+                try:
+                    self.win.destroy()
+                except Exception:
+                    pass
+        ui.fade_out(self.win, 110, done)
 
     def _drag_start(self, e):
         self._dx, self._dy = e.x_root - self.win.winfo_x(), e.y_root - self.win.winfo_y()
 
     def _drag_move(self, e):
         self.win.geometry(f"+{e.x_root - self._dx}+{e.y_root - self._dy}")
+
+    # ---------- дрібні фабрики ----------
+    def _btn(self, parent, text, cmd, primary=True, small=False, kind=None):
+        return ui.Button(parent, text, cmd, self.P, kind=kind or ("primary" if primary else "ghost"),
+                         height=32 if small else 38, size=9 if small else 10)
+
+    def _lbl(self, parent, text, size=10, bold=False, muted=False, bg=None, wrap=0):
+        P = self.P
+        lb = tk.Label(parent, text=text, bg=bg or parent.cget("bg"),
+                      fg=P["muted"] if muted else P["text"], justify="left", anchor="w",
+                      font=(F, size, "bold" if bold else "normal"))
+        if wrap:
+            lb.config(wraplength=wrap)
+        return lb
+
+    def _card(self, parent, title=None, sub=None, pady=(0, 14)):
+        card = ui.Card(parent, self.P, pad=18)
+        card.pack(fill="x", pady=pady)
+        if title:
+            self._lbl(card.body, title, size=12, bold=True).pack(anchor="w")
+        if sub:
+            self._lbl(card.body, sub, size=9, muted=True, wrap=self._content_w() - 60)\
+                .pack(anchor="w", pady=(2, 0))
+        if title or sub:
+            tk.Frame(card.body, bg=card.fill, height=12).pack()
+        return card.body
+
+    def _content_w(self):
+        return self.W - self.SIDE_W - 2 * 30
+
+    def _setting_row(self, parent, title, desc, var, first=False):
+        """Рядок «назва + опис ......... [тумблер]»."""
+        P = self.P
+        if not first:
+            tk.Frame(parent, bg=ui.mix(parent.cget("bg"), P["text"], 0.07), height=1)\
+                .pack(fill="x", pady=10)
+        row = tk.Frame(parent, bg=parent.cget("bg"))
+        row.pack(fill="x")
+        ui.Toggle(row, var, P).pack(side="right", padx=(12, 0))
+        txt = tk.Frame(row, bg=row.cget("bg"))
+        txt.pack(side="left", fill="x", expand=True)
+        self._lbl(txt, title, size=10, bold=True).pack(anchor="w")
+        if desc:
+            self._lbl(txt, desc, size=9, muted=True, wrap=self._content_w() - 140)\
+                .pack(anchor="w", pady=(1, 0))
+        return row
+
+    # ---------- тост «Збережено ✓» ----------
+    def _toast(self, text):
+        try:
+            c = self._toast_cv
+            c.delete("all")
+            w = ui.measure(c, text, 9) + 30
+            c.config(width=w)
+            ui.round_rect(c, 1, 1, w - 1, 27, 13, fill=ui.mix(self.P["card"], self.P["green"], 0.25),
+                          outline="")
+            c.create_text(w / 2, 14, text=text, fill=self.P["text"], font=(F, 9, "bold"))
+            c.place(relx=1.0, rely=1.0, x=-22, y=-18, anchor="se")
+            tk.Misc.tkraise(c)
+            if self._toast_after:
+                self.win.after_cancel(self._toast_after)
+            self._toast_after = self.win.after(1400, lambda: c.place_forget())
+        except (tk.TclError, AttributeError):
+            pass
+
+    # ---------- каркас ----------
+    def _build(self):
+        for w in self.win.winfo_children():
+            w.destroy()
+        P = self.P
+        self.win.configure(bg=P["bg"])
+        # --- власний заголовок ---
+        title = tk.Canvas(self.win, bg=P["title_bg"], height=46, highlightthickness=0)
+        title.pack(fill="x")
+        ui.logo(title, 16, 11, 24, P, tags="drag")
+        title.create_text(50, 23, text=self.T("app_title"), anchor="w", fill=P["text"],
+                          font=(F, 11, "bold"), tags="drag")
+        tw = ui.measure(title, self.T("app_title"), 11)
+        vx = 50 + tw + 10
+        vtxt = f"v{APP_VERSION}"
+        vw = ui.measure(title, vtxt, 8) + 14
+        ui.grad_round_rect(title, vx, 15, vx + vw, 31, 8, P["accent"], ui.accent2(P), tags="drag")
+        title.create_text(vx + vw / 2, 23, text=vtxt, fill=ui.ink(P["accent"]),
+                          font=(F, 8, "bold"), tags="drag")
+        title.tag_bind("drag", "<Button-1>", self._drag_start)
+        title.tag_bind("drag", "<B1-Motion>", self._drag_move)
+        title.bind("<Button-1>", self._drag_start)
+        title.bind("<B1-Motion>", self._drag_move)
+        self._title_buttons(title)
+
+        # --- тіло: сайдбар + контент ---
+        body = tk.Frame(self.win, bg=P["bg"])
+        body.pack(fill="both", expand=True)
+        self.side = tk.Frame(body, bg=P["sidebar"], width=self.SIDE_W)
+        self.side.pack(side="left", fill="y")
+        self.side.pack_propagate(False)
+        self.content = tk.Frame(body, bg=P["bg"])
+        self.content.pack(side="left", fill="both", expand=True)
+        self._toast_cv = tk.Canvas(self.content, height=28, bg=P["bg"], highlightthickness=0)
+
+        self._nav = {}
+        self._tabs = [("general", "tab_general", "⚙"), ("media", "tab_media", "🎞"),
+                      ("stats", "tab_stats", "📊"), ("appearance", "tab_appearance", "🎨"),
+                      ("setup", "tab_setup", "🧩"), ("updates", "tab_updates", "⟳"),
+                      ("performance", "tab_performance", "⚡"), ("facts", "tab_facts", "💡"),
+                      ("about", "tab_about", "ⓘ")]
+        tk.Frame(self.side, bg=P["sidebar"], height=14).pack()
+        for key, tkey, icon in self._tabs:
+            self._nav_item(key, icon, self.T(tkey))
+        self._side_status()
+        self._show_tab(self._active_tab)
+
+    def _title_buttons(self, title):
+        P = self.P
+        W = self.W
+        for i, (glyph, cmd, hov) in enumerate((("✕", self._close, P["red"]),
+                                               ("—", self._minimize, ui.mix(P["title_bg"], P["text"], 0.12)))):
+            x2 = W - i * 46
+            tag = f"tb{i}"
+            title.create_rectangle(x2 - 46, 0, x2, 46, fill=P["title_bg"], outline="",
+                                   tags=(tag, tag + "bg"))
+            title.create_text(x2 - 23, 23, text=glyph, fill=P["muted"], font=(F, 11),
+                              tags=(tag, tag + "fg"))
+            title.tag_bind(tag, "<Enter>", lambda e, t=tag, h=hov: (
+                title.itemconfig(t + "bg", fill=h),
+                title.itemconfig(t + "fg", fill="#ffffff" if t == "tb0" else P["text"])))
+            title.tag_bind(tag, "<Leave>", lambda e, t=tag: (
+                title.itemconfig(t + "bg", fill=P["title_bg"]),
+                title.itemconfig(t + "fg", fill=P["muted"])))
+            title.tag_bind(tag, "<ButtonRelease-1>", lambda e, c=cmd: c())
+
+    def _nav_item(self, key, icon, text):
+        """Пункт бічного меню: заокруглена підсвітка + градієнтна смужка у активного."""
+        P = self.P
+        w, h = self.SIDE_W - 20, 40
+        cv = tk.Canvas(self.side, width=w, height=h, bg=P["sidebar"], highlightthickness=0,
+                       cursor="hand2")
+        cv.pack(padx=10, pady=1)
+        cv._hover = False
+
+        def draw():
+            cv.delete("all")
+            act = key == self._active_tab
+            if act:
+                ui.round_rect(cv, 0, 2, w, h - 2, 10, fill=ui.mix(P["sidebar"], P["accent"], 0.22),
+                              outline="")
+                ui.grad_round_rect(cv, 4, 10, 8, h - 10, 2, P["accent"], ui.accent2(P),
+                                   vertical=True, step=1)
+            elif cv._hover:
+                ui.round_rect(cv, 0, 2, w, h - 2, 10, fill=ui.mix(P["sidebar"], P["text"], 0.07),
+                              outline="")
+            fg = P["text"] if (act or cv._hover) else P["muted"]
+            cv.create_text(24, h / 2, text=icon, fill=fg, font=(F, 12))
+            cv.create_text(44, h / 2, text=text, anchor="w", fill=fg,
+                           font=(F, 10, "bold" if act else "normal"))
+
+        cv.bind("<Enter>", lambda e: (setattr(cv, "_hover", True), draw()))
+        cv.bind("<Leave>", lambda e: (setattr(cv, "_hover", False), draw()))
+        cv.bind("<Button-1>", lambda e: self._show_tab(key))
+        draw()
+        self._nav[key] = draw
+
+    def _side_status(self):
+        """Внизу сайдбара: індикатор «працює у фоні» + підказка автозбереження."""
+        P = self.P
+        box = tk.Frame(self.side, bg=P["sidebar"])
+        box.pack(side="bottom", fill="x", padx=12, pady=14)
+        card = ui.Card(box, P, pad=12, fill=ui.mix(P["sidebar"], P["dark"], 0.45))
+        card.pack(fill="x")
+        row = tk.Frame(card.body, bg=card.fill)
+        row.pack(anchor="w")
+        dot = tk.Canvas(row, width=12, height=12, bg=card.fill, highlightthickness=0)
+        dot.pack(side="left", padx=(0, 6))
+        dot.create_oval(1, 1, 11, 11, fill=P["green"], outline="")
+        self._lbl(row, self.T("st_status_on"), size=9, bold=True).pack(side="left")
+        self._lbl(card.body, self.T("st_status_hint"), size=8, muted=True).pack(anchor="w", pady=(3, 0))
+        self._lbl(box, self.T("autosave_hint"), size=8, muted=True, wrap=self.SIDE_W - 30)\
+            .pack(anchor="w", pady=(10, 0))
 
     # ---------- вкладки ----------
     def _show_tab(self, key):
@@ -265,121 +330,315 @@ class SettingsApp:
         except Exception:
             pass
         self._active_tab = key
-        for k, (b, ind) in self._nav.items():
-            act = k == key
-            b.config(bg=self.P["panel"] if act else self.P["sidebar"], fg=self.P["text"],
-                     font=(themes.FONT, 11, "bold" if act else "normal"))
-            ind.config(bg=self.P["accent"] if act else self.P["sidebar"])
+        for draw in self._nav.values():
+            draw()
         for w in self.content.winfo_children():
-            w.destroy()
-        {"general": self._tab_general, "stats": self._tab_stats, "media": self._tab_media,
-         "appearance": self._tab_appearance, "facts": self._tab_facts, "setup": self._tab_setup,
-         "updates": self._tab_updates, "performance": self._tab_performance,
-         "about": self._tab_about}[key]()
+            if w is not self._toast_cv:
+                w.destroy()
+        titles = {"general": ("tab_general", "st_general_sub"),
+                  "media": ("tab_media", "st_media_sub"),
+                  "stats": ("stats_title", "st_stats_sub"),
+                  "appearance": ("tab_appearance", "st_appearance_sub"),
+                  "setup": ("setup_title", "setup_hint"),
+                  "updates": ("tab_updates", "update_hint"),
+                  "performance": ("tab_performance", "perf_hint"),
+                  "facts": ("facts_title", "facts_hint"),
+                  "about": ("tab_about", None)}
+        tkey, skey = titles[key]
+        head = tk.Frame(self.content, bg=self.P["bg"])
+        head.pack(fill="x", padx=30, pady=(24, 14))
+        self._lbl(head, self.T(tkey), size=19, bold=True).pack(anchor="w")
+        if skey:
+            self._lbl(head, self.T(skey), size=10, muted=True, wrap=self._content_w())\
+                .pack(anchor="w", pady=(2, 0))
+        self.scroll = ui.ScrollArea(self.content, self.P["bg"])
+        self.scroll.pack(fill="both", expand=True, padx=(30, 6), pady=(0, 12))
+        f = tk.Frame(self.scroll.inner, bg=self.P["bg"])
+        f.pack(fill="both", expand=True, padx=(0, 18))
+        getattr(self, "_tab_" + key)(f)
+        tk.Misc.tkraise(self._toast_cv)
 
-    def _pad(self):
-        f = tk.Frame(self.content, bg=self.P["bg"])
-        f.pack(fill="both", expand=True, padx=26, pady=20)
-        return f
-
-    def _header(self, parent, text):
-        self._lbl(parent, text, size=15, bold=True).pack(anchor="w", pady=(0, 14))
-
-    def _check(self, parent, text, var):
+    # ===== Загальне =====
+    def _tab_general(self, f):
         P = self.P
-        tk.Checkbutton(parent, text=text, variable=var, bg=P["bg"], fg=P["text"],
-                       selectcolor=P["dark"], activebackground=P["bg"], activeforeground=P["text"],
-                       font=(themes.FONT, 11), anchor="w", cursor="hand2").pack(anchor="w", pady=3)
+        d = stats.load()
+        # --- «герой»: що робить програма просто зараз ---
+        hero = tk.Canvas(f, height=124, bg=P["bg"], highlightthickness=0)
+        hero.pack(fill="x", pady=(0, 14))
 
-    def _radio(self, parent, text, var, value):
-        P = self.P
-        tk.Radiobutton(parent, text=text, variable=var, value=value,
-                       bg=P["bg"], fg=P["text"], selectcolor=P["dark"],
-                       activebackground=P["bg"], activeforeground=P["text"],
-                       font=(themes.FONT, 11), cursor="hand2").pack(anchor="w", padx=6, pady=2)
+        def draw_hero(_e=None):
+            try:
+                hero.delete("all")
+            except tk.TclError:
+                return
+            w = max(200, hero.winfo_width())
+            ui.grad_round_rect(hero, 0, 0, w, 124, 18, ui.mix(P["card"], P["accent"], 0.55),
+                               ui.mix(P["card"], ui.accent2(P), 0.55))
+            for i in range(6):   # декоративні кола
+                r = 40 + i * 22
+                hero.create_oval(w - 70 - r, 62 - r, w - 70 + r, 62 + r,
+                                 outline=ui.mix(ui.mix(P["card"], ui.accent2(P), 0.55), "#ffffff", 0.08),
+                                 width=1)
+            ui.logo(hero, w - 102, 30, 64, P)
+            fg = ui.ink(ui.mix(P["card"], P["accent"], 0.55))
+            hero.create_text(24, 30, text=self.T("st_ready"), anchor="w", fill=fg, font=(F, 15, "bold"))
+            hero.create_text(24, 60, text=self.T("st_ready_body", mb=f"{self.v_target.get():g}"),
+                             anchor="w", fill=fg, font=(F, 9), width=w - 170)
+            if d.get("files"):
+                u, g = self.T("unit_mb"), self.T("unit_gb")
+                hero.create_text(24, 100, anchor="w", fill=fg, font=(F, 9, "bold"),
+                                 text=self.T("st_ready_stats", files=d.get("files", 0),
+                                             saved=stats.fmt_mb(d.get("saved_mb", 0.0), u, g)))
+        hero.bind("<Configure>", draw_hero)
+        tid = self.v_target.trace_add("write", lambda *a: draw_hero())
+        hero.bind("<Destroy>", lambda e: self.v_target.trace_remove("write", tid), add="+")
 
-    def _tab_general(self):
-        f = self._pad()
-        self._header(f, self.T("limit_title"))
-        for tkey, mb in (("limit_20", 20), ("limit_25", 25), ("limit_50", 50), ("limit_500", 500)):
-            self._radio(f, self.T(tkey), self.v_target, mb)
+        c = self._card(f, self.T("limit_title"), self.T("st_limit_sub"))
+        opts = [(20, "20 " + self.T("unit_mb")), (25, "25 " + self.T("unit_mb")),
+                (50, "50 " + self.T("unit_mb")), (500, "500 " + self.T("unit_mb"))]
+        sub = {20: self.T("lim_free"), 25: " ", 50: self.T("lim_basic"), 500: self.T("lim_nitro")}
+        ui.Segmented(c, opts, self.v_target, P, sub=sub, min_seg=118).pack(anchor="w")
 
-        tk.Frame(f, bg=self.P["bg"], height=12).pack()
-        self._check(f, self.T("opt_autoscale"), self.v_auto)
-        self._check(f, self.T("opt_block"), self.v_block)
-        self._check(f, self.T("opt_paste"), self.v_paste)
+        c = self._card(f, self.T("st_behavior"))
+        self._setting_row(c, self.T("opt_autoscale"), self.T("st_autoscale_d"), self.v_auto, first=True)
+        self._setting_row(c, self.T("opt_block"), self.T("st_block_d"), self.v_block)
+        self._setting_row(c, self.T("opt_paste"), self.T("st_paste_d"), self.v_paste)
 
-        row = tk.Frame(f, bg=self.P["bg"]); row.pack(anchor="w", pady=(12, 0))
-        self._lbl(row, self.T("audio_kbps")).pack(side="left")
-        tk.Spinbox(row, from_=0, to=320, increment=32, width=6, textvariable=self.v_audio,
-                   font=(themes.FONT, 11), bg=self.P["dark"], fg=self.P["text"],
-                   insertbackground=self.P["text"], buttonbackground=self.P["panel"],
-                   relief="flat", highlightthickness=1,
-                   highlightbackground=self.P["dark"],
-                   highlightcolor=self.P["accent"]).pack(side="left", padx=8)
+        c = self._card(f, self.T("st_audio"), self.T("st_audio_d"))
+        ui.Slider(c, self.v_audio, P, 0, 320, 32, width=380,
+                  fmt=lambda v: f"{v} kbps" if v else self.T("audio_off")).pack(anchor="w")
 
-    def _tab_media(self):
-        f = self._pad()
-        self._header(f, self.T("media_title"))
-        self._check(f, self.T("media_video"), self.v_cv)
-        self._check(f, self.T("media_image"), self.v_ci)
-        self._check(f, self.T("media_audio"), self.v_ca)
-        self._check(f, self.T("opt_shrink"), self.v_shrink)
-        self._check(f, self.T("opt_sound"), self.v_sound)
-        srow = tk.Frame(f, bg=self.P["bg"]); srow.pack(anchor="w", fill="x", pady=(2, 0))
+    # ===== Медіа =====
+    def _tab_media(self, f):
+        c = self._card(f, self.T("media_title"))
+        self._setting_row(c, self.T("media_video"), self.T("st_video_d"), self.v_cv, first=True)
+        self._setting_row(c, self.T("media_image"), self.T("st_image_d"), self.v_ci)
+        self._setting_row(c, self.T("media_audio"), self.T("st_audio2_d"), self.v_ca)
+
+        c = self._card(f, self.T("st_extras"))
+        self._setting_row(c, self.T("opt_shrink"), self.T("st_shrink_d"), self.v_shrink, first=True)
+        self._setting_row(c, self.T("opt_sound"), None, self.v_sound)
+        srow = tk.Frame(c, bg=c.cget("bg")); srow.pack(anchor="w", fill="x", pady=(10, 0))
         self._btn(srow, self.T("sound_pick"), self._pick_sound, primary=False, small=True).pack(side="left")
-        self._btn(srow, self.T("sound_win"), self._reset_sound, primary=False, small=True).pack(side="left", padx=6)
+        self._btn(srow, self.T("sound_win"), self._reset_sound, primary=False, small=True)\
+            .pack(side="left", padx=8)
         self._sound_lbl = self._lbl(srow, "", size=9, muted=True)
-        self._sound_lbl.pack(side="left", padx=8)
+        self._sound_lbl.pack(side="left", padx=4)
         self._refresh_sound_lbl()
 
-        tk.Frame(f, bg=self.P["bg"], height=16).pack()
-        self._lbl(f, self.T("keep_title"), size=12, bold=True).pack(anchor="w", pady=(0, 6))
-        for tkey, val in (("keep_ask", "ask"), ("keep_always", "always"), ("keep_never", "never")):
-            self._radio(f, self.T(tkey), self.v_keep, val)
+        c = self._card(f, self.T("keep_title"), self.T("st_keep_d"))
+        ui.Segmented(c, [("ask", self.T("keep_ask")), ("always", self.T("keep_always")),
+                         ("never", self.T("keep_never"))], self.v_keep, self.P, min_seg=120)\
+            .pack(anchor="w")
 
-    def _tab_appearance(self):
-        f = self._pad()
-        self._header(f, self.T("theme_title"))
-        trow = tk.Frame(f, bg=self.P["bg"]); trow.pack(anchor="w", pady=(0, 6))
-        for name in themes.order():
-            pal = themes.palette(name)
-            sel = name == self.v_theme.get()
-            card = tk.Frame(trow, bg=pal["bg"], highlightthickness=3, cursor="hand2",
-                            highlightbackground=(self.P["accent"] if sel else pal["dark"]),
-                            highlightcolor=(self.P["accent"] if sel else pal["dark"]))
-            card.pack(side="left", padx=8)
-            mark = "  ✓" if sel else ""
-            tk.Label(card, text=pal["name"] + mark, bg=pal["bg"], fg=pal["text"],
-                     font=(themes.FONT, 11, "bold")).pack(padx=16, pady=(12, 4))
-            sw = tk.Frame(card, bg=pal["bg"]); sw.pack(pady=(0, 12))
-            for c in ("accent", "green", "warn", "red"):
-                tk.Frame(sw, bg=pal[c], width=16, height=16).pack(side="left", padx=2)
-            for w in (card, ) + tuple(card.winfo_children()):
-                w.bind("<Button-1>", lambda e, n=name: self._pick_theme(n))
+    # ===== Статистика =====
+    def _tab_stats(self, f):
+        """Особиста статистика: скільки файлів/місця зекономлено + історія
+        останніх стиснень з кнопкою «скопіювати знову» (без повторного стиснення)."""
+        P = self.P
+        d = stats.load()
+        u, g = self.T("unit_mb"), self.T("unit_gb")
+        if d.get("since"):
+            try:
+                day = time.strftime("%d.%m.%Y", time.localtime(d["since"]))
+                self._lbl(f, self.T("stats_since", d=day), size=10, muted=True)\
+                    .pack(anchor="w", pady=(0, 10))
+            except Exception:
+                pass
 
-        tk.Frame(f, bg=self.P["bg"], height=18).pack()
-        self._lbl(f, self.T("lang_title"), size=12, bold=True).pack(anchor="w", pady=(0, 6))
-        for code in i18n.LANGS:
-            tk.Radiobutton(f, text=i18n.LANG_NAMES[code], variable=self.v_lang, value=code,
-                           command=lambda c=code: self._pick_lang(c),
-                           bg=self.P["bg"], fg=self.P["text"], selectcolor=self.P["dark"],
-                           activebackground=self.P["bg"], activeforeground=self.P["text"],
-                           font=(themes.FONT, 11)).pack(anchor="w", padx=6, pady=2)
+        # --- три картки з великими цифрами ---
+        row = tk.Frame(f, bg=P["bg"]); row.pack(fill="x", pady=(0, 14))
+        avg = f"−{stats.avg_percent(d)}%" if d.get("files") else "—"
+        for i, (big, small, icon) in enumerate((
+                (str(d.get("files", 0)), self.T("stats_files"), "📦"),
+                (stats.fmt_mb(d.get("saved_mb", 0.0), u, g), self.T("stats_saved"), "💾"),
+                (avg, self.T("stats_avg"), "📉"))):
+            cv = tk.Canvas(row, width=10, height=96, bg=P["bg"], highlightthickness=0)
+            cv.pack(side="left", fill="x", expand=True, padx=(0 if i == 0 else 6, 0 if i == 2 else 6))
+
+            def draw(_e=None, cv=cv, big=big, small=small, icon=icon):
+                cv.delete("all")
+                w = max(80, cv.winfo_width())
+                ui.round_rect(cv, 0, 0, w, 96, 16, fill=P["card"],
+                              outline=ui.mix(P["card"], P["text"], 0.07))
+                cv.create_text(18, 24, text=icon, anchor="w", font=(F, 13), fill=P["text"])
+                cv.create_text(18, 54, text=big, anchor="w", font=(F, 20, "bold"), fill=P["accent"])
+                cv.create_text(18, 79, text=small, anchor="w", font=(F, 9), fill=P["muted"])
+            cv.bind("<Configure>", draw)
+
+        # --- за типом ---
+        bk = d.get("by_kind", {})
+        tot = sum(int(v) for v in bk.values()) or 0
+        if tot:
+            c = self._card(f, self.T("st_by_type"))
+            for icon, k, name in (("🎬", "video", self.T("media_video")), ("🖼", "image", self.T("media_image")),
+                                  ("🎵", "audio", self.T("media_audio"))):
+                n = int(bk.get(k, 0))
+                r = tk.Frame(c, bg=c.cget("bg")); r.pack(fill="x", pady=3)
+                self._lbl(r, name, size=9).pack(side="left")
+                self._lbl(r, str(n), size=9, bold=True).pack(side="right")
+                bar = tk.Canvas(c, height=8, bg=c.cget("bg"), highlightthickness=0)
+                bar.pack(fill="x", pady=(0, 6))
+
+                def dbar(_e=None, bar=bar, frac=n / tot):
+                    bar.delete("all")
+                    w = max(20, bar.winfo_width())
+                    ui.round_rect(bar, 0, 0, w, 8, 4, fill=P["dark"], outline="")
+                    if frac > 0:
+                        ui.grad_round_rect(bar, 0, 0, max(8, w * frac), 8, 4, P["accent"],
+                                           ui.accent2(P), step=1)
+                bar.bind("<Configure>", dbar)
+
+        # --- історія ---
+        c = self._card(f, self.T("stats_hist"))
+        hist = d.get("history", [])
+        if not hist:
+            self._lbl(c, self.T("stats_empty"), size=10, muted=True).pack(anchor="w", pady=6)
+            return
+        self._lbl(c, self.T("stats_hint"), size=9, muted=True, wrap=self._content_w() - 60)\
+            .pack(anchor="w", pady=(0, 8))
+        box = tk.Frame(c, bg=P["dark"]); box.pack(fill="x")
+        lb = tk.Listbox(box, bg=P["dark"], fg=P["text"],
+                        selectbackground=P["accent"], selectforeground=ui.ink(P["accent"]),
+                        highlightthickness=0, bd=0, font=(F, 10),
+                        activestyle="none", height=min(8, max(3, len(hist))))
+        lb.pack(side="left", fill="both", expand=True, padx=6, pady=6)
+        self._hist_lb, self._hist_entries = lb, hist
+        for e in hist:
+            icon = {"video": "🎬", "image": "🖼", "audio": "🎵"}.get(e.get("kind"), "🎬")
+            try:
+                when = time.strftime("%d.%m %H:%M", time.localtime(e.get("t", 0)))
+            except Exception:
+                when = ""
+            name = e.get("name", "")
+            if len(name) > 38:
+                name = name[:35] + "…"
+            parts = ""
+            if int(e.get("parts", 1)) > 1:
+                parts = f"  ×{e['parts']} {self.T('stats_parts')}"
+            lb.insert("end", f" {when}   {icon}  {name}    "
+                             f"{e.get('orig', 0):g} → {e.get('final', 0):g} {u}{parts}")
+        lb.bind("<Double-Button-1>", lambda _e: self._hist_copy())
+        # колесо над списком крутить список, а не всю сторінку
+        lb.bind("<MouseWheel>", lambda e: (lb.yview_scroll(int(-e.delta / 120), "units"), "break")[1])
+
+        row = tk.Frame(c, bg=c.cget("bg")); row.pack(anchor="w", fill="x", pady=(10, 0))
+        self._btn(row, self.T("stats_copy"), self._hist_copy, small=True).pack(side="left")
+        self._btn(row, self.T("stats_open"), self._hist_open, primary=False, small=True)\
+            .pack(side="left", padx=8)
+        self._btn(row, self.T("stats_clear"), self._hist_clear, primary=False, small=True)\
+            .pack(side="left")
+        self._hist_status = self._lbl(row, "", size=9)
+        self._hist_status.pack(side="left", padx=10)
+
+    def _hist_sel(self):
+        try:
+            return self._hist_entries[self._hist_lb.curselection()[0]]
+        except Exception:
+            return None
+
+    def _hist_paths(self):
+        e = self._hist_sel()
+        if not e:
+            return []
+        return [p for p in e.get("paths", []) if p and os.path.isfile(p)]
+
+    def _hist_copy(self):
+        """Кладе стиснутий файл назад у буфер — Ctrl+V у Discord і все."""
+        if self._hist_sel() is None:
+            return self._hist_flash(self.T("stats_pick"), err=True)
+        paths = self._hist_paths()
+        if not paths:
+            return self._hist_flash(self.T("stats_gone"), err=True)
+        try:
+            import discord_overlay as _ov   # завжди вже завантажений (він відкрив меню)
+            _ov.set_clipboard_files(paths)
+        except Exception:
+            return self._hist_flash(self.T("stats_gone"), err=True)
+        self._hist_flash(self.T("stats_copied"))
+
+    def _hist_open(self):
+        if self._hist_sel() is None:
+            return self._hist_flash(self.T("stats_pick"), err=True)
+        paths = self._hist_paths()
+        if not paths:
+            return self._hist_flash(self.T("stats_gone"), err=True)
+        try:
+            subprocess.Popen(["explorer", "/select,", os.path.normpath(paths[0])])
+        except Exception:
+            pass
+
+    def _hist_clear(self):
+        stats.clear_history()
+        self._show_tab("stats")
+
+    def _hist_flash(self, msg, err=False):
+        try:
+            self._hist_status.config(text=msg, fg=self.P["red"] if err else self.P["green"])
+        except (tk.TclError, AttributeError):
+            pass
+
+    # ===== Вигляд =====
+    def _tab_appearance(self, f):
+        P = self.P
+        c = self._card(f, self.T("theme_title"))
+        grid = tk.Frame(c, bg=c.cget("bg")); grid.pack(anchor="w")
+        for i, name in enumerate(themes.order()):
+            self._theme_tile(grid, name).grid(row=0, column=i, padx=(0, 12))
+
+        c = self._card(f, self.T("lang_title"))
+        ui.Segmented(c, [(code, i18n.LANG_NAMES[code]) for code in i18n.LANGS], self.v_lang, P,
+                     command=lambda: self._pick_lang(self.v_lang.get()), min_seg=120).pack(anchor="w")
+
+    def _theme_tile(self, parent, name):
+        """Мініатюра теми: маленьке вікно-оверлей у кольорах цієї теми."""
+        pal = themes.palette(name)
+        sel = name == self.v_theme.get()
+        w, h = 128, 120
+        cv = tk.Canvas(parent, width=w, height=h + 24, bg=parent.cget("bg"),
+                       highlightthickness=0, cursor="hand2")
+        cv._hover = False
+
+        def draw():
+            cv.delete("all")
+            if sel:
+                ui.grad_round_rect(cv, 0, 0, w, h, 16, self.P["accent"], ui.accent2(self.P))
+            elif cv._hover:
+                ui.round_rect(cv, 0, 0, w, h, 16, fill=ui.mix(parent.cget("bg"), self.P["text"], 0.2),
+                              outline="")
+            ui.round_rect(cv, 3, 3, w - 3, h - 3, 14, fill=pal["bg"], outline="")
+            ui.grad_round_rect(cv, 3, 3, w - 3, 26, 12, pal["accent"], pal.get("accent2", pal["accent"]))
+            cv.create_rectangle(3, 18, w - 3, 26, fill=pal["bg"], outline="")
+            cv.create_oval(w / 2 - 15, 30, w / 2 + 15, 60, fill=pal["panel"],
+                           outline=pal.get("accent2", pal["accent"]), width=2)
+            ui.round_rect(cv, 24, 68, w - 24, 74, 3, fill=pal["text"], outline="")
+            ui.round_rect(cv, 36, 80, w - 36, 84, 2, fill=pal["muted"], outline="")
+            ui.grad_round_rect(cv, 18, 92, w - 18, 108, 8, pal["accent"],
+                               pal.get("accent2", pal["accent"]))
+            cv.create_text(w / 2, h + 12, text=pal["name"] + ("  ✓" if sel else ""),
+                           fill=self.P["text"], font=(F, 9, "bold"))
+        cv.bind("<Enter>", lambda e: (setattr(cv, "_hover", True), draw()))
+        cv.bind("<Leave>", lambda e: (setattr(cv, "_hover", False), draw()))
+        cv.bind("<Button-1>", lambda e: self._pick_theme(name))
+        draw()
+        return cv
 
     def _pick_theme(self, name):
+        if name == self.cfg.get("theme"):
+            return
         self.cfg["theme"] = name
         self.v_theme.set(name)
         self.P = themes.palette(name)
-        self.win.configure(bg=self.P["dark"])
         self._autosave()       # зберегти + застосувати (overlay/трей)
         self._apply_live()
         self._build()
+        ui.win_chrome(self.win, taskbar=False, rounded=True, dark=ui.luminance(self.P["bg"]) < 128)
 
     def _pick_lang(self, code):
+        if code == self.lang:
+            return
         self.cfg["lang"] = code
         self.lang = code
-        self.v_lang.set(code)
         self._autosave()
         self._apply_live()
         self._build()
@@ -391,15 +650,23 @@ class SettingsApp:
             except Exception:
                 pass
 
-    def _tab_updates(self):
+    # ===== Оновлення =====
+    def _tab_updates(self, f):
         self._restart_btn = None
-        f = self._pad()
-        self._header(f, self.T("tab_updates"))
-        self._lbl(f, self.T("update_hint"), muted=True).pack(anchor="w", pady=(0, 14))
-        self.upd_status = self._lbl(f, "", size=11, bold=True)
-        self.upd_status.pack(anchor="w", pady=(0, 12))
-        self.upd_btn = self._btn(f, self.T("check_updates"), self._check_updates)
-        self.upd_btn.pack(anchor="w")
+        c = self._card(f)
+        top = tk.Frame(c, bg=c.cget("bg")); top.pack(fill="x")
+        ic = tk.Canvas(top, width=56, height=56, bg=c.cget("bg"), highlightthickness=0)
+        ic.pack(side="left", padx=(0, 14))
+        ui.logo(ic, 2, 2, 52, self.P)
+        txt = tk.Frame(top, bg=c.cget("bg")); txt.pack(side="left", fill="x", expand=True)
+        self._lbl(txt, f"Discord Auto-Compress  v{APP_VERSION}", size=12, bold=True).pack(anchor="w")
+        self.upd_status = self._lbl(txt, self.T("upd_idle"), size=10, muted=True)
+        self.upd_status.pack(anchor="w", pady=(2, 0))
+        self.upd_row = tk.Frame(c, bg=c.cget("bg")); self.upd_row.pack(anchor="w", pady=(16, 0))
+        self.upd_btn = self._btn(self.upd_row, self.T("check_updates"), self._check_updates)
+        self.upd_btn.pack(side="left")
+        if self._upd_state:
+            self._upd_done(*self._upd_state)
 
     def _check_updates(self):
         self.upd_btn.config(state="disabled")
@@ -415,6 +682,7 @@ class SettingsApp:
         threading.Thread(target=work, daemon=True).start()
 
     def _upd_done(self, ok, changed):
+        self._upd_state = (ok, changed)
         try:
             self.upd_btn.config(state="normal")
             if not ok:
@@ -423,9 +691,9 @@ class SettingsApp:
                 self.upd_status.config(text=self.T("updated_n", n=changed), fg=self.P["green"])
                 # знайшли оновлення -> пропонуємо перезапуск (щоб застосувати свіжий код)
                 if self.on_restart and not getattr(self, "_restart_btn", None):
-                    self._restart_btn = self._btn(self.upd_btn.master, self.T("restart_now"),
-                                                  self._do_restart)
-                    self._restart_btn.pack(anchor="w", pady=(10, 0))
+                    self._restart_btn = self._btn(self.upd_row, self.T("restart_now"),
+                                                  self._do_restart, kind="success")
+                    self._restart_btn.pack(side="left", padx=10)
             else:
                 self.upd_status.config(text=self.T("up_to_date"), fg=self.P["green"])
         except tk.TclError:
@@ -435,13 +703,12 @@ class SettingsApp:
         if self.on_restart:
             self.on_restart()
 
-    def _tab_performance(self):
-        f = self._pad()
-        self._header(f, self.T("tab_performance"))
-        self._lbl(f, self.T("perf_hint"), muted=True).pack(anchor="w", pady=(0, 12))
-        self.perf_btn = self._btn(f, self.T("perf_run"), self._run_perf)
+    # ===== Швидкодія =====
+    def _tab_performance(self, f):
+        c = self._card(f)
+        self.perf_btn = self._btn(c, self.T("perf_run"), self._run_perf)
         self.perf_btn.pack(anchor="w")
-        self.perf_box = tk.Frame(f, bg=self.P["bg"]); self.perf_box.pack(anchor="w", fill="x", pady=(14, 0))
+        self.perf_box = tk.Frame(c, bg=c.cget("bg")); self.perf_box.pack(anchor="w", fill="x", pady=(12, 0))
 
     def _run_perf(self):
         self.perf_btn.config(state="disabled", text=self.T("perf_running"))
@@ -451,11 +718,10 @@ class SettingsApp:
         self.perf_status = self._lbl(self.perf_box, "", size=10, bold=True)
         self.perf_status.pack(anchor="w")
         self._perf_barw = 440
-        bar = tk.Frame(self.perf_box, bg=self.P["dark"], height=10, width=self._perf_barw)
-        bar.pack(anchor="w", pady=(6, 0))
-        bar.pack_propagate(False)
-        self.perf_fill = tk.Frame(bar, bg=self.P["accent"])
-        self.perf_fill.place(x=0, y=0, relheight=1, width=1)
+        self.perf_bar = tk.Canvas(self.perf_box, width=self._perf_barw, height=10,
+                                  bg=self.perf_box.cget("bg"), highlightthickness=0)
+        self.perf_bar.pack(anchor="w", pady=(8, 0))
+        self._perf_set("", 0)
 
         if deps.all_ok(refresh=True):
             return self._perf_test()
@@ -467,8 +733,13 @@ class SettingsApp:
 
     def _perf_set(self, txt, pct):
         try:
-            self.perf_status.config(text=f"{txt}  {int(pct)}%", fg=self.P["text"])
-            self.perf_fill.place_configure(width=max(1, int(self._perf_barw * pct / 100)))
+            self.perf_status.config(text=f"{txt}  {int(pct)}%" if txt else "", fg=self.P["text"])
+            b = self.perf_bar
+            b.delete("all")
+            ui.round_rect(b, 0, 0, self._perf_barw, 10, 5, fill=self.P["dark"], outline="")
+            xe = self._perf_barw * max(0, min(100, pct)) / 100
+            if xe > 6:
+                ui.grad_round_rect(b, 0, 0, xe, 10, 5, self.P["accent"], ui.accent2(self.P), step=1)
         except (tk.TclError, AttributeError):
             pass
 
@@ -489,7 +760,7 @@ class SettingsApp:
             try:
                 import optimize_test
                 res = optimize_test.run(lambda v: self.win.after(
-                    0, lambda v=v: self._perf_set(self.T("perf_running"), v)))
+                    0, lambda v=v: self._perf_set(self.T("perf_running"), v)), lang=self.lang)
             except Exception as e:
                 res = {"lines": [("✗", str(e)[:60])], "verdict": "—", "ok": False}
             self.win.after(0, lambda: self._perf_done(res))
@@ -500,157 +771,33 @@ class SettingsApp:
             for w in self.perf_box.winfo_children():   # прибрати статус і смужку
                 w.destroy()
             self.perf_btn.config(state="normal", text=self.T("perf_run"))
-            colmap = {"✓": self.P["green"], "⚠": self.P["warn"], "✗": self.P["red"]}
+            P = self.P
+            bg = self.perf_box.cget("bg")
+            colmap = {"✓": P["green"], "⚠": P["warn"], "✗": P["red"]}
             for icon, text in res["lines"]:
-                row = tk.Frame(self.perf_box, bg=self.P["bg"]); row.pack(anchor="w", fill="x", pady=2)
-                tk.Label(row, text=icon, bg=self.P["bg"], fg=colmap.get(icon, self.P["text"]),
-                         font=(themes.FONT, 12, "bold"), width=2).pack(side="left")
-                tk.Label(row, text=text, bg=self.P["bg"], fg=self.P["text"],
-                         font=(themes.FONT, 10), anchor="w", justify="left").pack(side="left")
+                row = tk.Frame(self.perf_box, bg=bg); row.pack(anchor="w", fill="x", pady=3)
+                col = colmap.get(icon, P["text"])
+                dot = tk.Canvas(row, width=22, height=22, bg=bg, highlightthickness=0)
+                dot.pack(side="left", padx=(0, 8))
+                dot.create_oval(1, 1, 21, 21, fill=ui.mix(bg, col, 0.25), outline="")
+                dot.create_text(11, 11, text=icon, fill=col, font=(F, 9, "bold"))
+                self._lbl(row, text, size=10).pack(side="left")
             v = res.get("verdict", "")
-            tk.Label(self.perf_box, text=v, bg=self.P["bg"],
-                     fg=self.P["green"] if res.get("ok") else self.P["warn"],
-                     font=(themes.FONT, 11, "bold"), wraplength=440, justify="left"
-                     ).pack(anchor="w", pady=(10, 0))
+            self._lbl(self.perf_box, v, size=11, bold=True, wrap=self._content_w() - 60)\
+                .pack(anchor="w", pady=(12, 0))
+            self.perf_box.winfo_children()[-1].config(fg=P["green"] if res.get("ok") else P["warn"])
         except tk.TclError:
             pass
 
-    def _tab_stats(self):
-        """Особиста статистика: скільки файлів/місця зекономлено + історія
-        останніх стиснень з кнопкою «скопіювати знову» (без повторного стиснення)."""
-        f = self._pad()
-        P = self.P
-        d = stats.load()
-        self._header(f, "📊  " + self.T("stats_title"))
-        if d.get("since"):
-            try:
-                day = time.strftime("%d.%m.%Y", time.localtime(d["since"]))
-                self._lbl(f, self.T("stats_since", d=day), size=10, muted=True)\
-                    .pack(anchor="w", pady=(0, 10))
-            except Exception:
-                pass
-        u, g = self.T("unit_mb"), self.T("unit_gb")
-
-        # --- три картки з великими цифрами ---
-        cards = tk.Frame(f, bg=P["bg"]); cards.pack(anchor="w", fill="x")
-        avg = f"−{stats.avg_percent(d)}%" if d.get("files") else "—"
-        for big, small in ((str(d.get("files", 0)), self.T("stats_files")),
-                           (stats.fmt_mb(d.get("saved_mb", 0.0), u, g), self.T("stats_saved")),
-                           (avg, self.T("stats_avg"))):
-            c = tk.Frame(cards, bg=P["dark"], padx=18, pady=10)
-            c.pack(side="left", padx=(0, 10))
-            tk.Label(c, text=big, bg=P["dark"], fg=P["accent"],
-                     font=(themes.FONT, 17, "bold")).pack(anchor="w")
-            tk.Label(c, text=small, bg=P["dark"], fg=P["muted"],
-                     font=(themes.FONT, 9)).pack(anchor="w")
-        bk = d.get("by_kind", {})
-        kinds = "    ".join(f"{ic} {bk[k]}" for ic, k in
-                            (("🎬", "video"), ("🖼", "image"), ("🎵", "audio")) if bk.get(k))
-        if kinds:
-            self._lbl(f, kinds, size=10, muted=True).pack(anchor="w", pady=(6, 0))
-
-        # --- історія ---
-        self._lbl(f, self.T("stats_hist"), size=12, bold=True).pack(anchor="w", pady=(14, 2))
-        hist = d.get("history", [])
-        if not hist:
-            self._lbl(f, self.T("stats_empty"), size=10, muted=True).pack(anchor="w", pady=10)
-            return
-        hint = self._lbl(f, self.T("stats_hint"), size=9, muted=True)
-        hint.config(wraplength=470, justify="left")
-        hint.pack(anchor="w", pady=(0, 6))
-        box = tk.Frame(f, bg=P["bg"]); box.pack(fill="both", expand=True)
-        sb = tk.Scrollbar(box); sb.pack(side="right", fill="y")
-        lb = tk.Listbox(box, yscrollcommand=sb.set, bg=P["dark"], fg=P["text"],
-                        selectbackground=P["accent"], selectforeground="#ffffff",
-                        highlightthickness=0, bd=0, font=(themes.FONT, 10),
-                        activestyle="none", height=8)
-        lb.pack(side="left", fill="both", expand=True)
-        sb.config(command=lb.yview)
-        self._hist_lb, self._hist_entries = lb, hist
-        for e in hist:
-            icon = {"video": "🎬", "image": "🖼", "audio": "🎵"}.get(e.get("kind"), "🎬")
-            try:
-                when = time.strftime("%d.%m %H:%M", time.localtime(e.get("t", 0)))
-            except Exception:
-                when = ""
-            name = e.get("name", "")
-            if len(name) > 34:
-                name = name[:31] + "…"
-            parts = ""
-            if int(e.get("parts", 1)) > 1:
-                parts = f"  ×{e['parts']} {self.T('stats_parts')}"
-            lb.insert("end", f" {when}  {icon}  {name}   "
-                             f"{e.get('orig', 0):g}→{e.get('final', 0):g} {u}{parts}")
-        lb.bind("<Double-Button-1>", lambda _e: self._hist_copy())
-
-        row = tk.Frame(f, bg=P["bg"]); row.pack(anchor="w", fill="x", pady=(8, 0))
-        self._btn(row, self.T("stats_copy"), self._hist_copy, small=True).pack(side="left")
-        self._btn(row, self.T("stats_open"), self._hist_open,
-                  primary=False, small=True).pack(side="left", padx=6)
-        self._btn(row, self.T("stats_clear"), self._hist_clear,
-                  primary=False, small=True).pack(side="left")
-        self._hist_status = self._lbl(row, "", size=9)
-        self._hist_status.pack(side="left", padx=10)
-
-    def _hist_sel(self):
-        try:
-            return self._hist_entries[self._hist_lb.curselection()[0]]
-        except Exception:
-            return None
-
-    def _hist_paths(self):
-        e = self._hist_sel()
-        if not e:
-            return []
-        return [p for p in e.get("paths", []) if p and os.path.isfile(p)]
-
-    def _hist_copy(self):
-        """Кладе стиснутий файл назад у буфер — Ctrl+V у Discord і все."""
-        paths = self._hist_paths()
-        if not paths:
-            return self._hist_flash(self.T("stats_gone"), err=True)
-        try:
-            import discord_overlay as _ov   # завжди вже завантажений (він відкрив меню)
-            _ov.set_clipboard_files(paths)
-        except Exception:
-            return self._hist_flash(self.T("stats_gone"), err=True)
-        self._hist_flash(self.T("stats_copied"))
-
-    def _hist_open(self):
-        paths = self._hist_paths()
-        if not paths:
-            return self._hist_flash(self.T("stats_gone"), err=True)
-        try:
-            subprocess.Popen(["explorer", "/select,", os.path.normpath(paths[0])])
-        except Exception:
-            pass
-
-    def _hist_clear(self):
-        stats.clear_history()
-        self._show_tab("stats")
-
-    def _hist_flash(self, msg, err=False):
-        try:
-            self._hist_status.config(text=msg,
-                                     fg=self.P["red"] if err else self.P["green"])
-        except (tk.TclError, AttributeError):
-            pass
-
-    def _tab_facts(self):
-        f = self._pad()
-        P = self.P
-        self._header(f, self.T("facts_title"))
-        self._lbl(f, self.T("facts_hint"), size=9, muted=True).pack(anchor="w", pady=(0, 8))
-        box = tk.Frame(f, bg=P["bg"]); box.pack(fill="both", expand=True)
-        sb = tk.Scrollbar(box); sb.pack(side="right", fill="y")
-        lb = tk.Listbox(box, yscrollcommand=sb.set, bg=P["dark"], fg=P["text"],
-                        selectbackground=P["dark"], selectforeground=P["text"],
-                        highlightthickness=0, bd=0, font=(themes.FONT, 10),
-                        activestyle="none", height=13)
-        lb.pack(side="left", fill="both", expand=True)
-        sb.config(command=lb.yview)
-        for fact in jokes.facts_for(self.lang):     # лише читання — редагувати нема чого
-            lb.insert("end", "💡  " + fact)
+    # ===== Факти =====
+    def _tab_facts(self, f):
+        c = self._card(f)
+        for i, fact in enumerate(jokes.facts_for(self.lang)):     # лише читання — редагувати нема чого
+            if i:
+                tk.Frame(c, bg=ui.mix(c.cget("bg"), self.P["text"], 0.06), height=1).pack(fill="x", pady=7)
+            row = tk.Frame(c, bg=c.cget("bg")); row.pack(fill="x")
+            self._lbl(row, "💡", size=11).pack(side="left", anchor="n", padx=(0, 10))
+            self._lbl(row, fact, size=10, wrap=self._content_w() - 110).pack(side="left", fill="x")
 
     # ---- свій звук «готово» ----
     def _refresh_sound_lbl(self):
@@ -662,7 +809,7 @@ class SettingsApp:
 
     def _pick_sound(self):
         p = filedialog.askopenfilename(
-            title=self.T("sound_pick"),
+            parent=self.win, title=self.T("sound_pick"),
             filetypes=[("Audio", "*.wav *.mp3 *.m4a *.ogg *.aac *.flac *.wma"), ("*", "*.*")])
         if not p:
             return
@@ -685,6 +832,10 @@ class SettingsApp:
         self._sound_file = ""
         self._autosave()
         self._refresh_sound_lbl()
+        try:   # прослухати системний звук
+            ctypes.windll.winmm.PlaySoundW(ctypes.c_wchar_p("SystemAsterisk"), None, 0x00010003)
+        except Exception:
+            pass
 
     def _play_preview(self, wav):
         try:
@@ -692,24 +843,22 @@ class SettingsApp:
         except Exception:
             pass
 
-    def _tab_setup(self):
-        f = self._pad()
-        self._header(f, self.T("setup_title"))
-        self._lbl(f, self.T("setup_hint"), muted=True).pack(anchor="w", pady=(0, 10))
-        self.setup_status = tk.Frame(f, bg=self.P["bg"]); self.setup_status.pack(anchor="w", fill="x")
-
-        btns = tk.Frame(f, bg=self.P["bg"]); btns.pack(anchor="w", pady=(12, 6))
+    # ===== Встановлення =====
+    def _tab_setup(self, f):
+        c = self._card(f, self.T("st_components"))
+        self.setup_status = tk.Frame(c, bg=c.cget("bg")); self.setup_status.pack(anchor="w", fill="x")
+        btns = tk.Frame(c, bg=c.cget("bg")); btns.pack(anchor="w", pady=(14, 6))
         self.setup_install_btn = self._btn(btns, self.T("setup_install"), self._setup_install)
         self.setup_install_btn.pack(side="left")
         self._btn(btns, self.T("setup_recheck"), self._setup_render, primary=False).pack(side="left", padx=8)
+        self.setup_msg = self._lbl(c, "", size=10, bold=True); self.setup_msg.pack(anchor="w", pady=(4, 2))
+        self._lbl(c, self.T("setup_manual"), size=9, muted=True).pack(anchor="w")
 
-        self.setup_msg = self._lbl(f, "", size=11, bold=True); self.setup_msg.pack(anchor="w", pady=(2, 4))
-        self._lbl(f, self.T("setup_manual"), size=9, muted=True).pack(anchor="w")
-
-        self.setup_log = tk.Text(f, height=7, bg=self.P["dark"], fg=self.P["muted"],
+        c = self._card(f, self.T("st_log"))
+        self.setup_log = tk.Text(c, height=7, bg=self.P["dark"], fg=self.P["muted"],
                                  font=("Consolas", 9), relief="flat", bd=0, wrap="word",
-                                 insertbackground=self.P["text"])
-        self.setup_log.pack(anchor="w", fill="both", expand=True, pady=(10, 0))
+                                 insertbackground=self.P["text"], padx=10, pady=8)
+        self.setup_log.pack(fill="x")
         self.setup_log.configure(state="disabled")
         self._setup_render()
 
@@ -718,18 +867,22 @@ class SettingsApp:
             for w in self.setup_status.winfo_children():
                 w.destroy()
             st = deps.check(refresh=True)
+            bg = self.setup_status.cget("bg")
             for name, ok in st.items():
-                row = tk.Frame(self.setup_status, bg=self.P["bg"]); row.pack(anchor="w", pady=2)
-                tk.Label(row, text="✓" if ok else "✗", bg=self.P["bg"],
-                         fg=self.P["green"] if ok else self.P["red"],
-                         font=(themes.FONT, 12, "bold"), width=2).pack(side="left")
+                row = tk.Frame(self.setup_status, bg=bg); row.pack(anchor="w", fill="x", pady=3)
+                col = self.P["green"] if ok else self.P["red"]
+                dot = tk.Canvas(row, width=22, height=22, bg=bg, highlightthickness=0)
+                dot.pack(side="left", padx=(0, 10))
+                dot.create_oval(1, 1, 21, 21, fill=ui.mix(bg, col, 0.25), outline="")
+                dot.create_text(11, 11, text="✓" if ok else "✗", fill=col, font=(F, 9, "bold"))
+                self._lbl(row, name, size=10, bold=True).pack(side="left")
                 tag = self.T("setup_present") if ok else self.T("setup_missing")
-                tk.Label(row, text=f"{name} — {tag}", bg=self.P["bg"], fg=self.P["text"],
-                         font=(themes.FONT, 11)).pack(side="left")
+                self._lbl(row, "  —  " + tag, size=10, muted=True).pack(side="left")
             if all(st.values()):
                 self.setup_msg.config(text=self.T("setup_all_ok"), fg=self.P["green"])
                 self.setup_install_btn.config(state="disabled")
             else:
+                self.setup_msg.config(text="")
                 self.setup_install_btn.config(state="normal")
         except tk.TclError:
             pass
@@ -764,57 +917,49 @@ class SettingsApp:
         except tk.TclError:
             pass
 
-    def _tab_about(self):
-        f = self._pad()
-        self._header(f, self.T("app_title") + f"  v{APP_VERSION}")
-        about = {
-            "uk": "Автостиснення відео, фото та звуку під ліміт Discord.\n"
-                  "Живе у треї (приховані значки). ПКМ по значку — меню або вихід.\n\n"
-                  "Оновлення — лише вручну: кнопка «Перевірити оновлення»\n"
-                  "на вкладці Оновлення. Само нічого не вискакує.",
-            "ru": "Автосжатие видео, фото и звука под лимит Discord.\n"
-                  "Живёт в трее (скрытые значки). ПКМ по значку — меню или выход.\n\n"
-                  "Обновление — только вручную: кнопка «Проверить обновления»\n"
-                  "на вкладке Обновления. Само ничего не выскакивает.",
-            "en": "Auto-compress video, images and audio under the Discord limit.\n"
-                  "Lives in the tray (hidden icons). Right-click — menu or quit.\n\n"
-                  "Updates are manual only: the ‘Check for updates’ button\n"
-                  "on the Updates tab. Nothing pops up on its own.",
-        }[self.lang]
-        tk.Label(f, text=about, bg=self.P["bg"], fg=self.P["text"], font=(themes.FONT, 11),
-                 justify="left", anchor="w").pack(anchor="w")
-        # ---- кнопка донату (завжди видима; підписки/оплати немає — суто підтримка) ----
-        box = tk.Frame(f, bg=self.P["bg"]); box.pack(anchor="w", pady=(16, 0))
-        lab = {"uk": "Подобається програма? Підтримай розробника ❤",
-               "ru": "Нравится программа? Поддержи разработчика ❤",
-               "en": "Enjoying the app? Support the developer ❤"}.get(self.lang)
-        tk.Label(box, text=lab, bg=self.P["bg"], fg=self.P["text"],
-                 font=(themes.FONT, 11, "bold")).pack(anchor="w", pady=(0, 6))
-        t = {"uk": "❤ Підтримати (донат)", "ru": "❤ Поддержать (донат)",
-             "en": "❤ Support (donate)"}.get(self.lang)
-        self._btn(box, t, self._open_donate).pack(anchor="w")
+    # ===== Про програму =====
+    def _tab_about(self, f):
+        P = self.P
+        hero = tk.Canvas(f, height=150, bg=P["bg"], highlightthickness=0)
+        hero.pack(fill="x", pady=(0, 14))
+
+        def draw(_e=None):
+            hero.delete("all")
+            w = max(200, hero.winfo_width())
+            ui.round_rect(hero, 0, 0, w, 150, 18, fill=P["card"],
+                          outline=ui.mix(P["card"], P["text"], 0.07))
+            for i in range(9, 0, -1):
+                t = i / 9.0
+                r = 46 + 40 * t
+                hero.create_oval(70 - r, 75 - r * 0.8, 70 + r, 75 + r * 0.8, outline="",
+                                 fill=ui.mix(P["card"], ui.mix(P["accent"], ui.accent2(P), 0.5),
+                                             0.22 * (1 - t) ** 1.5))
+            ui.logo(hero, 34, 39, 72, P)
+            hero.create_text(130, 52, anchor="w", text="Discord Auto-Compress", fill=P["text"],
+                             font=(F, 17, "bold"))
+            hero.create_text(130, 80, anchor="w", text=self.T("st_tagline"), fill=P["muted"],
+                             font=(F, 10), width=w - 150)
+            hero.create_text(130, 110, anchor="w", text=f"v{APP_VERSION}  ·  MIT  ·  Python + ffmpeg",
+                             fill=P["muted"], font=(F, 9))
+        hero.bind("<Configure>", draw)
+
+        c = self._card(f, self.T("st_how"))
+        self._lbl(c, self.T("about_body"), size=10, wrap=self._content_w() - 60).pack(anchor="w")
+
+        c = self._card(f, self.T("st_donate_title"), self.T("st_donate_d"))
+        row = tk.Frame(c, bg=c.cget("bg")); row.pack(anchor="w")
+        self._btn(row, self.T("st_donate_btn"), self._open_donate).pack(side="left")
+        self._btn(row, "GitHub  ↗", lambda: monetize.open_url(REPO_URL), primary=False)\
+            .pack(side="left", padx=8)
 
     def _open_donate(self):
         if monetize.has_donate():
             monetize.open_url(monetize.DONATE_URL)
-            return
-        try:
-            import tkinter.messagebox as mb
-            msg = {"uk": "Посилання донату ще не задане.\n\nЗапусти «Set donate link.bat» "
-                         "і встав своє посилання (напр. з Ko-fi).",
-                   "ru": "Ссылка доната ещё не задана.\n\nЗапусти «Set donate link.bat» "
-                         "и вставь свою ссылку (напр. с Ko-fi).",
-                   "en": "Donate link is not set yet.\n\nRun 'Set donate link.bat' and paste "
-                         "your link (e.g. from Ko-fi)."}.get(self.lang)
-            mb.showinfo("Donate", msg)
-        except Exception:
-            pass
 
     # ---------- збереження ----------
     def _collect(self):
-        # КОЖНЕ поле читаємо ОКРЕМО: якщо якесь tk-поле у поганому стані (напр. порожній
-        # audio_kbps -> TclError), інші (зокрема sound_file) ВСЕ ОДНО збережуться.
-        # Раніше один спільний try обнуляв усе -> свій звук не зберігався (грав лише прев'ю).
+        # КОЖНЕ поле читаємо ОКРЕМО: якщо якесь tk-поле у поганому стані,
+        # інші (зокрема sound_file) ВСЕ ОДНО збережуться.
         c = dict(self.cfg)
 
         def g(key, var):
@@ -829,6 +974,10 @@ class SettingsApp:
         g("compress_video", self.v_cv); g("compress_images", self.v_ci)
         g("compress_audio", self.v_ca); g("keep_local", self.v_keep)
         g("offer_shrink", self.v_shrink); g("sound_done", self.v_sound)
+        try:   # аудіо-бітрейт завжди в розумних межах (раніше можна було ввести будь-що)
+            c["audio_kbps"] = max(0, min(320, int(c.get("audio_kbps", 128))))
+        except (TypeError, ValueError):
+            c["audio_kbps"] = 128
         try:
             c["sound_file"] = self._sound_file
         except AttributeError:
@@ -838,7 +987,7 @@ class SettingsApp:
         return c
 
     def _save(self):
-        # усе й так зберігається саме; кнопка лишається як явне підтвердження
+        # усе й так зберігається саме; лишено для сумісності
         self._autosave()
         self._apply_live()
 

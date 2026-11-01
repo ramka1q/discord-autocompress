@@ -15,6 +15,55 @@ import dc_core
 
 NO_WINDOW = dc_core.NO_WINDOW
 
+# рядки результатів трьома мовами (раніше були лише українською)
+TXT = {
+    "uk": dict(ff_ok="ffmpeg і ffprobe знайдено",
+               ff_no="ffmpeg НЕ знайдено — встанови: winget install Gyan.FFmpeg",
+               fp_ok="ffplay є (вбудований плеєр працюватиме)",
+               fp_no="ffplay відсутній — плеєр у редакторі не працюватиме",
+               cpu_ok="CPU ядер: {n} — вистачає для швидкого кодування",
+               cpu_low="CPU ядер: {n} — кодування буде повільнішим",
+               bench_skip="Бенчмарк пропущено (немає ffmpeg)",
+               need_ff="Потрібен ffmpeg — програма не працюватиме без нього.",
+               bench_fail="Бенчмарк кодування не вдався",
+               fps_great="Швидкість кодування: {f} к/с — відмінно (швидше за реалтайм)",
+               fps_good="Швидкість кодування: {f} к/с — добре",
+               fps_slow="Швидкість кодування: {f} к/с — повільно, стиснення довге",
+               v_ok="Все оптимально ✓ — програма працюватиме швидко.",
+               v_mid="Працездатно, але є що покращити (див. ⚠ вище).",
+               v_bad="Є проблеми — виправ пункти з ✗."),
+    "ru": dict(ff_ok="ffmpeg и ffprobe найдены",
+               ff_no="ffmpeg НЕ найден — установи: winget install Gyan.FFmpeg",
+               fp_ok="ffplay есть (встроенный плеер будет работать)",
+               fp_no="ffplay отсутствует — плеер в редакторе не будет работать",
+               cpu_ok="Ядер CPU: {n} — хватает для быстрого кодирования",
+               cpu_low="Ядер CPU: {n} — кодирование будет медленнее",
+               bench_skip="Бенчмарк пропущен (нет ffmpeg)",
+               need_ff="Нужен ffmpeg — без него программа не работает.",
+               bench_fail="Бенчмарк кодирования не удался",
+               fps_great="Скорость кодирования: {f} к/с — отлично (быстрее реалтайма)",
+               fps_good="Скорость кодирования: {f} к/с — хорошо",
+               fps_slow="Скорость кодирования: {f} к/с — медленно, сжатие долгое",
+               v_ok="Всё оптимально ✓ — программа будет работать быстро.",
+               v_mid="Работает, но есть что улучшить (см. ⚠ выше).",
+               v_bad="Есть проблемы — исправь пункты с ✗."),
+    "en": dict(ff_ok="ffmpeg and ffprobe found",
+               ff_no="ffmpeg NOT found — install it: winget install Gyan.FFmpeg",
+               fp_ok="ffplay found (the built-in player will work)",
+               fp_no="ffplay missing — the editor's player won't work",
+               cpu_ok="CPU cores: {n} — enough for fast encoding",
+               cpu_low="CPU cores: {n} — encoding will be slower",
+               bench_skip="Benchmark skipped (no ffmpeg)",
+               need_ff="ffmpeg is required — the app can't work without it.",
+               bench_fail="Encoding benchmark failed",
+               fps_great="Encoding speed: {f} fps — excellent (faster than real time)",
+               fps_good="Encoding speed: {f} fps — good",
+               fps_slow="Encoding speed: {f} fps — slow, compression will take a while",
+               v_ok="Everything is optimal ✓ — the app will be fast.",
+               v_mid="Works, but could be better (see ⚠ above).",
+               v_bad="There are problems — fix the ✗ items."),
+}
+
 
 def _cpu_count():
     try:
@@ -23,8 +72,9 @@ def _cpu_count():
         return 1
 
 
-def run(progress_cb=None):
+def run(progress_cb=None, lang="uk"):
     """Повертає dict: {'lines': [(icon,text)...], 'verdict': str, 'ok': bool, 'score': int}."""
+    T = TXT.get(lang, TXT["en"])
     lines = []
     score = 0
     max_score = 4
@@ -37,37 +87,37 @@ def run(progress_cb=None):
     p(10)
     have_ff = bool(shutil.which("ffmpeg") and shutil.which("ffprobe"))
     if have_ff:
-        lines.append(("✓", "ffmpeg і ffprobe знайдено"))
+        lines.append(("✓", T["ff_ok"]))
         score += 1
     else:
-        lines.append(("✗", "ffmpeg НЕ знайдено — встанови: winget install Gyan.FFmpeg"))
+        lines.append(("✗", T["ff_no"]))
 
     # 2) ffplay (для вбудованого плеєра/обрізки)
     p(20)
     if shutil.which("ffplay"):
-        lines.append(("✓", "ffplay є (вбудований плеєр працюватиме)"))
+        lines.append(("✓", T["fp_ok"]))
         score += 1
     else:
-        lines.append(("⚠", "ffplay відсутній — плеєр обрізки не працюватиме"))
+        lines.append(("⚠", T["fp_no"]))
 
     # 3) ядра CPU
     p(30)
     cores = _cpu_count()
     if cores >= 4:
-        lines.append(("✓", f"CPU ядер: {cores} — вистачає для швидкого кодування"))
+        lines.append(("✓", T["cpu_ok"].format(n=cores)))
         score += 1
     else:
-        lines.append(("⚠", f"CPU ядер: {cores} — кодування буде повільнішим"))
+        lines.append(("⚠", T["cpu_low"].format(n=cores)))
 
     # 4) реальний бенчмарк кодування
     if not have_ff:
-        lines.append(("✗", "Бенчмарк пропущено (немає ffmpeg)"))
+        lines.append(("✗", T["bench_skip"]))
         p(100)
-        verdict = "Потрібен ffmpeg — програма не працюватиме без нього."
+        verdict = T["need_ff"]
         return {"lines": lines, "verdict": verdict, "ok": False, "score": score, "max": max_score}
 
     p(40)
-    tmp = os.path.join(tempfile.gettempdir(), "dac_bench.mp4")
+    tmp = os.path.join(tempfile.gettempdir(), "dac_bench_%d.mp4" % os.getpid())
     fps = None
     try:
         # 5 секунд 720p тестового відео -> кодуємо x264 medium, міряємо швидкість
@@ -89,25 +139,25 @@ def run(progress_cb=None):
             pass
 
     if fps is None:
-        lines.append(("✗", "Бенчмарк кодування не вдався"))
+        lines.append(("✗", T["bench_fail"]))
     elif fps >= 120:
-        lines.append(("✓", f"Швидкість кодування: {fps:.0f} к/с — відмінно (швидше за реалтайм)"))
+        lines.append(("✓", T["fps_great"].format(f=f"{fps:.0f}")))
         score += 1
     elif fps >= 60:
-        lines.append(("✓", f"Швидкість кодування: {fps:.0f} к/с — добре"))
+        lines.append(("✓", T["fps_good"].format(f=f"{fps:.0f}")))
         score += 1
     else:
-        lines.append(("⚠", f"Швидкість кодування: {fps:.0f} к/с — повільно, стиснення довге"))
+        lines.append(("⚠", T["fps_slow"].format(f=f"{fps:.0f}")))
 
     p(100)
     if score >= max_score:
-        verdict = "Все оптимально ✓ — програма працюватиме швидко."
+        verdict = T["v_ok"]
         ok = True
     elif score >= 2:
-        verdict = "Працездатно, але є що покращити (див. ⚠ вище)."
+        verdict = T["v_mid"]
         ok = True
     else:
-        verdict = "Є проблеми — виправ пункти з ✗."
+        verdict = T["v_bad"]
         ok = False
     return {"lines": lines, "verdict": verdict, "ok": ok, "score": score, "max": max_score}
 

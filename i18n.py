@@ -219,6 +219,199 @@ STR = {
     "ov_too_big":       {"uk": "Відео завелике для {mb} МБ ({mins} хв).\nПідвищ ліміт у Налаштуваннях (Nitro)\nабо спершу обріж відео коротше.",
                          "ru": "Видео слишком большое для {mb} МБ ({mins} мин).\nПовысь лимит в Настройках (Nitro)\nили сначала обрежь видео короче.",
                          "en": "Video too big for {mb} MB ({mins} min).\nRaise the limit in Settings (Nitro)\nor trim the video shorter first."},
+    "ov_eta":           {"uk": "≈ {t} лишилось", "ru": "≈ {t} осталось", "en": "≈ {t} left"},
+    "ov_parts_prog":    {"uk": "готово {i} з {n} частин (паралельно)", "ru": "готово {i} из {n} частей (параллельно)",
+                         "en": "{i} of {n} parts done (in parallel)"},
+    "ov_editor_fail":   {"uk": "Редактор недоступний:", "ru": "Редактор недоступен:", "en": "Editor unavailable:"},
+    "ov_back":          {"uk": "Назад", "ru": "Назад", "en": "Back"},
+    "ov_cancelling":    {"uk": "Скасовую…", "ru": "Отменяю…", "en": "Cancelling…"},
+
+    # ---- повідомлення ядра стиснення (dc_core / media) ----
+    "core_cancel":      {"uk": "Скасовано.", "ru": "Отменено.", "en": "Cancelled."},
+    "core_lowbr":       {"uk": "Бітрейт занизький для цього розміру — збільш ліміт або зменш роздільність.",
+                         "ru": "Битрейт слишком низкий для этого размера — увеличь лимит или уменьши разрешение.",
+                         "en": "Bitrate too low for this size — raise the limit or lower the resolution."},
+    "core_pass1":       {"uk": "Прохід 1 завершився з помилкою.", "ru": "Проход 1 завершился с ошибкой.",
+                         "en": "Encoding pass 1 failed."},
+    "core_pass2":       {"uk": "Прохід 2 завершився з помилкою.", "ru": "Проход 2 завершился с ошибкой.",
+                         "en": "Encoding pass 2 failed."},
+    "core_noseg":       {"uk": "Немає фрагментів для збереження.", "ru": "Нет фрагментов для сохранения.",
+                         "en": "Nothing to save — no clips left."},
+    "core_toolong":     {"uk": "Загалом задовго для цього ліміту — прибери фрагмент або підвищ ліміт.",
+                         "ru": "Слишком длинно для этого лимита — убери фрагмент или повысь лимит.",
+                         "en": "Too long for this limit — remove a clip or raise the limit."},
+    "core_cut":         {"uk": "Не вдалося вирізати фрагмент.", "ru": "Не удалось вырезать фрагмент.",
+                         "en": "Couldn't cut the clip."},
+    "core_join":        {"uk": "Не вдалося склеїти фрагменти.", "ru": "Не удалось склеить фрагменты.",
+                         "en": "Couldn't join the clips."},
+    "core_gif_long":    {"uk": "Для GIF задовгий фрагмент (макс ~30 с) — обріж коротше.",
+                         "ru": "Для GIF слишком длинный фрагмент (макс ~30 с) — обрежь короче.",
+                         "en": "Too long for a GIF (max ~30 s) — trim it shorter."},
+    "core_gif_fail":    {"uk": "Не вдалося зробити GIF.", "ru": "Не удалось сделать GIF.", "en": "Couldn't make the GIF."},
+    "core_nodur":       {"uk": "Не вдалося визначити тривалість.", "ru": "Не удалось определить длительность.",
+                         "en": "Couldn't read the duration."},
+    "core_part":        {"uk": "Частина {n}: {msg}", "ru": "Часть {n}: {msg}", "en": "Part {n}: {msg}"},
+    "core_img_fail":    {"uk": "Не вдалося стиснути фото.", "ru": "Не удалось сжать фото.", "en": "Couldn't compress the image."},
+    "core_audio_fail":  {"uk": "ffmpeg не зміг перекодувати звук.", "ru": "ffmpeg не смог перекодировать звук.",
+                         "en": "ffmpeg couldn't re-encode the audio."},
+
+    # ---- меню (новий дизайн) ----
+    "st_status_on":     {"uk": "Працює у фоні", "ru": "Работает в фоне", "en": "Running in background"},
+    "st_status_hint":   {"uk": "Ctrl+V у Discord — і все", "ru": "Ctrl+V в Discord — и всё", "en": "Just press Ctrl+V in Discord"},
+    "st_general_sub":   {"uk": "Головні налаштування стиснення", "ru": "Главные настройки сжатия", "en": "Main compression settings"},
+    "st_media_sub":     {"uk": "Що стискати і що робити з результатом", "ru": "Что сжимать и что делать с результатом",
+                         "en": "What gets compressed and what happens after"},
+    "st_stats_sub":     {"uk": "Скільки місця вже зекономлено", "ru": "Сколько места уже сэкономлено", "en": "How much space you've saved"},
+    "st_appearance_sub": {"uk": "Тема і мова", "ru": "Тема и язык", "en": "Theme and language"},
+    "st_ready":         {"uk": "Готово до роботи 🚀", "ru": "Готово к работе 🚀", "en": "Ready to go 🚀"},
+    "st_ready_body":    {"uk": "Скопіюй відео, фото чи звук і натисни Ctrl+V у Discord — усе, що більше за {mb} МБ, стиснеться саме.",
+                         "ru": "Скопируй видео, фото или звук и нажми Ctrl+V в Discord — всё, что больше {mb} МБ, сожмётся само.",
+                         "en": "Copy a video, image or audio file and press Ctrl+V in Discord — anything over {mb} MB is shrunk automatically."},
+    "st_ready_stats":   {"uk": "📦 {files} файлів  ·  💾 {saved} зекономлено", "ru": "📦 {files} файлов  ·  💾 {saved} сэкономлено",
+                         "en": "📦 {files} files  ·  💾 {saved} saved"},
+    "st_limit_sub":     {"uk": "Ліміт завантаження твого акаунта Discord", "ru": "Лимит загрузки твоего аккаунта Discord",
+                         "en": "The upload limit of your Discord account"},
+    "lim_free":         {"uk": "Безкоштовно", "ru": "Бесплатно", "en": "Free"},
+    "lim_basic":        {"uk": "Nitro Basic", "ru": "Nitro Basic", "en": "Nitro Basic"},
+    "lim_nitro":        {"uk": "Nitro", "ru": "Nitro", "en": "Nitro"},
+    "st_behavior":      {"uk": "Поведінка", "ru": "Поведение", "en": "Behaviour"},
+    "st_autoscale_d":   {"uk": "За потреби зменшує роздільність, щоб картинка лишалась чіткою",
+                         "ru": "При необходимости уменьшает разрешение, чтобы картинка оставалась чёткой",
+                         "en": "Lowers the resolution when needed so the picture stays sharp"},
+    "st_block_d":       {"uk": "Discord не встигне показати помилку «файл завеликий»",
+                         "ru": "Discord не успеет показать ошибку «файл слишком большой»",
+                         "en": "Discord never gets to show its 'file too large' error"},
+    "st_paste_d":       {"uk": "Стиснутий файл сам з'явиться в чаті", "ru": "Сжатый файл сам появится в чате",
+                         "en": "The compressed file appears in the chat by itself"},
+    "st_audio":         {"uk": "Якість звуку у відео", "ru": "Качество звука в видео", "en": "Audio quality in videos"},
+    "st_audio_d":       {"uk": "Більше — кращий звук, але трохи менше місця на картинку",
+                         "ru": "Больше — лучше звук, но чуть меньше места под картинку",
+                         "en": "Higher = better sound, slightly less room for the picture"},
+    "audio_off":        {"uk": "без звуку", "ru": "без звука", "en": "no audio"},
+    "st_video_d":       {"uk": "Двопрохідний x264 — найкраща якість під ліміт", "ru": "Двухпроходный x264 — лучшее качество под лимит",
+                         "en": "Two-pass x264 — the best quality that fits"},
+    "st_image_d":       {"uk": "У WebP — анімовані GIF лишаються анімованими", "ru": "В WebP — анимированные GIF остаются анимированными",
+                         "en": "To WebP — animated GIFs stay animated"},
+    "st_audio2_d":      {"uk": "У MP3 з підбором бітрейту", "ru": "В MP3 с подбором битрейта", "en": "To MP3 with a fitted bitrate"},
+    "st_extras":        {"uk": "Додатково", "ru": "Дополнительно", "en": "Extras"},
+    "st_shrink_d":      {"uk": "Для відео, що вже влазить у ліміт, але могло б бути меншим",
+                         "ru": "Для видео, которое уже влезает в лимит, но могло бы быть меньше",
+                         "en": "For videos that already fit but could be smaller"},
+    "st_keep_d":        {"uk": "Копія з’являється поруч з оригіналом (_discord_…)", "ru": "Копия появляется рядом с оригиналом (_discord_…)",
+                         "en": "The copy is saved next to the original (_discord_…)"},
+    "st_by_type":       {"uk": "За типом", "ru": "По типу", "en": "By type"},
+    "stats_pick":       {"uk": "Спершу обери рядок у списку", "ru": "Сначала выбери строку в списке", "en": "Pick a row in the list first"},
+    "upd_idle":         {"uk": "Натисни, щоб перевірити нову версію", "ru": "Нажми, чтобы проверить новую версию",
+                         "en": "Press to check for a new version"},
+    "st_components":    {"uk": "Компоненти", "ru": "Компоненты", "en": "Components"},
+    "st_log":           {"uk": "Журнал встановлення", "ru": "Журнал установки", "en": "Install log"},
+    "st_tagline":       {"uk": "Вставляй будь-що в Discord — програма сама вмістить це в ліміт.",
+                         "ru": "Вставляй что угодно в Discord — программа сама уложит это в лимит.",
+                         "en": "Paste anything into Discord — it gets squeezed under the limit for you."},
+    "st_how":           {"uk": "Як це працює", "ru": "Как это работает", "en": "How it works"},
+    "about_body":       {"uk": "Програма живе у треї (приховані значки біля годинника). Коли ти вставляєш у Discord завеликий файл, "
+                               "вона перехоплює Ctrl+V, стискає файл і вставляє маленьку версію. ПКМ по значку — меню або вихід.\n\n"
+                               "Оновлення — кнопкою на вкладці «Оновлення». Само нічого не вискакує.",
+                         "ru": "Программа живёт в трее (скрытые значки возле часов). Когда ты вставляешь в Discord слишком большой файл, "
+                               "она перехватывает Ctrl+V, сжимает файл и вставляет маленькую версию. ПКМ по значку — меню или выход.\n\n"
+                               "Обновление — кнопкой на вкладке «Обновления». Само ничего не выскакивает.",
+                         "en": "The app lives in the tray (hidden icons next to the clock). When you paste a file that's too big into Discord, "
+                               "it catches Ctrl+V, compresses the file and pastes the small version. Right-click the icon for the menu or to quit.\n\n"
+                               "Updates: the button on the Updates tab. Nothing pops up on its own."},
+    "st_donate_title":  {"uk": "Подобається програма?", "ru": "Нравится программа?", "en": "Enjoying the app?"},
+    "st_donate_d":      {"uk": "Вона безкоштовна і з відкритим кодом. Донат — просто подяка, нічого не блокується.",
+                         "ru": "Она бесплатная и с открытым кодом. Донат — просто благодарность, ничего не блокируется.",
+                         "en": "It's free and open source. A tip is just a thank-you — nothing is locked."},
+    "st_donate_btn":    {"uk": "❤  Підтримати", "ru": "❤  Поддержать", "en": "❤  Support"},
+
+    # ---- редактор ----
+    "ed_title":         {"uk": "✂ Редактор відео — Discord Auto-Compress", "ru": "✂ Редактор видео — Discord Auto-Compress",
+                         "en": "✂ Video editor — Discord Auto-Compress"},
+    "ed_play":          {"uk": "▶ Грати", "ru": "▶ Играть", "en": "▶ Play"},
+    "ed_stop":          {"uk": "⏸ Стоп", "ru": "⏸ Стоп", "en": "⏸ Stop"},
+    "ed_cut":           {"uk": "✂ Розрізати", "ru": "✂ Разрезать", "en": "✂ Split"},
+    "ed_add":           {"uk": "➕ Додати", "ru": "➕ Добавить", "en": "➕ Add"},
+    "ed_move_l":        {"uk": "◀ Пересунути", "ru": "◀ Сдвинуть", "en": "◀ Move"},
+    "ed_move_r":        {"uk": "Пересунути ▶", "ru": "Сдвинуть ▶", "en": "Move ▶"},
+    "ed_remove":        {"uk": "🗑 Прибрати", "ru": "🗑 Убрать", "en": "🗑 Remove"},
+    "ed_export":        {"uk": "Зберегти і вставити  ▶", "ru": "Сохранить и вставить  ▶", "en": "Save & paste  ▶"},
+    "ed_help_title":    {"uk": "Як користуватись", "ru": "Как пользоваться", "en": "How to use"},
+    "ed_tips":          {"uk": "🎬  Клік по кліпу — вибрати · білі ручки з боків — обрізати\n"
+                               "✂  «Розрізати» ділить кліп по плейхеду\n"
+                               "🖱  Права кнопка миші по кліпу / накладці / звуку — всі дії\n"
+                               "🔍  Клік по відео — масштаб і позиція (кут — розмір, середина — рухати,\n"
+                               "      подвійний клік — скинути)\n"
+                               "➕  Кнопка «Додати» або перетягни файли у вікно — відео / картинки / звуки\n"
+                               "🕳  Порожні місця лишаються на доріжці й зникають при збереженні\n"
+                               "⌨  ◀ ▶ — точно по кадру (Shift = 1с) · Ctrl+Z / Ctrl+Y — скасувати / повторити\n"
+                               "🖲  Ctrl+колесо — зум доріжки · колесо — прокрутка · Delete — прибрати кліп",
+                         "ru": "🎬  Клик по клипу — выбрать · белые ручки по бокам — обрезать\n"
+                               "✂  «Разрезать» делит клип по плейхеду\n"
+                               "🖱  Правая кнопка мыши по клипу / наложению / звуку — все действия\n"
+                               "🔍  Клик по видео — масштаб и позиция (угол — размер, середина — двигать,\n"
+                               "      двойной клик — сбросить)\n"
+                               "➕  Кнопка «Добавить» или перетащи файлы в окно — видео / картинки / звуки\n"
+                               "🕳  Пустые места остаются на дорожке и исчезают при сохранении\n"
+                               "⌨  ◀ ▶ — точно по кадру (Shift = 1с) · Ctrl+Z / Ctrl+Y — отменить / повторить\n"
+                               "🖲  Ctrl+колесо — зум дорожки · колесо — прокрутка · Delete — убрать клип",
+                         "en": "🎬  Click a clip to select it · drag the white side handles to trim\n"
+                               "✂  'Split' cuts the clip at the playhead\n"
+                               "🖱  Right-click a clip / overlay / sound for every action\n"
+                               "🔍  Click the video for scale & position (corner = size, middle = move,\n"
+                               "      double-click = reset)\n"
+                               "➕  'Add' button or drag files into the window — videos / images / sounds\n"
+                               "🕳  Empty gaps stay on the track and are removed when saving\n"
+                               "⌨  ◀ ▶ — frame-accurate (Shift = 1 s) · Ctrl+Z / Ctrl+Y — undo / redo\n"
+                               "🖲  Ctrl+wheel — zoom the track · wheel — scroll · Delete — remove clip"},
+    "ed_got_it":        {"uk": "Зрозуміло", "ru": "Понятно", "en": "Got it"},
+    "ed_add_title":     {"uk": "Додати відео / картинки / звуки", "ru": "Добавить видео / картинки / звуки",
+                         "en": "Add videos / images / sounds"},
+    "ed_media":         {"uk": "Медіа", "ru": "Медиа", "en": "Media"},
+    "ed_all_files":     {"uk": "Всі файли", "ru": "Все файлы", "en": "All files"},
+    "ed_unsupported":   {"uk": "Цей формат не підтримується", "ru": "Этот формат не поддерживается", "en": "This format isn't supported"},
+    "ed_tf_ovl":        {"uk": " (накладка)", "ru": " (наложение)", "en": " (overlay)"},
+    "ed_tf_hint":       {"uk": "тягни кут — масштаб · середину — позиція{what} · подвійний клік — скинути",
+                         "ru": "тяни угол — масштаб · середину — позиция{what} · двойной клик — сбросить",
+                         "en": "drag a corner — scale · the middle — position{what} · double-click — reset"},
+    "ed_no_ffplay":     {"uk": "ffplay не знайдено — онови ffmpeg", "ru": "ffplay не найден — обнови ffmpeg",
+                         "en": "ffplay not found — update ffmpeg"},
+    "ed_empty":         {"uk": "порожньо", "ru": "пусто", "en": "empty"},
+    "ed_snd_hint":      {"uk": "🎵 сюди можна додати звук — ➕ або перетягни файл", "ru": "🎵 сюда можно добавить звук — ➕ или перетащи файл",
+                         "en": "🎵 add a sound here — ➕ or drag a file in"},
+    "ed_ovl_hint":      {"uk": "накладки поверх відео: ПКМ по кліпу → «🎭 Зробити накладкою»",
+                         "ru": "наложения поверх видео: ПКМ по клипу → «🎭 Сделать наложением»",
+                         "en": "overlays on top of the video: right-click a clip → '🎭 Make overlay'"},
+    "ed_unmute":        {"uk": "🔊  Увімкнути звук", "ru": "🔊  Включить звук", "en": "🔊  Unmute"},
+    "ed_mute":          {"uk": "🔇  Вимкнути звук", "ru": "🔇  Выключить звук", "en": "🔇  Mute"},
+    "ed_fullscreen":    {"uk": "🔍  На весь екран (скинути масштаб)", "ru": "🔍  На весь экран (сбросить масштаб)",
+                         "en": "🔍  Full frame (reset scale)"},
+    "ed_to_track":      {"uk": "⬇  Повернути на доріжку", "ru": "⬇  Вернуть на дорожку", "en": "⬇  Back to the track"},
+    "ed_del_ovl":       {"uk": "🗑  Видалити накладку", "ru": "🗑  Удалить наложение", "en": "🗑  Delete overlay"},
+    "ed_cut_here":      {"uk": "✂  Розрізати тут", "ru": "✂  Разрезать здесь", "en": "✂  Split here"},
+    "ed_dup":           {"uk": "📄  Дублювати кліп", "ru": "📄  Дублировать клип", "en": "📄  Duplicate clip"},
+    "ed_make_ovl":      {"uk": "🎭  Зробити накладкою (поверх відео)", "ru": "🎭  Сделать наложением (поверх видео)",
+                         "en": "🎭  Make overlay (on top of video)"},
+    "ed_speed":         {"uk": "⚡  Швидкість ({s}×)", "ru": "⚡  Скорость ({s}×)", "en": "⚡  Speed ({s}×)"},
+    "ed_reset_tf":      {"uk": "🔍  Скинути масштаб/позицію", "ru": "🔍  Сбросить масштаб/позицию", "en": "🔍  Reset scale/position"},
+    "ed_gap_rm":        {"uk": "🧹  Прибрати порожнє місце перед кліпом", "ru": "🧹  Убрать пустое место перед клипом",
+                         "en": "🧹  Remove the gap before this clip"},
+    "ed_gaps_rm":       {"uk": "🧹  Прибрати всі порожні місця", "ru": "🧹  Убрать все пустые места", "en": "🧹  Remove all gaps"},
+    "ed_move_left":     {"uk": "◀  Пересунути лівіше", "ru": "◀  Сдвинуть левее", "en": "◀  Move left"},
+    "ed_move_right":    {"uk": "▶  Пересунути правіше", "ru": "▶  Сдвинуть правее", "en": "▶  Move right"},
+    "ed_rm_clip":       {"uk": "🗑  Прибрати кліп", "ru": "🗑  Убрать клип", "en": "🗑  Remove clip"},
+    "ed_listen":        {"uk": "▶  Прослухати", "ru": "▶  Прослушать", "en": "▶  Listen"},
+    "ed_volume":        {"uk": "🔉  Гучність ({v}%)", "ru": "🔉  Громкость ({v}%)", "en": "🔉  Volume ({v}%)"},
+    "ed_del_snd":       {"uk": "🗑  Видалити звук", "ru": "🗑  Удалить звук", "en": "🗑  Delete sound"},
+    "ed_q_good":        {"uk": "✓ Гарна якість", "ru": "✓ Хорошее качество", "en": "✓ Great quality"},
+    "ed_q_ok":          {"uk": "⚠ Нормальна якість", "ru": "⚠ Нормальное качество", "en": "⚠ OK quality"},
+    "ed_q_weak":        {"uk": "⚠ Слабка якість", "ru": "⚠ Слабое качество", "en": "⚠ Low quality"},
+    "ed_q_long":        {"uk": "✗ Задовгий фрагмент", "ru": "✗ Слишком длинный фрагмент", "en": "✗ Too long"},
+    "ed_montage_fail":  {"uk": "Не вдалося зібрати монтаж.", "ru": "Не удалось собрать монтаж.", "en": "Couldn't render the edit."},
+    "ed_saving":        {"uk": "Зберігаю… {p}%", "ru": "Сохраняю… {p}%", "en": "Saving… {p}%"},
+    "ed_gif_prog":      {"uk": "Роблю GIF… {p}%", "ru": "Делаю GIF… {p}%", "en": "Making GIF… {p}%"},
+    "ed_save_fail":     {"uk": "Не вдалося зберегти", "ru": "Не удалось сохранить", "en": "Couldn't save"},
+    "ed_pasted":        {"uk": " · вставлено в Discord", "ru": " · вставлено в Discord", "en": " · pasted into Discord"},
+    "ed_done":          {"uk": "Готово ✓ {mb} {u}{pasted}", "ru": "Готово ✓ {mb} {u}{pasted}", "en": "Done ✓ {mb} {u}{pasted}"},
 }
 
 

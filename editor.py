@@ -24,11 +24,15 @@ import time
 import tkinter as tk
 from tkinter import filedialog
 
+import themes
+
 import appicon
 import dc_core
 import discord_overlay as host
+import i18n
 import jokes
 import media
+import ui
 
 # ---- WinAPI для вбудовування вікна ffplay у наш відео-екран (SetParent) ----
 _u32 = ctypes.windll.user32
@@ -84,6 +88,26 @@ TLH = 66                     # висота доріжки монтажу
 THUMB_W = 40                 # ширина кадру кіно-стрічки
 IMG_DUR = 4.0                # скільки секунд показувати додану картинку (тягнеться ручками)
 IMG_MAX = 3600.0             # стеля розтягування картинки
+
+
+def E(key, **kw):
+    """Переклад рядка редактора поточною мовою програми (раніше редактор був лише українською)."""
+    return i18n.tr(host.LANG, key, **kw)
+
+
+def _sync_theme():
+    """Кольори модуля = ПОТОЧНА тема оверлея. Раніше бралися один раз при імпорті,
+    тож після зміни теми в меню редактор лишався у старих кольорах."""
+    global C_BG, C_BG2, C_DARK, C_BLURPLE, C_BLURPLE_H, C_TEXT, C_MUTED, C_GREEN, C_RED
+    global C_CLIP_SEL, C_ACC2
+    C_BG, C_BG2, C_DARK = host.C_BG, host.C_BG2, host.C_DARK
+    C_BLURPLE, C_BLURPLE_H = host.C_BLURPLE, host.C_BLURPLE_H
+    C_TEXT, C_MUTED, C_GREEN, C_RED = host.C_TEXT, host.C_MUTED, host.C_GREEN, host.C_RED
+    C_CLIP_SEL = host.C_BLURPLE
+    C_ACC2 = ui.accent2(themes.palette(host.THEME))
+
+
+C_ACC2 = C_BLURPLE
 
 
 def fmt(t):
@@ -144,8 +168,14 @@ class PillBtn(tk.Canvas):
         else:
             fill, fg = self._fill, self._fg
         r = self._h // 2 - 1
-        self.create_polygon(host._rr_pts(1, 1, w - 1, self._h - 1, r), smooth=True,
-                            fill=fill, outline="")
+        if self._state == "normal" and self._fill == C_BLURPLE:
+            a1, a2 = (ui.lighten(C_BLURPLE, 0.12), ui.lighten(C_ACC2, 0.12)) if self._hover \
+                else (C_BLURPLE, C_ACC2)
+            ui.grad_round_rect(self, 1, 1, w - 1, self._h - 1, r, a1, a2)
+        else:
+            self.create_polygon(host._rr_pts(1, 1, w - 1, self._h - 1, r), smooth=True,
+                                fill=fill, outline=("" if self._fill == C_BLURPLE
+                                                    else ui.mix(fill, C_TEXT, 0.10)))
         self.create_text(w / 2, self._h / 2, text=self._txt, fill=fg,
                          font=(FONT, self._fs, "bold"))
 
@@ -175,9 +205,12 @@ class VideoEditor(tk.Toplevel):
     TW = 600
 
     def __init__(self, master, file_path, info, cfg, discord_hwnd, watcher, on_close):
+        _sync_theme()
         super().__init__(master)
         self.file_path, self.info, self.cfg = file_path, info, cfg
         self.discord_hwnd, self.watcher, self.on_close = discord_hwnd, watcher, on_close
+        self._cancel_flag = False    # закриття під час експорту зупиняє ffmpeg
+        self._closed = False
 
         # ---- джерела медіа (source 0 = початкове відео) ----
         self.sources = []
@@ -256,7 +289,7 @@ class VideoEditor(tk.Toplevel):
         self._rs_after = None
         self._chrome_h = None
 
-        self.title("✂ Редактор відео — Discord Auto-Compress")
+        self.title(E("ed_title"))
         try:
             appicon.set_window_icon(self)   # наша іконка в рамці вікна
         except Exception:
@@ -320,10 +353,10 @@ class VideoEditor(tk.Toplevel):
         # ---- транспорт ----
         pc = tk.Frame(self, bg=C_BG); pc.pack(pady=(8, 6))
         self._btn(pc, "⏮", self._to_start, primary=False).pack(side="left", padx=3)
-        self.play_btn = self._btn(pc, "▶ Грати", self._toggle_play, minw=118)
+        self.play_btn = self._btn(pc, E("ed_play"), self._toggle_play, minw=118)
         self.play_btn.pack(side="left", padx=3)
-        self._btn(pc, "✂ Розрізати", self._cut_here, primary=False).pack(side="left", padx=3)
-        self._btn(pc, "➕ Додати", self._add_dialog, primary=False).pack(side="left", padx=(14, 3))
+        self._btn(pc, E("ed_cut"), self._cut_here, primary=False).pack(side="left", padx=3)
+        self._btn(pc, E("ed_add"), self._add_dialog, primary=False).pack(side="left", padx=(14, 3))
         self.undo_btn = self._btn(pc, "↶", self._undo_action, primary=False)
         self.undo_btn.pack(side="left", padx=(14, 3))
         self.redo_btn = self._btn(pc, "↷", self._redo_action, primary=False)
@@ -366,9 +399,9 @@ class VideoEditor(tk.Toplevel):
 
         # ---- дії з кліпом + зум + довідка (все дрібними пігулками в один рядок) ----
         sc = tk.Frame(self, bg=C_BG); sc.pack(pady=(0, 2))
-        self._btn(sc, "◀ Пересунути", lambda: self._move(-1), primary=False, small=True).pack(side="left", padx=2)
-        self._btn(sc, "Пересунути ▶", lambda: self._move(1), primary=False, small=True).pack(side="left", padx=2)
-        self._btn(sc, "🗑 Прибрати", self._remove, primary=False, small=True).pack(side="left", padx=2)
+        self._btn(sc, E("ed_move_l"), lambda: self._move(-1), primary=False, small=True).pack(side="left", padx=2)
+        self._btn(sc, E("ed_move_r"), lambda: self._move(1), primary=False, small=True).pack(side="left", padx=2)
+        self._btn(sc, E("ed_remove"), self._remove, primary=False, small=True).pack(side="left", padx=2)
         self._btn(sc, "🔍−", lambda: self._zoom_step(0.8), primary=False, small=True).pack(side="left", padx=(14, 2))
         self._btn(sc, "🔍+", lambda: self._zoom_step(1.25), primary=False, small=True).pack(side="left", padx=2)
         self._btn(sc, "❓", self._show_help, primary=False, small=True).pack(side="left", padx=(14, 2))
@@ -383,11 +416,11 @@ class VideoEditor(tk.Toplevel):
                                  wraplength=self.VW, justify="center")
         self.joke_lbl.pack(pady=(0, 2))
         ec = tk.Frame(self, bg=C_BG); ec.pack(pady=(2, 12))
-        self.export_btn = self._btn(ec, "Зберегти і вставити  ▶", self._export)
+        self.export_btn = self._btn(ec, E("ed_export"), self._export)
         self.export_btn.pack(side="left", padx=4)
         self.gif_btn = self._btn(ec, "🎞 GIF", self._export_gif, primary=False)
         self.gif_btn.pack(side="left", padx=4)
-        self._btn(ec, "Скасувати", self._close, primary=False).pack(side="left", padx=4)
+        self._btn(ec, E("ov_cancel"), self._close, primary=False).pack(side="left", padx=4)
 
     def _btn(self, parent, text, cmd, primary=True, minw=0, small=False):
         return PillBtn(parent, text, cmd, primary=primary, minw=minw, small=small)
@@ -466,7 +499,7 @@ class VideoEditor(tk.Toplevel):
     def _show_help(self):
         """Довідка окремим маленьким вікном (замість написів у самому редакторі)."""
         w = tk.Toplevel(self)
-        w.title("Як користуватись")
+        w.title(E("ed_help_title"))
         try:
             appicon.set_window_icon(w)
         except Exception:
@@ -475,23 +508,13 @@ class VideoEditor(tk.Toplevel):
         w.resizable(False, False)
         w.attributes("-topmost", True)
         w.geometry(f"+{self.winfo_rootx() + 60}+{self.winfo_rooty() + 60}")
-        tips = [
-            "🎬  Клік по кліпу — вибрати · білі ручки з боків — обрізати",
-            "✂  «Розрізати» ділить кліп по плейхеду",
-            "🖱  Права кнопка миші по кліпу / накладці / звуку — всі дії",
-            "🔍  Клік по відео — масштаб і позиція (кут — розмір, середина — рухати,",
-            "      подвійний клік — скинути)",
-            "➕  Кнопка «Додати» або перетягни файли у вікно — відео / картинки / звуки",
-            "🕳  Порожні місця лишаються на доріжці й зникають при збереженні",
-            "⌨  ◀ ▶ — точно по кадру (Shift = 1с) · Ctrl+Z / Ctrl+Y — скасувати / повторити",
-            "🖲  Ctrl+колесо — зум доріжки · колесо — прокрутка · Delete — прибрати кліп",
-        ]
+        tips = E("ed_tips").split("\n")
         box = tk.Frame(w, bg=C_BG2)
         box.pack(padx=14, pady=(14, 8))
         for t in tips:
             tk.Label(box, text=t, bg=C_BG2, fg=C_TEXT, font=(FONT, 9),
                      justify="left", anchor="w").pack(fill="x", padx=14, pady=2)
-        PillBtn(w, "Зрозуміло", w.destroy, primary=True).pack(pady=(4, 12))
+        PillBtn(w, E("ed_got_it"), w.destroy, primary=True).pack(pady=(4, 12))
 
     # ----------------------------------------- додавання медіа (➕ і перетяг) -- #
     def _add_dialog(self):
@@ -499,8 +522,8 @@ class VideoEditor(tk.Toplevel):
                         sorted(dc_core.VIDEO_EXT | media.IMAGE_EXT | media.AUDIO_EXT))
         try:
             paths = filedialog.askopenfilenames(
-                parent=self, title="Додати відео / картинки / звуки",
-                filetypes=[("Медіа", pats), ("Всі файли", "*.*")])
+                parent=self, title=E("ed_add_title"),
+                filetypes=[(E("ed_media"), pats), (E("ed_all_files"), "*.*")])
         except tk.TclError:
             return
         if paths:
@@ -560,7 +583,7 @@ class VideoEditor(tk.Toplevel):
             self._redraw()
         if skipped and not added:
             try:
-                self.info_lbl.config(text="Цей формат не підтримується", fg=C_RED)
+                self.info_lbl.config(text=E("ed_unsupported"), fg=C_RED)
             except tk.TclError:
                 pass
 
@@ -754,10 +777,10 @@ class VideoEditor(tk.Toplevel):
             self._tf_handles.append((hxc, hyc))
             c.create_rectangle(hxc - r, hyc - r, hxc + r, hyc + r,
                                fill=col, outline=C_DARK, width=1, tags="tf")
-        what = " (накладка)" if self.sel_ovl is not None else ""
+        what = E("ed_tf_ovl") if self.sel_ovl is not None else ""
         ty = min(CH - 9, max(10, y2 + 14))
         c.create_text(CW / 2, ty,
-                      text=f"тягни кут — масштаб · середину — позиція{what} · подвійний клік — скинути",
+                      text=E("ed_tf_hint", what=what),
                       fill=C_HANDLE, font=(FONT, 8), tags="tf")
 
     def _video_press(self, ev):
@@ -867,7 +890,7 @@ class VideoEditor(tk.Toplevel):
             self._play_t0 = time.monotonic()
             self._ffplay = None
             try:
-                self.play_btn.config(text="⏸ Стоп")
+                self.play_btn.config(text=E("ed_stop"))
             except tk.TclError:
                 pass
             self._play_progress()
@@ -888,7 +911,7 @@ class VideoEditor(tk.Toplevel):
             self._ffplay = subprocess.Popen(cmd, creationflags=dc_core.NO_WINDOW,
                                             stderr=subprocess.PIPE)
         except FileNotFoundError:
-            self.info_lbl.config(text="ffplay не знайдено — онови ffmpeg", fg=C_RED)
+            self.info_lbl.config(text=E("ed_no_ffplay"), fg=C_RED)
             return
         self.playing = True
         self._embedded = None
@@ -897,7 +920,7 @@ class VideoEditor(tk.Toplevel):
                      f"dur={dur} t0={self._play_t0:.3f}")
         threading.Thread(target=self._read_ffplay_stats, args=(self._ffplay,), daemon=True).start()
         try:
-            self.play_btn.config(text="⏸ Стоп")
+            self.play_btn.config(text=E("ed_stop"))
         except tk.TclError:
             pass
         self._embed_try(0)
@@ -1003,7 +1026,7 @@ class VideoEditor(tk.Toplevel):
             except Exception: pass
             self._tick_id = None
         try:
-            self.play_btn.config(text="▶ Грати")
+            self.play_btn.config(text=E("ed_play"))
         except tk.TclError:
             return
         self._show_poster(self.cur)   # повертаємо статичний кадр на екран
@@ -1376,7 +1399,7 @@ class VideoEditor(tk.Toplevel):
                     c.create_rectangle(gx1, 3, gx2, TLH - 3, fill=C_CLIP,
                                        stipple="gray12", outline="")
                     if gpx > 76:
-                        c.create_text((gx1 + gx2) / 2, TLH / 2, text="порожньо",
+                        c.create_text((gx1 + gx2) / 2, TLH / 2, text=E("ed_empty"),
                                       fill=C_MUTED, font=(FONT, 8))
                 x += gpx
             cx1, cx2 = x, x + w
@@ -1479,7 +1502,7 @@ class VideoEditor(tk.Toplevel):
                               text=f"🎵 {nm}{v}", fill="#10121a", font=(FONT, 8, "bold"))
             if not self.snds:
                 c.create_text(W // 2, (LANE + H) / 2 + 1,
-                              text="🎵 сюди можна додати звук — ➕ або перетягни файл",
+                              text=E("ed_snd_hint"),
                               fill=C_MUTED, font=(FONT, 8))
             xh = getattr(self, "_playhead_x", 0)
             if xh:
@@ -1600,7 +1623,7 @@ class VideoEditor(tk.Toplevel):
             self._ovl_rects = []
             pps = self._pps()
             if not self.ovls:
-                c.create_text(W // 2, H / 2, text="накладки поверх відео: ПКМ по кліпу → «🎭 Зробити накладкою»",
+                c.create_text(W // 2, H / 2, text=E("ed_ovl_hint"),
                               fill=C_MUTED, font=(FONT, 8))
             for i, o in enumerate(self.ovls):
                 x1 = self._content_x_of(o["at"], pps) - self._scroll
@@ -1703,12 +1726,12 @@ class VideoEditor(tk.Toplevel):
         m = self._menu_new()
         m.add_command(label=f"🎭  {src['name']}", state="disabled")
         if src["kind"] == "video" and src["has_audio"]:
-            m.add_command(label=("🔊  Увімкнути звук" if o["mute"] else "🔇  Вимкнути звук"),
+            m.add_command(label=(E("ed_unmute") if o["mute"] else E("ed_mute")),
                           command=self._ovl_mute)
-        m.add_command(label="🔍  На весь екран (скинути масштаб)", command=self._tf_reset)
-        m.add_command(label="⬇  Повернути на доріжку", command=self._ovl_to_track)
+        m.add_command(label=E("ed_fullscreen"), command=self._tf_reset)
+        m.add_command(label=E("ed_to_track"), command=self._ovl_to_track)
         m.add_separator()
-        m.add_command(label="🗑  Видалити накладку", command=self._ovl_del)
+        m.add_command(label=E("ed_del_ovl"), command=self._ovl_del)
         try:
             m.tk_popup(ev.x_root, ev.y_root)
         finally:
@@ -1744,33 +1767,33 @@ class VideoEditor(tk.Toplevel):
         self._redraw()
         src = self._src(p)
         m = self._menu_new()
-        m.add_command(label="✂  Розрізати тут", command=lambda: self._cut_at(self.cur))
-        m.add_command(label="📄  Дублювати кліп", command=self._duplicate)
+        m.add_command(label=E("ed_cut_here"), command=lambda: self._cut_at(self.cur))
+        m.add_command(label=E("ed_dup"), command=self._duplicate)
         if len(self.order) > 1:
-            m.add_command(label="🎭  Зробити накладкою (поверх відео)", command=self._to_overlay)
+            m.add_command(label=E("ed_make_ovl"), command=self._to_overlay)
         if src["kind"] == "video":
             sp = self._menu_new()
             for v in (0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0):
                 sp.add_command(label=(f"{v:g}×" + ("   ✓" if p["speed"] == v else "")),
                                command=lambda v=v: self._set_speed(v))
-            m.add_cascade(label=f"⚡  Швидкість ({p['speed']:g}×)", menu=sp)
+            m.add_cascade(label=E("ed_speed", s=f"{p['speed']:g}"), menu=sp)
             if src["has_audio"]:
-                m.add_command(label=("🔊  Увімкнути звук" if p["mute"] else "🔇  Вимкнути звук"),
+                m.add_command(label=(E("ed_unmute") if p["mute"] else E("ed_mute")),
                               command=self._toggle_mute)
         if self._is_transformed(p):
-            m.add_command(label="🔍  Скинути масштаб/позицію", command=self._tf_reset)
+            m.add_command(label=E("ed_reset_tf"), command=self._tf_reset)
         if self._gapof(p) > 0.01:
-            m.add_command(label="🧹  Прибрати порожнє місце перед кліпом",
+            m.add_command(label=E("ed_gap_rm"),
                           command=self._gap_remove)
         if any(self._gapof(self.pieces[ix]) > 0.01 for ix in self.order):
-            m.add_command(label="🧹  Прибрати всі порожні місця",
+            m.add_command(label=E("ed_gaps_rm"),
                           command=self._gaps_remove_all)
         m.add_separator()
-        m.add_command(label="◀  Пересунути лівіше", command=lambda: self._move(-1))
-        m.add_command(label="▶  Пересунути правіше", command=lambda: self._move(1))
+        m.add_command(label=E("ed_move_left"), command=lambda: self._move(-1))
+        m.add_command(label=E("ed_move_right"), command=lambda: self._move(1))
         if len(self.order) > 1:
             m.add_separator()
-            m.add_command(label="🗑  Прибрати кліп", command=self._remove)
+            m.add_command(label=E("ed_rm_clip"), command=self._remove)
         try:
             m.tk_popup(ev.x_root, ev.y_root)
         finally:
@@ -1785,14 +1808,14 @@ class VideoEditor(tk.Toplevel):
         sn = self.snds[i]
         m = self._menu_new()
         m.add_command(label=f"🎵  {sn['name']}", state="disabled")
-        m.add_command(label="▶  Прослухати", command=lambda: self._preview_sound(sn))
+        m.add_command(label=E("ed_listen"), command=lambda: self._preview_sound(sn))
         vol = self._menu_new()
         for v in (0.5, 0.75, 1.0, 1.5, 2.0):
             vol.add_command(label=(f"{int(v * 100)}%" + ("   ✓" if sn["vol"] == v else "")),
                             command=lambda v=v: self._set_snd_vol(i, v))
-        m.add_cascade(label=f"🔉  Гучність ({int(sn['vol'] * 100)}%)", menu=vol)
+        m.add_cascade(label=E("ed_volume", v=int(sn['vol'] * 100)), menu=vol)
         m.add_separator()
-        m.add_command(label="🗑  Видалити звук", command=lambda: self._del_snd(i))
+        m.add_command(label=E("ed_del_snd"), command=lambda: self._del_snd(i))
         try:
             m.tk_popup(ev.x_root, ev.y_root)
         finally:
@@ -1885,10 +1908,10 @@ class VideoEditor(tk.Toplevel):
             for ix in self.order) or any(
             self.sources[o["src"]]["has_audio"] and not o["mute"] for o in self.ovls)
         v = dc_core.calc_video_kbps(total, target, self.cfg["audio_kbps"], has_a) or 0
-        if v >= 600: col, tag = C_GREEN, "✓ Гарна якість"
-        elif v >= 150: col, tag = "#faa61a", "⚠ Нормальна якість"
-        elif v >= 50: col, tag = "#faa61a", "⚠ Слабка якість"
-        else: col, tag = C_RED, "✗ Задовгий фрагмент"
+        if v >= 600: col, tag = C_GREEN, E("ed_q_good")
+        elif v >= 150: col, tag = host.C_WARN, E("ed_q_ok")
+        elif v >= 50: col, tag = host.C_WARN, E("ed_q_weak")
+        else: col, tag = C_RED, E("ed_q_long")
         self.info_lbl.config(text=tag, fg=col)   # без цифр — лише оцінка якості
         if not self.busy:
             self.export_btn.config(state=("normal" if v >= 50 else "disabled"))
@@ -1971,7 +1994,7 @@ class VideoEditor(tk.Toplevel):
                 if not use_a:
                     cmd += ["-f", "lavfi", "-t", f"{dd:.3f}", "-i", "anullsrc=r=44100:cl=stereo",
                             "-map", "0:v", "-map", "1:a"]
-                cmd += ["-t", f"{dd:.3f}", "-vsync", "cfr", "-r", f"{fps:g}",
+                cmd += ["-t", f"{dd:.3f}", *dc_core.cfr_args(), "-r", f"{fps:g}",
                         "-vf", vf + ",setsar=1",
                         "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
                         "-pix_fmt", "yuv420p"]
@@ -2071,7 +2094,7 @@ class VideoEditor(tk.Toplevel):
         try:
             joined, total = self._render_montage(tmpd, lambda p: prog(p * 0.55), cancel)
             if not joined:
-                return False, "Не вдалося зібрати монтаж.", 0.0
+                return False, E("ed_montage_fail"), 0.0
             info = {"duration": total, "has_audio": True,
                     "width": self._ccw, "height": self._cch, "fps": self._cfps}
             scale = (dc_core.pick_auto_scale(info, target, self.cfg["audio_kbps"])
@@ -2096,8 +2119,8 @@ class VideoEditor(tk.Toplevel):
         target = float(self.cfg["target_mb"])
         out_path = dc_core.output_name(self.file_path, target)
         self._start_export_jokes()
-        prog = lambda p: self.after(0, lambda: self.info_lbl.config(
-            text=f"Зберігаю… {int(p)}%", fg=C_BLURPLE))
+        prog = lambda p: self._ui(lambda: self.info_lbl.config(
+            text=E("ed_saving", p=int(p)), fg=C_BLURPLE))
 
         if self._is_simple():
             segs = [(self.pieces[ix]["s"], self.pieces[ix]["e"]) for ix in self.order]
@@ -2105,20 +2128,25 @@ class VideoEditor(tk.Toplevel):
                      if self.cfg.get("auto_scale", True) else 0)
 
             def worker():
-                ok, msg, mb = dc_core.compress_segments(
-                    self.file_path, out_path, target, scale, self.cfg["audio_kbps"],
-                    self.info, segs, progress_cb=prog, should_cancel=lambda: False)
-                self.after(0, lambda: self._done(ok, out_path, mb, msg))
+                try:
+                    ok, msg, mb = dc_core.compress_segments(
+                        self.file_path, out_path, target, scale, self.cfg["audio_kbps"],
+                        self.info, segs, progress_cb=prog, should_cancel=self._cancelled)
+                except Exception as e:
+                    import traceback
+                    dc_core.dlog("EXPORT EXCEPTION: " + repr(e) + "\n" + traceback.format_exc())
+                    ok, msg, mb = False, f'{E("ov_err_prefix")} {str(e)[:60]}', 0.0
+                self._ui(lambda: self._done(ok, out_path, mb, msg))
         else:
             def worker():
                 try:
                     ok, msg, mb = self._render_and_compress(out_path, target, prog,
-                                                            lambda: False)
+                                                            self._cancelled)
                 except Exception as e:
                     import traceback
                     dc_core.dlog("EXPORT EXCEPTION: " + repr(e) + "\n" + traceback.format_exc())
-                    ok, msg, mb = False, f"Помилка: {str(e)[:60]}", 0.0
-                self.after(0, lambda: self._done(ok, out_path, mb, msg))
+                    ok, msg, mb = False, f'{E("ov_err_prefix")} {str(e)[:60]}', 0.0
+                self._ui(lambda: self._done(ok, out_path, mb, msg))
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -2127,7 +2155,7 @@ class VideoEditor(tk.Toplevel):
             return
         total = self._total()
         if total > 30:
-            self.info_lbl.config(text="Для GIF задовгий фрагмент (макс ~30с)", fg=C_RED)
+            self.info_lbl.config(text=dc_core._t("core_gif_long"), fg=C_RED)
             return
         self._pause()
         self.busy = True
@@ -2135,34 +2163,38 @@ class VideoEditor(tk.Toplevel):
         self.gif_btn.config(state="disabled")
         out_path = dc_core.gif_out_name(self.file_path)
         self._start_export_jokes()
-        prog = lambda p: self.after(0, lambda: self.info_lbl.config(
-            text=f"Роблю GIF… {int(p)}%", fg=C_BLURPLE))
+        prog = lambda p: self._ui(lambda: self.info_lbl.config(
+            text=E("ed_gif_prog", p=int(p)), fg=C_BLURPLE))
 
         if self._is_simple():
             segs = [(self.pieces[ix]["s"], self.pieces[ix]["e"]) for ix in self.order]
 
             def worker():
-                ok, msg, mb = dc_core.export_gif(self.file_path, out_path, segs,
-                                                 progress_cb=prog)
-                self.after(0, lambda: self._done(ok, out_path, mb, msg))
+                try:
+                    ok, msg, mb = dc_core.export_gif(self.file_path, out_path, segs,
+                                                     progress_cb=prog)
+                except Exception as e:
+                    dc_core.dlog("GIF EXCEPTION: " + repr(e))
+                    ok, msg, mb = False, f'{E("ov_err_prefix")} {str(e)[:60]}', 0.0
+                self._ui(lambda: self._done(ok, out_path, mb, msg))
         else:
             def worker():
                 tmpd = tempfile.mkdtemp(prefix="dgifm_")
                 try:
                     joined, tot = self._render_montage(tmpd, lambda p: prog(p * 0.6),
-                                                       lambda: False)
+                                                       self._cancelled)
                     if not joined:
-                        ok, msg, mb = False, "Не вдалося зібрати монтаж.", 0.0
+                        ok, msg, mb = False, E("ed_montage_fail"), 0.0
                     else:
                         ok, msg, mb = dc_core.export_gif(
                             joined, out_path, [(0.0, tot)],
                             progress_cb=lambda p: prog(60.0 + p * 0.4))
                 except Exception as e:
                     dc_core.dlog("GIF EXCEPTION: " + repr(e))
-                    ok, msg, mb = False, f"Помилка: {str(e)[:60]}", 0.0
+                    ok, msg, mb = False, f'{E("ov_err_prefix")} {str(e)[:60]}', 0.0
                 finally:
                     shutil.rmtree(tmpd, ignore_errors=True)
-                self.after(0, lambda: self._done(ok, out_path, mb, msg))
+                self._ui(lambda: self._done(ok, out_path, mb, msg))
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -2183,7 +2215,24 @@ class VideoEditor(tk.Toplevel):
             return
         self._joke_after = self.after(4500, self._rotate_export_joke)
 
+    def _cancelled(self):
+        return self._cancel_flag
+
+    def _ui(self, fn):
+        """Виклик у головному потоці Tk з робочого потоку (тихо, якщо вікно вже закрите)."""
+        if self._closed:
+            return
+        try:
+            self.after(0, lambda: None if self._closed else fn())
+        except Exception:
+            pass
+
     def _done(self, ok, out_path, mb, msg):
+        if self._closed:                        # редактор закрили під час експорту
+            if not ok and os.path.exists(out_path):
+                try: os.remove(out_path)
+                except OSError: pass
+            return
         self.busy = False                       # зупиняє ротацію фактів
         try:
             self.joke_lbl.config(text="")
@@ -2195,7 +2244,7 @@ class VideoEditor(tk.Toplevel):
                 try: os.remove(out_path)
                 except OSError: pass
             self.export_btn.config(state="normal")
-            self.info_lbl.config(text=msg or "Не вдалося зберегти", fg=C_RED)
+            self.info_lbl.config(text=msg or E("ed_save_fail"), fg=C_RED)
             return
         host.play_done_sound(self.cfg)          # звук «готово»
         try:                                    # статистика: обрізка/монтаж/gif = теж стиснення
@@ -2215,10 +2264,11 @@ class VideoEditor(tk.Toplevel):
             try:
                 host.user32.SetForegroundWindow(self.discord_hwnd)
                 self.after(180, host.send_ctrl_v)
-                pasted = " · вставлено в Discord"
+                pasted = E("ed_pasted")
             except Exception:
                 pasted = ""
-        self.info_lbl.config(text=f"Готово ✓ {mb:.2f} МБ{pasted}", fg=C_GREEN)
+        self.info_lbl.config(text=E("ed_done", mb=f"{mb:.2f}", u=E("unit_mb"), pasted=pasted),
+                             fg=C_GREEN)
         policy = self.cfg.get("keep_local", "ask")
         if policy == "ask":
             self._ask_keep(out_path)
@@ -2231,9 +2281,9 @@ class VideoEditor(tk.Toplevel):
         ec = self.export_btn.master
         for w in ec.winfo_children():
             w.destroy()
-        self.info_lbl.config(text="Лишити стиснуту копію на ПК?", fg=C_TEXT)
-        self._btn(ec, "Лишити", self._close, primary=False).pack(side="left", padx=4)
-        self._btn(ec, "Видалити",
+        self.info_lbl.config(text=E("ov_keep_q"), fg=C_TEXT)
+        self._btn(ec, E("ov_keep"), self._close, primary=False).pack(side="left", padx=4)
+        self._btn(ec, E("ov_delete"),
                   lambda: (self._schedule_delete([out_path]), self._close())).pack(side="left", padx=4)
 
     def _schedule_delete(self, paths):
@@ -2255,6 +2305,10 @@ class VideoEditor(tk.Toplevel):
         threading.Thread(target=_rm, daemon=True).start()
 
     def _close(self):
+        if self._closed:
+            return
+        self._closed = True
+        self._cancel_flag = True       # експорт, якщо йде, зупиняється (ffmpeg гаситься)
         self._pause()                  # зупиняємо ffplay і його опитування
         self._disable_dnd()            # повертаємо оригінальний WndProc (інакше краш після destroy)
         shutil.rmtree(self._tmp, ignore_errors=True)

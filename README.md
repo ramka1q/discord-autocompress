@@ -17,7 +17,8 @@ The app lives quietly in the system tray. When you press **Ctrl+V** in Discord a
 - **Split long videos** into parts that each fit the limit, or "compress & split" for fewer files.
 - **Built-in editor** — trim, cut, reorder and remove clips on a CapCut-style timeline with a live **audio waveform that follows your zoom, cuts and moves**. Preview with sound; export to MP4 or GIF.
 - **Shrink-more** offer for videos that already fit but could be smaller.
-- **Themes & languages** — Discord / DokiDoki / Aero themes, UK / RU / EN.
+- **Modern UI** — gradient buttons, toggle switches, an animated progress ring with time-left, live theme previews; native rounded corners and a taskbar button on Windows 11.
+- **Themes & languages** — Discord / Midnight / DokiDoki / Aero themes, UK / RU / EN (everything, including the editor, is translated).
 - **Auto-updates** — pulls the latest code from GitHub on every launch.
 
 ## Install (no Python needed)

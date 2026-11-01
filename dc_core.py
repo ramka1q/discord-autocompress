@@ -23,9 +23,74 @@ try:
 except Exception:
     pass
 
+try:
+    import i18n
+except Exception:          # ядро має працювати навіть без перекладів
+    i18n = None
+
 NO_WINDOW = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
 
 DEBUG_LOG = os.path.join(tempfile.gettempdir(), "dac_debug.log")
+
+# Мова повідомлень ядра (overlay/editor виставляють її з конфіга).
+LANG = "en"
+
+
+def _t(key, **kw):
+    """Локалізоване повідомлення ядра (раніше всі помилки були лише українською)."""
+    if i18n is None:
+        return key
+    return i18n.tr(LANG, key, **kw)
+
+
+def cancelled_msg() -> str:
+    return _t("core_cancel")
+
+
+# ---- постійний фреймрейт: новий ffmpeg хоче -fps_mode, старий знає лише -vsync ----
+_CFR_ARGS = None
+
+
+def cfr_args() -> list:
+    """['-fps_mode','cfr'] на ffmpeg ≥5.1, інакше ['-vsync','cfr'] (перевіряємо один раз)."""
+    global _CFR_ARGS
+    if _CFR_ARGS is None:
+        try:
+            rc = subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi",
+                                 "-i", "nullsrc=s=16x16:d=0.1", "-fps_mode", "cfr",
+                                 "-f", "null", "-"], capture_output=True,
+                                creationflags=NO_WINDOW, timeout=20).returncode
+            _CFR_ARGS = ["-fps_mode", "cfr"] if rc == 0 else ["-vsync", "cfr"]
+        except Exception:
+            _CFR_ARGS = ["-vsync", "cfr"]
+    return list(_CFR_ARGS)
+
+
+# ---- куди класти результат: поруч з оригіналом, а якщо там не можна писати —
+#      у %TEMP%\DiscordAutoCompress (напр. відео з read-only теки, архіву чи мережі) ----
+FALLBACK_DIR = os.path.join(tempfile.gettempdir(), "DiscordAutoCompress")
+
+
+def _dir_writable(d: str) -> bool:
+    try:
+        fd, probe = tempfile.mkstemp(prefix=".dac_w_", dir=d or ".")
+        os.close(fd)
+        os.remove(probe)
+        return True
+    except Exception:
+        return False
+
+
+def out_base(path: str) -> str:
+    """База імені вихідного файла (без розширення) у теці, куди точно можна писати."""
+    base, _ = os.path.splitext(path)
+    if _dir_writable(os.path.dirname(os.path.abspath(path))):
+        return base
+    try:
+        os.makedirs(FALLBACK_DIR, exist_ok=True)
+    except OSError:
+        pass
+    return os.path.join(FALLBACK_DIR, os.path.basename(base))
 
 
 def dlog(msg: str):
@@ -48,7 +113,7 @@ def have_ffmpeg() -> bool:
         return False
 
 
-BUILD = "2026-07-03-multitrack"   # маркер версії коду — щоб у логах бачити, чи юзер на новому коді
+BUILD = "2026-11-01-v2-redesign"   # маркер версії коду — щоб у логах бачити, чи юзер на новому коді
 
 
 def probe_diag(path: str) -> str:
@@ -117,9 +182,11 @@ def calc_video_kbps(duration: float, target_mb: float, audio_kbps: int, has_audi
 
 def pick_auto_scale(info: dict, target_mb: float, audio_kbps: int) -> int:
     """Авто-підбір висоти кадру так, щоб бітрейт лишався пристойним.
-    0 = лишити оригінал. Повертає одне з: 0/1080/720/480/360."""
-    h = info["height"] or 9999
-    candidates = [0, 1080, 720, 480, 360]
+    0 = лишити оригінал. Повертає одне з: 0/1080/720/480/360 — це КОРОТША сторона кадру,
+    тож вертикальне відео з телефона (1080x1920) не стискається втричі сильніше за горизонтальне."""
+    w, h = info.get("width") or 0, info.get("height") or 0
+    h = min(w, h) if (w and h) else (h or 9999)
+    candidates = [0] + [c for c in (1080, 720, 480, 360) if c < h]
     for scale in candidates:
         eff_h = h if scale == 0 else min(scale, h)
         # орієнтовний «добрий» бітрейт ~ 2.2 kbps на рядок висоти (груба евристика)
@@ -127,13 +194,15 @@ def pick_auto_scale(info: dict, target_mb: float, audio_kbps: int) -> int:
         v = calc_video_kbps(info["duration"], target_mb, audio_kbps, info["has_audio"]) or 0
         if v >= good:
             return scale
-    return 360  # навіть так замало — беремо найменший
+    return candidates[-1]  # навіть так замало — беремо найменший (але ніколи не збільшуємо кадр)
 
 
 def _run_pass(cmd, duration, base_pct, span, progress_cb, should_cancel):
     cmd = cmd + ["-progress", "pipe:1", "-nostats", "-loglevel", "error"]
+    # utf-8 + replace: ffmpeg пише UTF-8, а локальне cp1251 падало на деяких іменах файлів
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                            text=True, creationflags=NO_WINDOW)
+                            text=True, encoding="utf-8", errors="replace",
+                            creationflags=NO_WINDOW)
     error_tail = []
     for line in proc.stdout:
         line = line.rstrip()
@@ -149,6 +218,10 @@ def _run_pass(cmd, duration, base_pct, span, progress_cb, should_cancel):
             error_tail.append(line)
             del error_tail[:-8]
     proc.wait()
+    try:
+        proc.stdout.close()
+    except Exception:
+        pass
     if proc.returncode != 0 and error_tail:
         dlog("ffmpeg failed rc=%s: %s" % (proc.returncode, " | ".join(error_tail)))
     return proc.returncode
@@ -166,7 +239,7 @@ def compress(path, out_path, target_mb, scale, audio_kbps, info,
     ceiling_mb = target_ceiling(target_mb)
     v_kbps = calc_video_kbps(duration, target_mb, audio_kbps, info["has_audio"])
     if not v_kbps or v_kbps < 50:
-        return False, "Бітрейт занизький для цього розміру — збільш ліміт або зменш роздільність.", 0.0
+        return False, _t("core_lowbr"), 0.0
 
     # ТОЧНА обрізка: -ss ПЕРЕД -i = швидкий і (при перекодуванні) кадрово-точний старт;
     # -t ПІСЛЯ -i = вихідна опція -> довжина виходу РІВНО dur (а не рахується від keyframe,
@@ -176,15 +249,22 @@ def compress(path, out_path, target_mb, scale, audio_kbps, info,
     # При ОБРІЗЦІ примусово робимо постійний фреймрейт (CFR). Відео з телефона/запису
     # екрана часто VFR — там «час кадру» плаває, і вибраний на таймлайні момент не
     # збігається з реальним -> здавалося, що експорт починається/кінчається пізніше.
-    cfr = ["-vsync", "cfr"] if dur is not None else []
-    vf = ["-vf", f"scale=-2:{scale}"] if scale else []
-    # унікальний passlog на кожен вихідний файл -> безпечно для ПАРАЛЕЛЬНОГО кодування частин
-    passlog = os.path.join(os.path.dirname(out_path) or ".",
-                           "_d2p_" + os.path.splitext(os.path.basename(out_path))[0])
+    cfr = cfr_args() if dur is not None else []
+    # scale = коротша сторона: для вертикального відео масштабуємо ШИРИНУ
+    portrait = (info.get("height") or 0) > (info.get("width") or 0) > 0
+    vf = (["-vf", (f"scale={scale}:-2" if portrait else f"scale=-2:{scale}")]
+          if scale else [])
+    # унікальний passlog на кожен вихідний файл -> безпечно для ПАРАЛЕЛЬНОГО кодування частин;
+    # лежить у TEMP, а не поруч з відео (там може бути заборонено писати)
+    passlog = os.path.join(tempfile.gettempdir(),
+                           "_d2p_%d_%s" % (os.getpid(),
+                                           os.path.splitext(os.path.basename(out_path))[0]))
 
     def venc(kbps):
+        # yuv420p ОБОВ'ЯЗКОВО: відео з OBS/телефона буває 4:4:4 або 10-біт, і тоді x264
+        # кодував у High 4:4:4 / High 10 — Discord і браузери таке НЕ програють (чорний кадр)
         return ["ffmpeg", "-y", *inss, "-i", path, *outdur, *cfr, "-c:v", "libx264",
-                "-b:v", f"{kbps}k", "-preset", "medium", *vf]
+                "-b:v", f"{kbps}k", "-preset", "medium", *vf, "-pix_fmt", "yuv420p"]
 
     try:
         # ---- pass 1: аналіз складності (не залежить від бітрейту, робимо один раз) ----
@@ -192,9 +272,9 @@ def compress(path, out_path, target_mb, scale, audio_kbps, info,
                                        "-an", "-f", "null", os.devnull],
                        duration, 0.0, 45.0, progress_cb, should_cancel)
         if should_cancel and should_cancel():
-            return False, "Скасовано.", 0.0
+            return False, cancelled_msg(), 0.0
         if rc != 0:
-            return False, "Прохід 1 завершився з помилкою.", 0.0
+            return False, _t("core_pass1"), 0.0
 
         audio_args = ["-c:a", "aac", "-b:a", f"{audio_kbps}k"] if has_audio else ["-an"]
         # ---- pass 2 з перевіркою розміру: до 4 спроб, щоразу знижуючи бітрейт ----
@@ -204,9 +284,9 @@ def compress(path, out_path, target_mb, scale, audio_kbps, info,
                                            *audio_args, "-movflags", "+faststart", out_path],
                            duration, 45.0, 55.0, progress_cb, should_cancel)
             if should_cancel and should_cancel():
-                return False, "Скасовано.", 0.0
+                return False, cancelled_msg(), 0.0
             if rc != 0:
-                return False, "Прохід 2 завершився з помилкою.", 0.0
+                return False, _t("core_pass2"), 0.0
 
             final_mb = os.path.getsize(out_path) / 1024 / 1024
             if final_mb <= ceiling_mb or v_kbps <= 50:
@@ -226,8 +306,7 @@ def compress(path, out_path, target_mb, scale, audio_kbps, info,
 
 
 def output_name(path: str, target_mb: float) -> str:
-    base, _ = os.path.splitext(path)
-    return f"{base}_discord_{int(target_mb)}mb.mp4"
+    return f"{out_base(path)}_discord_{int(target_mb)}mb.mp4"
 
 
 def compress_segments(path, out_path, target_mb, scale, audio_kbps, info, segments,
@@ -238,11 +317,11 @@ def compress_segments(path, out_path, target_mb, scale, audio_kbps, info, segmen
     Повертає (ok, message, final_mb)."""
     segs = [(float(s), float(e)) for s, e in segments if e > s]
     if not segs:
-        return False, "Немає сегментів для збереження.", 0.0
+        return False, _t("core_noseg"), 0.0
     total = sum(e - s for s, e in segs)
     v_kbps = calc_video_kbps(total, target_mb, audio_kbps, info["has_audio"])
     if not v_kbps or v_kbps < 50:
-        return False, "Загалом задовго для цього ліміту — прибери сегмент або підвищ ліміт.", 0.0
+        return False, _t("core_toolong"), 0.0
 
     # ОДИН фрагмент -> одразу через швидкий вхідний seek (compress зі start/dur) — найшвидше й точно
     if len(segs) == 1:
@@ -258,16 +337,16 @@ def compress_segments(path, out_path, target_mb, scale, audio_kbps, info, segmen
         files = []
         for i, (s, e) in enumerate(segs):
             if should_cancel and should_cancel():
-                return False, "Скасовано.", 0.0
+                return False, cancelled_msg(), 0.0
             segf = os.path.join(tmpd, f"s{i}.mp4")
             cmd = ["ffmpeg", "-y", "-ss", f"{s:.3f}", "-i", path, "-t", f"{e - s:.3f}",
-                   "-vsync", "cfr",   # CFR -> сегменти рівні за часом, склейка без дрейфу (VFR-джерела)
+                   *cfr_args(),   # CFR -> сегменти рівні за часом, склейка без дрейфу (VFR-джерела)
                    "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p"]
             cmd += (["-c:a", "aac", "-b:a", "192k"] if has_audio else ["-an"])
             cmd += ["-video_track_timescale", "90000", segf]
             rc = _run_pass(cmd, e - s, i / n * 35.0, 35.0 / n, progress_cb, should_cancel)
             if rc != 0 or not os.path.exists(segf):
-                return False, "Не вдалося вирізати фрагмент.", 0.0
+                return False, _t("core_cut"), 0.0
             files.append(segf)
 
         # склейка (concat demuxer, без перекодування — миттєво)
@@ -280,7 +359,7 @@ def compress_segments(path, out_path, target_mb, scale, audio_kbps, info, segmen
                              "-c", "copy", "-movflags", "+faststart", joined],
                             capture_output=True, creationflags=NO_WINDOW).returncode
         if rc != 0 or not os.path.exists(joined):
-            return False, "Не вдалося склеїти фрагменти.", 0.0
+            return False, _t("core_join"), 0.0
 
         jinfo = {"duration": total, "has_audio": has_audio,
                  "width": info.get("width", 0), "height": info.get("height", 0)}
@@ -298,7 +377,7 @@ def _cut_join(path, segs, tmpd, audio=False):
         s, e = segs[0]
         out = os.path.join(tmpd, "j.mp4")
         rc = subprocess.run(["ffmpeg", "-y", "-ss", f"{s:.3f}", "-i", path, "-t", f"{e - s:.3f}",
-                             "-vsync", "cfr", *an, "-c:v", "libx264", "-preset", "veryfast",
+                             *cfr_args(), *an, "-c:v", "libx264", "-preset", "veryfast",
                              "-crf", "18", "-pix_fmt", "yuv420p", out],
                             capture_output=True, creationflags=NO_WINDOW).returncode
         return out if rc == 0 and os.path.exists(out) else None
@@ -306,7 +385,7 @@ def _cut_join(path, segs, tmpd, audio=False):
     for i, (s, e) in enumerate(segs):
         f = os.path.join(tmpd, f"c{i}.mp4")
         rc = subprocess.run(["ffmpeg", "-y", "-ss", f"{s:.3f}", "-i", path, "-t", f"{e - s:.3f}",
-                             "-vsync", "cfr", *an, "-c:v", "libx264", "-preset", "veryfast",
+                             *cfr_args(), *an, "-c:v", "libx264", "-preset", "veryfast",
                              "-crf", "18", "-pix_fmt", "yuv420p", "-video_track_timescale", "90000", f],
                             capture_output=True, creationflags=NO_WINDOW).returncode
         if rc != 0 or not os.path.exists(f):
@@ -323,25 +402,24 @@ def _cut_join(path, segs, tmpd, audio=False):
 
 
 def gif_out_name(path: str) -> str:
-    base, _ = os.path.splitext(path)
-    return base + "_discord.gif"
+    return out_base(path) + "_discord.gif"
 
 
 def export_gif(path, out_path, segments, fps=14, width=480, progress_cb=None, should_cancel=None):
     """Робить якісний GIF з обраних сегментів (2-прохідна палітра). (ok, msg, mb)."""
     segs = [(float(s), float(e)) for s, e in segments if e > s]
     if not segs:
-        return False, "Немає сегментів.", 0.0
+        return False, _t("core_noseg"), 0.0
     total = sum(e - s for s, e in segs)
     if total > 30:
-        return False, "Для GIF задовгий фрагмент (макс ~30с) — обріж коротше.", 0.0
+        return False, _t("core_gif_long"), 0.0
     tmpd = tempfile.mkdtemp(prefix="dgif_")
     try:
         if progress_cb:
             progress_cb(15)
         trimmed = _cut_join(path, segs, tmpd, audio=False)
         if not trimmed:
-            return False, "Не вдалося підготувати відео для GIF.", 0.0
+            return False, _t("core_gif_fail"), 0.0
         if progress_cb:
             progress_cb(50)
         vf = f"fps={fps},scale={width}:-1:flags=lanczos"
@@ -349,14 +427,14 @@ def export_gif(path, out_path, segments, fps=14, width=480, progress_cb=None, sh
         subprocess.run(["ffmpeg", "-y", "-i", trimmed, "-vf", vf + ",palettegen=stats_mode=diff", pal],
                        capture_output=True, creationflags=NO_WINDOW)
         if not os.path.exists(pal):
-            return False, "Не вдалося створити палітру GIF.", 0.0
+            return False, _t("core_gif_fail"), 0.0
         if progress_cb:
             progress_cb(75)
         rc = subprocess.run(["ffmpeg", "-y", "-i", trimmed, "-i", pal, "-lavfi",
                              vf + "[x];[x][1:v]paletteuse=dither=bayer:bayer_scale=3", out_path],
                             capture_output=True, creationflags=NO_WINDOW).returncode
         if rc != 0 or not os.path.exists(out_path):
-            return False, "Не вдалося зробити GIF.", 0.0
+            return False, _t("core_gif_fail"), 0.0
         if progress_cb:
             progress_cb(100)
         return True, "OK", os.path.getsize(out_path) / 1024 / 1024
@@ -479,12 +557,12 @@ def split_compress(path, target_mb, auto_scale, audio_kbps, info,
 
     duration = info["duration"]
     if duration <= 0:
-        return False, "Не вдалося визначити тривалість відео.", []
+        return False, _t("core_nodur"), []
     n = int(n_parts) if n_parts else plan_parts(duration, target_mb, audio_kbps, info["has_audio"])
     if n <= 1:
         n = 2  # якщо потрапили сюди — відео все одно не влізло цілим, ділимо хоча б навпіл
     part_len = duration / n
-    base, _ = os.path.splitext(path)
+    base = out_base(path)
     scale = pick_auto_scale(info, target_mb, audio_kbps) if auto_scale else 0
     if workers is None:
         workers = auto_workers(n)
@@ -529,14 +607,14 @@ def split_compress(path, target_mb, auto_scale, audio_kbps, info,
                 with lock:
                     if ok:
                         outputs[i] = out_i
-                    elif msg != "Скасовано." and fail[0] is None:
-                        fail[0] = f"Частина {i + 1}: {msg}"
+                    elif msg != cancelled_msg() and fail[0] is None:
+                        fail[0] = _t("core_part", n=i + 1, msg=msg)
                         cancelled[0] = True   # одна впала -> зупиняємо решту
         except Exception as e:                # будь-яка несподіванка -> лог + зупинка, а не тихий зависон
             dlog(f"part {i + 1}/{n} EXCEPTION: {e!r}")
             with lock:
                 if fail[0] is None:
-                    fail[0] = f"Частина {i + 1}: {e}"
+                    fail[0] = _t("core_part", n=i + 1, msg=e)
                 cancelled[0] = True
         finally:
             with lock:
@@ -567,7 +645,7 @@ def split_compress(path, target_mb, auto_scale, audio_kbps, info,
     dlog(f"split_compress end: fail={fail[0]} cancelled={cancelled[0]} done={done[0]}/{n}")
     if fail[0] or sc():
         _cleanup_outputs([t[3] for t in tasks])   # прибираємо всі (навіть недороблені) файли
-        return False, fail[0] or "Скасовано.", []
+        return False, fail[0] or cancelled_msg(), []
     return True, "OK", [o for o in outputs if o]
 
 

@@ -74,8 +74,10 @@ def _sync(quiet: bool = True, apply: bool = True):
     for rel, data in fresh.items():
         dst = os.path.join(HERE, rel.replace("/", os.sep))
         try:
-            if os.path.exists(dst) and open(dst, "rb").read() == data:
-                continue  # без змін — не чіпаємо
+            if os.path.exists(dst):
+                with open(dst, "rb") as f:
+                    if f.read() == data:
+                        continue  # без змін — не чіпаємо
         except OSError:
             pass
         changed += 1

@@ -3,6 +3,7 @@
     "dc_core.py",
     "discord_overlay.py",
     "themes.py",
+    "ui.py",
     "i18n.py",
     "appicon.py",
     "media.py",

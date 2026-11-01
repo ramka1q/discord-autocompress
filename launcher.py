@@ -95,8 +95,10 @@ def sync_code(appdir: str, log=None):
         dst = os.path.join(appdir, rel)
         try:
             os.makedirs(os.path.dirname(dst) or appdir, exist_ok=True)
-            if os.path.exists(dst) and open(dst, "rb").read() == data:
-                continue
+            if os.path.exists(dst):
+                with open(dst, "rb") as f:
+                    if f.read() == data:
+                        continue
             with open(dst + ".new", "wb") as f:
                 f.write(data)
             os.replace(dst + ".new", dst)
@@ -115,6 +117,8 @@ def _ps(script: str):
 
 
 def make_lnk(lnk: str, target: str, args: str = "", desc: str = APP_TITLE):
+    # апостроф у шляху (напр. C:\Users\O'Brien) ламав PowerShell-рядок -> подвоюємо його
+    lnk, target, args, desc = (str(v).replace("'", "''") for v in (lnk, target, args, desc))
     ps = ("$sh=New-Object -ComObject WScript.Shell;"
           "$s=$sh.CreateShortcut('%s');$s.TargetPath='%s';$s.Arguments='%s';"
           "$s.WorkingDirectory='%s';$s.WindowStyle=7;$s.Description='%s';$s.Save()"
@@ -580,8 +584,8 @@ def ensure_autostart(appdir: str, installed: bool):
     if not want:
         return
     try:
-        lnk = _startup_lnk()
-        exe = sys.executable
+        lnk = _startup_lnk().replace("'", "''")
+        exe = sys.executable.replace("'", "''")
         ps = ("$p='%s';"
               "$sh=New-Object -ComObject WScript.Shell;"
               "$cur=if(Test-Path $p){$s=$sh.CreateShortcut($p);$s.TargetPath+'|'+$s.Arguments}else{''};"
@@ -690,6 +694,7 @@ if __name__ == "__main__":
             import editor             # noqa: F401
             import update             # noqa: F401
             import themes             # noqa: F401
+            import ui                 # noqa: F401
             import i18n               # noqa: F401
             import appicon            # noqa: F401
             import media              # noqa: F401
