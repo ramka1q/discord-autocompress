@@ -16,6 +16,7 @@
 """
 import json
 import os
+import re
 import sys
 import urllib.parse
 import urllib.request
@@ -36,9 +37,32 @@ MARKER = os.path.join(HERE, ".autoupdate")   # є лише в друга -> до
 TIMEOUT = 15
 
 
-def _fetch(rel: str) -> bytes:
+def _pinned_base(raw=None) -> str:
+    """raw-адреса КОНКРЕТНОГО коміту, а не гілки. Кеш GitHub тримає кожен файл гілки
+    окремо до ~5 хв, тож одразу після пушу частина файлів приходила нова, частина стара
+    (так і зламалось меню: новий discord_overlay + старий settings_app). Файли коміту
+    незмінні -> усе з ОДНІЄЇ версії. Без мережі до API — стара поведінка (гілка)."""
+    raw = raw or REPO_RAW
+    try:
+        m = re.match(r"https://raw\.githubusercontent\.com/([^/]+)/([^/]+)/([^/]+)/?$", raw)
+        if not m:
+            return raw
+        owner, repo, branch = m.groups()
+        req = urllib.request.Request(
+            f"https://api.github.com/repos/{owner}/{repo}/commits/{branch}",
+            headers={"User-Agent": "DAC-Updater/2.1", "Accept": "application/vnd.github.sha"})
+        with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
+            sha = r.read().decode("ascii", "ignore").strip()
+        if re.fullmatch(r"[0-9a-f]{40}", sha):
+            return f"https://raw.githubusercontent.com/{owner}/{repo}/{sha}"
+    except Exception:
+        pass
+    return raw
+
+
+def _fetch(rel: str, base: str = None) -> bytes:
     """Завантажує файл rel із репозиторію (шлях URL-кодується посегментно)."""
-    url = REPO_RAW.rstrip("/") + "/" + "/".join(urllib.parse.quote(p) for p in rel.split("/"))
+    url = (base or REPO_RAW).rstrip("/") + "/" + "/".join(urllib.parse.quote(p) for p in rel.split("/"))
     req = urllib.request.Request(url, headers={"User-Agent": "DAC-Updater/1.0",
                                                "Cache-Control": "no-cache"})
     with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
@@ -53,8 +77,9 @@ def _sync(quiet: bool = True, apply: bool = True):
         if not quiet:
             print("[!] Спершу впиши адресу репозиторію у REPO_RAW (update.py).")
         return False, 0
+    base = _pinned_base()
     try:
-        manifest = json.loads(_fetch("manifest.json").decode("utf-8"))
+        manifest = json.loads(_fetch("manifest.json", base).decode("utf-8"))
     except Exception as e:
         if not quiet:
             print("[!] Не вдалося перевірити оновлення:", e)
@@ -64,7 +89,7 @@ def _sync(quiet: bool = True, apply: bool = True):
     fresh = {}
     for rel in files:
         try:
-            fresh[rel] = _fetch(rel)
+            fresh[rel] = _fetch(rel, base)
         except Exception as e:
             if not quiet:
                 print("[!] Помилка завантаження", rel, "—", e)

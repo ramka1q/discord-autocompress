@@ -73,8 +73,31 @@ def is_installed_here() -> bool:
     return getattr(sys, "frozen", False) and os.path.exists(os.path.join(exe_dir(), MARKER))
 
 
-def _fetch(rel: str) -> bytes:
-    url = REPO_RAW.rstrip("/") + "/" + "/".join(urllib.parse.quote(p) for p in rel.split("/"))
+def _pinned_base(raw=None) -> str:
+    """raw-адреса КОНКРЕТНОГО коміту, а не гілки. Кеш GitHub тримає кожен файл гілки
+    окремо до ~5 хв, тож одразу після пушу частина файлів приходила нова, частина стара
+    (так і зламалось меню: новий discord_overlay + старий settings_app). Файли коміту
+    незмінні -> усе з ОДНІЄЇ версії. Без мережі до API — стара поведінка (гілка)."""
+    raw = raw or REPO_RAW
+    try:
+        m = re.match(r"https://raw\.githubusercontent\.com/([^/]+)/([^/]+)/([^/]+)/?$", raw)
+        if not m:
+            return raw
+        owner, repo, branch = m.groups()
+        req = urllib.request.Request(
+            f"https://api.github.com/repos/{owner}/{repo}/commits/{branch}",
+            headers={"User-Agent": "DAC-Launcher/2.1", "Accept": "application/vnd.github.sha"})
+        with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
+            sha = r.read().decode("ascii", "ignore").strip()
+        if re.fullmatch(r"[0-9a-f]{40}", sha):
+            return f"https://raw.githubusercontent.com/{owner}/{repo}/{sha}"
+    except Exception:
+        pass
+    return raw
+
+
+def _fetch(rel: str, base: str = None) -> bytes:
+    url = (base or REPO_RAW).rstrip("/") + "/" + "/".join(urllib.parse.quote(p) for p in rel.split("/"))
     req = urllib.request.Request(url, headers={"User-Agent": "DAC-Launcher/2.0",
                                                "Cache-Control": "no-cache"})
     with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
@@ -83,15 +106,16 @@ def _fetch(rel: str) -> bytes:
 
 def sync_code(appdir: str, log=None):
     """Тягне .py-файли програми з GitHub у appdir. Повертає к-ть оновлених (-1 = без мережі)."""
+    base = _pinned_base()
     try:
-        manifest = json.loads(_fetch("manifest.json").decode("utf-8"))
+        manifest = json.loads(_fetch("manifest.json", base).decode("utf-8"))
     except Exception:
         return -1
     files = [f for f in manifest.get("files", []) if f.endswith(".py")]
     n = 0
     for i, rel in enumerate(files):
         try:
-            data = _fetch(rel)
+            data = _fetch(rel, base)
         except Exception:
             continue
         dst = os.path.join(appdir, rel)

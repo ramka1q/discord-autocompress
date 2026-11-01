@@ -1497,8 +1497,13 @@ class Watcher:
             save_config(self.cfg)
         # енкодер відеокарти визначаємо у фоні, щоб перше стиснення не чекало
         threading.Thread(target=dc_core.hw_encoder, daemon=True).start()
+        # самолікування: якщо при запуску частина файлів прийшла іншої версії —
+        # докачуємо їх з ОДНОГО коміту (діє лише у встановленій копії з маркером .autoupdate)
+        threading.Thread(target=self._self_heal, daemon=True).start()
         self.root = tk.Tk()
         self.root.withdraw()
+        # будь-яка помилка в обробнику подій -> у журнал (у exe консолі немає, і вона губилась)
+        self.root.report_callback_exception = self._tk_error
         self.q = queue.Queue()
         self.overlay_open = False
         self.settings_win = None
@@ -1511,6 +1516,19 @@ class Watcher:
             self.root.after(200, self.open_settings)
         if show_news:
             self.root.after(1400, self.show_whats_new)
+
+    @staticmethod
+    def _self_heal():
+        try:
+            import update
+            update.auto()
+        except Exception as e:
+            dc_core.dlog("self-heal update failed: " + repr(e))
+
+    @staticmethod
+    def _tk_error(exc, val, tb):
+        import traceback
+        dc_core.dlog("TK CALLBACK ERROR: " + "".join(traceback.format_exception(exc, val, tb)))
 
     def show_whats_new(self):
         try:
@@ -1628,10 +1646,14 @@ class Watcher:
                 pass
             self.settings_win = None
 
-        self.settings_win = settings_app.SettingsApp(
-            self.root, self.cfg, on_save=self._on_settings_save,
-            on_apply=self._on_settings_apply, on_close=_closed, on_restart=self.restart_app,
-            tab=tab)
+        kw = dict(on_save=self._on_settings_save, on_apply=self._on_settings_apply,
+                  on_close=_closed, on_restart=self.restart_app)
+        try:
+            self.settings_win = settings_app.SettingsApp(self.root, self.cfg, tab=tab, **kw)
+        except TypeError:
+            # меню старішої версії (не докачалось) — відкриваємо без вибору вкладки
+            dc_core.dlog("SettingsApp without tab= (older settings_app.py)")
+            self.settings_win = settings_app.SettingsApp(self.root, self.cfg, **kw)
 
     def _on_settings_save(self, cfg):
         self.cfg = cfg
