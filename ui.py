@@ -693,15 +693,20 @@ class ScrollArea(tk.Frame):
             pass
 
 
-def logo(c, x, y, s, P, tags=()):
-    """Логотип програми: градієнтний заокруглений квадрат зі стрілкою «стиснути»."""
-    grad_round_rect(c, x, y, x + s, y + s, s * 0.28, P["accent"], accent2(P), tags=tags,
-                    step=1)
-    cx = x + s / 2
-    w = s * 0.07
-    c.create_line(cx, y + s * 0.22, cx, y + s * 0.56, fill="#ffffff", width=max(2, s * 0.13),
-                  capstyle="round", tags=tags)
-    c.create_polygon(cx - s * 0.22, y + s * 0.46, cx + s * 0.22, y + s * 0.46, cx, y + s * 0.68,
-                     fill="#ffffff", outline="", tags=tags)
-    c.create_line(x + s * 0.24, y + s * 0.78, x + s * 0.76, y + s * 0.78, fill="#ffffff",
-                  width=max(2, w * 1.4), capstyle="round", tags=tags)
+_LOGO_CACHE = {}
+
+
+def logo(c, x, y, s, P=None, tags=()):
+    """Значок програми — ТОЙ САМИЙ, що в треї/на ярлику (appicon: синій заокруглений
+    квадрат зі стрілкою в «диск»), просто потрібного розміру. P лишено для сумісності."""
+    s = int(s)
+    img = _LOGO_CACHE.get(s)
+    if img is None:
+        try:
+            import base64
+            import appicon
+            img = tk.PhotoImage(data=base64.b64encode(appicon._png_bytes(s)))
+        except Exception:
+            return None
+        _LOGO_CACHE[s] = img
+    return c.create_image(x, y, image=img, anchor="nw", tags=tags)

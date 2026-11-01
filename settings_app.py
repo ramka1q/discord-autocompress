@@ -28,6 +28,8 @@ import themes
 import ui
 
 APP_VERSION = "2.0"
+# коли вийшла ця версія (дата і час публікації на GitHub) — оновлюється з кожним релізом
+APP_RELEASED = "2026-11-01 19:25"
 REPO_URL = "https://github.com/ramka1q/discord-autocompress"
 F = themes.FONT
 
@@ -104,6 +106,15 @@ class SettingsApp:
 
     def T(self, key, **kw):
         return i18n.tr(self.lang, key, **kw)
+
+    def _released(self):
+        """«вийшла 01.11.2026 о 19:40» поточною мовою."""
+        try:
+            d, t = APP_RELEASED.split()
+            y, m, dd = d.split("-")
+            return self.T("released", d=f"{dd}.{m}.{y}", t=t)
+        except ValueError:
+            return APP_RELEASED
 
     # ---------- вікно ----------
     def _center(self):
@@ -228,6 +239,8 @@ class SettingsApp:
         ui.grad_round_rect(title, vx, 15, vx + vw, 31, 8, P["accent"], ui.accent2(P), tags="drag")
         title.create_text(vx + vw / 2, 23, text=vtxt, fill=ui.ink(P["accent"]),
                           font=(F, 8, "bold"), tags="drag")
+        title.create_text(vx + vw + 10, 23, text=self._released(), anchor="w", fill=P["muted"],
+                          font=(F, 8), tags="drag")
         title.tag_bind("drag", "<Button-1>", self._drag_start)
         title.tag_bind("drag", "<B1-Motion>", self._drag_move)
         title.bind("<Button-1>", self._drag_start)
@@ -660,6 +673,7 @@ class SettingsApp:
         ui.logo(ic, 2, 2, 52, self.P)
         txt = tk.Frame(top, bg=c.cget("bg")); txt.pack(side="left", fill="x", expand=True)
         self._lbl(txt, f"Discord Auto-Compress  v{APP_VERSION}", size=12, bold=True).pack(anchor="w")
+        self._lbl(txt, self._released(), size=9, muted=True).pack(anchor="w")
         self.upd_status = self._lbl(txt, self.T("upd_idle"), size=10, muted=True)
         self.upd_status.pack(anchor="w", pady=(2, 0))
         self.upd_row = tk.Frame(c, bg=c.cget("bg")); self.upd_row.pack(anchor="w", pady=(16, 0))
@@ -939,7 +953,7 @@ class SettingsApp:
                              font=(F, 17, "bold"))
             hero.create_text(130, 80, anchor="w", text=self.T("st_tagline"), fill=P["muted"],
                              font=(F, 10), width=w - 150)
-            hero.create_text(130, 110, anchor="w", text=f"v{APP_VERSION}  ·  MIT  ·  Python + ffmpeg",
+            hero.create_text(130, 110, anchor="w", text=f"v{APP_VERSION}  ·  {self._released()}  ·  MIT",
                              fill=P["muted"], font=(F, 9))
         hero.bind("<Configure>", draw)
 

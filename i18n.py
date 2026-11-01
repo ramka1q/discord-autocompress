@@ -223,6 +223,7 @@ STR = {
     "ov_parts_prog":    {"uk": "готово {i} з {n} частин (паралельно)", "ru": "готово {i} из {n} частей (параллельно)",
                          "en": "{i} of {n} parts done (in parallel)"},
     "ov_editor_fail":   {"uk": "Редактор недоступний:", "ru": "Редактор недоступен:", "en": "Editor unavailable:"},
+    "released":         {"uk": "вийшла {d} о {t}", "ru": "вышла {d} в {t}", "en": "released {d} at {t}"},
     "ov_back":          {"uk": "Назад", "ru": "Назад", "en": "Back"},
     "ov_cancelling":    {"uk": "Скасовую…", "ru": "Отменяю…", "en": "Cancelling…"},
 
