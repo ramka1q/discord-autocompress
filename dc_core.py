@@ -213,7 +213,7 @@ def have_ffmpeg() -> bool:
         return False
 
 
-BUILD = "2026-11-16-v2.4.1-panel-toggle"   # маркер версії коду — щоб у логах бачити, чи юзер на новому коді
+BUILD = "2026-11-16-v2.5-gpu-single-pass"   # маркер версії коду — щоб у логах бачити, чи юзер на новому коді
 
 
 def probe_diag(path: str) -> str:

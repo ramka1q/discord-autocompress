@@ -498,6 +498,7 @@ class VideoEditor(tk.Toplevel):
         self._tip_after = None
         self._nudge_active = False   # щоб серія стрілок була ОДНИМ кроком undo
         self._playhead_x = 0
+        self._hwdec_try = []         # які апаратні декодери пробувати (ставить _single_pass)
         self._ffplay_pos = None      # РЕАЛЬНА позиція ffplay (парситься з його -stats)
         self._stat_offset = None
         self._stat_log_t = 0.0
@@ -3925,9 +3926,10 @@ class VideoEditor(tk.Toplevel):
             return False
         return True
 
-    def _compose(self, tmpd, joined, total, prog, cancel):
-        """Накладає self.ovls (прозорість/фейди/колір), тексти (drawtext) і підмішує
-        self.snds (гучність/фейди). Повертає новий шлях (або joined, якщо нічого; None=збій)."""
+    def _overlay_graph(self, cmd, fc, vin, ain, idx, total, tmpd, cw=None, ch=None, hwdec=False):
+        """Додає в граф накладки (прозорість/фейди/колір), тексти (drawtext) і звуки
+        (гучність/фейди). Входи дописує в cmd, фільтри — у fc.
+        Повертає (vout, aout, idx, відео_змінилось, звук_змінився)."""
         # позиції на доріжці (з пропусками) -> час ЕКСПОРТУ (пропуски стиснуто)
         ovls = [(o, self._gapless(o["at"])) for o in self.ovls]
         ovls = [(o, at) for o, at in ovls if at < total - 0.05]
@@ -3943,20 +3945,16 @@ class VideoEditor(tk.Toplevel):
                 b = min(total, self._gapless(t["at"] + t["dur"]))
                 if b - a > 0.05:
                     texts.append((t, a, b))
-        if not ovls and not snds and not texts:
-            return joined
-        cw, ch = self._ccw, self._cch
-        cmd = ["ffmpeg", "-y", "-i", joined]
-        fc, alabs = [], []
-        vin = "[0:v]"
-        idx = 1
+        cw, ch = (cw or self._ccw), (ch or self._cch)
+        alabs = []
         for j, (o, at) in enumerate(ovls):
             src = self.sources[o["src"]]
             d = min(o["e"] - o["s"], total - at)
             if src["kind"] == "image":
                 cmd += ["-loop", "1", "-t", f"{d:.3f}", "-i", src["path"]]
             else:
-                cmd += ["-ss", f"{o['s']:.3f}", "-t", f"{d:.3f}", "-i", src["path"]]
+                cmd += [*(self._hwdec_args(src) if hwdec else []),
+                        "-ss", f"{o['s']:.3f}", "-t", f"{d:.3f}", "-i", src["path"]]
             ovf, x, y = self._ovl_vf(o, cw, ch)
             fades = fx.fade_win(0.0, o["e"] - o["s"], fx.g(o, "fin"), fx.g(o, "fout"), "v", alpha=True)
             if fades:
@@ -3985,15 +3983,25 @@ class VideoEditor(tk.Toplevel):
             fc.append(f"[{idx}:a]{','.join(af)},adelay={ms}|{ms}[sa{k}]")
             alabs.append(f"[sa{k}]")
             idx += 1
+        aout = ain
         if alabs:
-            fc.append(f"[0:a]{''.join(alabs)}amix=inputs={len(alabs) + 1}:"
+            fc.append(f"{ain}{''.join(alabs)}amix=inputs={len(alabs) + 1}:"
                       f"duration=first:normalize=0[ao]")
-        vchanged = bool(ovls or texts)
+            aout = "[ao]"
+        return vin, aout, idx, bool(ovls or texts), bool(alabs)
+
+    def _compose(self, tmpd, joined, total, prog, cancel):
+        """Старий (процесорний) шлях: накладки/тексти/звуки поверх уже склеєного відео.
+        Повертає новий шлях (або joined, якщо нічого; None=збій)."""
+        cmd = ["ffmpeg", "-y", "-i", joined]
+        fc = []
+        vout, aout, _idx, vch, ach = self._overlay_graph(cmd, fc, "[0:v]", "[0:a]", 1, total, tmpd)
+        if not vch and not ach:
+            return joined
         out = os.path.join(tmpd, "composed.mp4")
         cmd += ["-filter_complex", ";".join(fc)]
-        cmd += ["-map", vin] if vchanged else ["-map", "0:v"]
-        cmd += ["-map", "[ao]"] if alabs else ["-map", "0:a"]
-        if vchanged:   # відео змінилось -> перекодовуємо; без накладок можна copy
+        cmd += ["-map", vout if vch else "0:v", "-map", aout if ach else "0:a"]
+        if vch:   # відео змінилось -> перекодовуємо; без накладок можна copy
             cmd += ["-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
                     "-pix_fmt", "yuv420p"]
         else:
@@ -4004,6 +4012,138 @@ class VideoEditor(tk.Toplevel):
             dc_core.dlog("MONTAGE compose FAIL " + " ".join(cmd)[-600:])
             return None
         return out
+
+    # ---------------- ШВИДКИЙ експорт: один прохід на відеокарті ------------- #
+    def _hwdec_args(self, src):
+        """Декодування відео ВІДЕОКАРТОЮ (NVDEC / D3D11VA) — якщо цей файл так декодується.
+        Перевіряємо на 0.5 с самого файлу один раз; інакше [] (декодує процесор)."""
+        if src.get("kind") != "video" or not self._hwdec_try:
+            return []
+        if "hwdec" not in src:
+            src["hwdec"] = ""
+            for dec in self._hwdec_try:
+                try:
+                    r = subprocess.run(["ffmpeg", "-v", "error", "-hwaccel", dec, "-t", "0.5",
+                                        "-i", src["path"], "-an", "-f", "null", "-"],
+                                       capture_output=True, creationflags=dc_core.NO_WINDOW,
+                                       timeout=20)
+                    if r.returncode == 0 and not r.stderr.strip():
+                        src["hwdec"] = dec
+                        break
+                except Exception:
+                    pass
+            dc_core.dlog(f"HWDEC {src['name']}: {src['hwdec'] or 'cpu'}")
+        return ["-hwaccel", src["hwdec"]] if src["hwdec"] else []
+
+    def _single_pass(self, out_path, target, prog, cancel, hw):
+        """ВЕСЬ монтаж (кліпи, швидкість, колір, масштаб, фейди, переходи, накладки, текст,
+        звуки) одним графом ffmpeg -> одразу стиснене відео енкодером відеокарти (як CapCut).
+        Повертає (ok, msg, mb) або None — тоді викликач іде старим шляхом."""
+        clips = [self.pieces[ix] for ix in self.order]
+        cw, ch, fps = self._ccw, self._cch, self._cfps
+        durs = [(p["e"] - p["s"]) / p["speed"] for p in clips]
+        trs = [self._tr_d(k) for k in range(len(clips))]
+        total = max(0.1, sum(durs) - sum(trs))
+        akbps = int(self.cfg["audio_kbps"])
+        v_kbps = dc_core.calc_video_kbps(total, target, akbps, True)
+        if not v_kbps or v_kbps < 50:
+            return False, dc_core._t("core_toolong"), 0.0
+        # розмір під ліміт рахуємо НАПЕРЕД і будуємо весь граф одразу в ньому:
+        # переходи/текст/розмиття на 480p замість 1080p — у рази менше роботи
+        info = {"duration": total, "has_audio": True, "width": cw, "height": ch, "fps": fps}
+        scale = (dc_core.pick_auto_scale(info, target, akbps)
+                 if self.cfg.get("auto_scale", True) else 0)
+        if scale and scale < min(cw, ch):
+            k = scale / float(min(cw, ch))
+            cw, ch = max(2, int(cw * k / 2) * 2), max(2, int(ch * k / 2) * 2)
+        self._hwdec_try = ["cuda", "d3d11va"] if hw == "h264_nvenc" else ["d3d11va"]
+        tmpd = tempfile.mkdtemp(prefix="d1p_")
+        try:
+            cmd = ["ffmpeg", "-y"]
+            fc = []
+            idx = 0
+            afmt = "aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo"
+            for i, p in enumerate(clips):
+                src = self._src(p)
+                dd = durs[i]
+                vf = self._transform_vf(p, cw, ch)
+                vfade = fx.fade_win(0.0, dd, fx.g(p, "fin"), fx.g(p, "fout"), "v")
+                afade = fx.fade_win(0.0, dd, fx.g(p, "fin"), fx.g(p, "fout"), "a")
+                sp = p["speed"]
+                if src["kind"] == "image":
+                    cmd += ["-loop", "1", "-framerate", f"{fps:g}", "-t", f"{dd:.3f}", "-i", src["path"]]
+                    chain = [vf]
+                    use_a = False
+                else:
+                    cmd += [*self._hwdec_args(src), "-ss", f"{p['s']:.3f}",
+                            "-t", f"{p['e'] - p['s']:.3f}", "-i", src["path"]]
+                    chain = [f"setpts=(PTS-STARTPTS)/{sp:g}", vf]
+                    vol = fx.g(p, "vol")
+                    use_a = src["has_audio"] and not p["mute"] and vol > 0.005
+                chain += [f"fps={fps:g}", f"trim=duration={dd:.3f}", "setpts=PTS-STARTPTS",
+                          "setsar=1", "format=yuv420p", "settb=AVTB"] + vfade
+                fc.append(f"[{idx}:v]" + ",".join(chain) + f"[cv{i}]")
+                if use_a:
+                    af = ["asetpts=PTS-STARTPTS"] + ([self._atempo(sp)] if sp != 1.0 else [])
+                    af += ["aresample=44100", afmt] + fx.audio_chain(fx.g(p, "vol"), afade)
+                    af += ["apad", f"atrim=0:{dd:.3f}", "asetpts=PTS-STARTPTS"]
+                    fc.append(f"[{idx}:a]" + ",".join(af) + f"[ca{i}]")
+                else:                     # кліп без звуку -> тиша рівно на його довжину
+                    fc.append(f"anullsrc=r=44100:cl=stereo,atrim=0:{dd:.3f},{afmt}[ca{i}]")
+                idx += 1
+            # ---- склейка: concat, а на стиках з переходом — xfade + acrossfade ----
+            n = len(clips)
+            if n == 1:
+                vl, al = "[cv0]", "[ca0]"
+            elif not any(x > 0.01 for x in trs):
+                fc.append("".join(f"[cv{i}][ca{i}]" for i in range(n)) + f"concat=n={n}:v=1:a=1[jv][ja]")
+                vl, al = "[jv]", "[ja]"
+            else:
+                norm = f"fps={fps:g},format=yuv420p,settb=AVTB"   # fps ставить tb 1/fps -> settb ОСТАННІМ
+                vl, al = "[cv0]", "[ca0]"
+                cum = durs[0]
+                for i in range(1, n):
+                    d = trs[i]
+                    if d > 0.01:
+                        typ = (clips[i].get("tr") or {}).get("type", "fade")
+                        if typ not in fx.TRANSITIONS:
+                            typ = "fade"
+                        off = max(0.0, cum - d)
+                        fc.append(f"{vl}[cv{i}]xfade=transition={typ}:duration={d:.3f}:offset={off:.3f}[xf{i}]")
+                        fc.append(f"{al}[ca{i}]acrossfade=d={d:.3f}[ja{i}]")
+                        cum = off + durs[i]
+                        fc.append(f"[xf{i}]{norm}[jv{i}]")
+                    else:
+                        fc.append(f"{vl}{al}[cv{i}][ca{i}]concat=n=2:v=1:a=1[cc{i}][ja{i}]")
+                        cum += durs[i]
+                        fc.append(f"[cc{i}]{norm}[jv{i}]")
+                    vl, al = f"[jv{i}]", f"[ja{i}]"
+            # ---- накладки, текст, звуки — у тому ж графі ----
+            vl, al, idx, _vch, _ach = self._overlay_graph(cmd, fc, vl, al, idx, total, tmpd, cw, ch,
+                                                         hwdec=True)
+            fc.append(f"{vl}format=yuv420p[vout]")
+            graph = ";".join(fc)
+            ceiling = dc_core.target_ceiling(target)
+            kb, mb = max(50, int(v_kbps * 0.93)), 0.0
+            for attempt in range(3):
+                full = cmd + ["-filter_complex", graph, "-map", "[vout]", "-map", al,
+                              *dc_core._hw_args(hw, kb), "-pix_fmt", "yuv420p",
+                              "-c:a", "aac", "-b:a", f"{akbps}k", "-ac", "2",
+                              "-movflags", "+faststart", out_path]
+                rc = dc_core._run_pass(full, total, 0.0, 100.0, prog, cancel)
+                if cancel and cancel():
+                    return False, dc_core.cancelled_msg(), 0.0
+                if rc != 0 or not os.path.exists(out_path):
+                    dc_core.dlog(f"SINGLE-PASS {hw} FAIL rc={rc}: " + " ".join(full)[-900:])
+                    return None
+                mb = os.path.getsize(out_path) / 1024 / 1024
+                dc_core.dlog(f"SINGLE-PASS {hw} try={attempt} kbps={kb} -> {mb:.2f} MB (ceil {ceiling:.2f})")
+                if mb <= ceiling or kb <= 50:
+                    return True, "OK", mb
+                kb = max(50, int(kb * (ceiling / mb) * 0.95))
+            return True, "OK", mb
+        finally:
+            shutil.rmtree(tmpd, ignore_errors=True)
 
     def _render_and_compress(self, out_path, target, prog, cancel):
         tmpd = tempfile.mkdtemp(prefix="dmix_")
@@ -4024,9 +4164,17 @@ class VideoEditor(tk.Toplevel):
     def _export(self):
         if not self.order:
             return
+        simple = self._is_simple()
         try:
-            dc_core.dlog(f"EDITOR EXPORT build={dc_core.BUILD} simple={self._is_simple()} "
-                         f"clips={len(self.order)} sources={len(self.sources)} snds={len(self.snds)}")
+            hw = dc_core.active_hw()
+        except Exception:
+            hw = ""
+        # один кліп без ефектів -> compress зі start/dur (і так один прохід на відеокарті)
+        fast = bool(hw) and not (simple and len(self.order) == 1)
+        try:
+            dc_core.dlog(f"EDITOR EXPORT build={dc_core.BUILD} simple={simple} hw={hw or 'cpu'} "
+                         f"single_pass={fast} clips={len(self.order)} sources={len(self.sources)} "
+                         f"snds={len(self.snds)}")
         except Exception:
             pass
         self._pause()
@@ -4036,32 +4184,36 @@ class VideoEditor(tk.Toplevel):
         out_path = dc_core.output_name(self.file_path, target)
         self._start_export_jokes()
         prog = lambda p: self._ui(lambda: self._set_progress(p, E("ed_saving", p=int(p))))
+        self._export_t0 = time.monotonic()
 
-        if self._is_simple():
-            segs = [(self.pieces[ix]["s"], self.pieces[ix]["e"]) for ix in self.order]
-            scale = (dc_core.pick_auto_scale(self.info, target, self.cfg["audio_kbps"])
-                     if self.cfg.get("auto_scale", True) else 0)
+        def legacy():
+            if simple:
+                segs = [(self.pieces[ix]["s"], self.pieces[ix]["e"]) for ix in self.order]
+                scale = (dc_core.pick_auto_scale(self.info, target, self.cfg["audio_kbps"])
+                         if self.cfg.get("auto_scale", True) else 0)
+                return dc_core.compress_segments(
+                    self.file_path, out_path, target, scale, self.cfg["audio_kbps"],
+                    self.info, segs, progress_cb=prog, should_cancel=self._cancelled)
+            return self._render_and_compress(out_path, target, prog, self._cancelled)
 
-            def worker():
-                try:
-                    ok, msg, mb = dc_core.compress_segments(
-                        self.file_path, out_path, target, scale, self.cfg["audio_kbps"],
-                        self.info, segs, progress_cb=prog, should_cancel=self._cancelled)
-                except Exception as e:
-                    import traceback
-                    dc_core.dlog("EXPORT EXCEPTION: " + repr(e) + "\n" + traceback.format_exc())
-                    ok, msg, mb = False, f'{E("ov_err_prefix")} {str(e)[:60]}', 0.0
-                self._ui(lambda: self._done(ok, out_path, mb, msg))
-        else:
-            def worker():
-                try:
-                    ok, msg, mb = self._render_and_compress(out_path, target, prog,
-                                                            self._cancelled)
-                except Exception as e:
-                    import traceback
-                    dc_core.dlog("EXPORT EXCEPTION: " + repr(e) + "\n" + traceback.format_exc())
-                    ok, msg, mb = False, f'{E("ov_err_prefix")} {str(e)[:60]}', 0.0
-                self._ui(lambda: self._done(ok, out_path, mb, msg))
+        def worker():
+            try:
+                res = None
+                if fast:
+                    res = self._single_pass(out_path, target, prog, self._cancelled, hw)
+                    if res is None and not self._cancelled():
+                        dc_core.dlog("SINGLE-PASS failed -> legacy export")
+                        prog(0.0)
+                if res is None:
+                    res = legacy()
+                ok, msg, mb = res
+            except Exception as e:
+                import traceback
+                dc_core.dlog("EXPORT EXCEPTION: " + repr(e) + "\n" + traceback.format_exc())
+                ok, msg, mb = False, f'{E("ov_err_prefix")} {str(e)[:60]}', 0.0
+            dc_core.dlog(f"EDITOR EXPORT done ok={ok} in {time.monotonic() - self._export_t0:.1f}s "
+                         f"mb={mb:.2f}")
+            self._ui(lambda: self._done(ok, out_path, mb, msg))
 
         threading.Thread(target=worker, daemon=True).start()
 
