@@ -10,6 +10,20 @@ changelog.py — версія програми та список змін по �
 REPO_URL = "https://github.com/ramka1q/discord-autocompress"
 
 CHANGES = [
+    {"v": "2.6", "date": "2026-11-16 18:35", "items": [
+        {"icon": "🎵", "tab": None,
+         "uk": ("Зберегти тільки звук", "Кнопка формату біля «Зберегти»: відео (MP4), тільки звук (MP3) або GIF."),
+         "ru": ("Сохранить только звук", "Кнопка формата возле «Сохранить»: видео (MP4), только звук (MP3) или GIF."),
+         "en": ("Save audio only", "Format button next to “Save”: video (MP4), audio only (MP3) or GIF.")},
+        {"icon": "🎛", "tab": None,
+         "uk": ("Ефекти звуку", "Slowed + Reverb, Nightcore, бас-буст, earrape, 8D, телефон, під водою, луна, тон і реверб."),
+         "ru": ("Эффекты звука", "Slowed + Reverb, Nightcore, басс-буст, earrape, 8D, телефон, под водой, эхо, тон и реверб."),
+         "en": ("Sound effects", "Slowed + Reverb, Nightcore, bass boost, earrape, 8D, phone, underwater, echo, pitch and reverb.")},
+        {"icon": "💀", "tab": None,
+         "uk": ("Гучність до 10000%", "Експериментально — для угару. Права половина повзунка гучності."),
+         "ru": ("Громкость до 10000%", "Экспериментально — для угара. Правая половина ползунка громкости."),
+         "en": ("Volume up to 10000%", "Experimental — just for fun. The right half of the volume slider.")},
+    ]},
     {"v": "2.5", "date": "2026-11-16 18:13", "items": [
         {"icon": "⚡", "tab": "gpu",
          "uk": ("Редактор зберігає втричі швидше", "Весь монтаж — один прохід: відеокарта і декодує, і кодує, ефекти рахуються одразу в потрібному розмірі."),

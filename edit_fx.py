@@ -12,7 +12,25 @@ import os
 
 # ---- властивості кліпа за замовчуванням (нові поля; старі кліпи їх не мають) ----
 PIECE_DEFAULTS = {"vol": 1.0, "fin": 0.0, "fout": 0.0, "flt": "none",
-                  "br": 0.0, "ct": 1.0, "sat": 1.0, "rot": 0, "flip": False}
+                  "br": 0.0, "ct": 1.0, "sat": 1.0, "rot": 0, "flip": False,
+                  # ефекти звуку: тон (півтони), бас (дБ), реверб (0..1), ефект
+                  "pitch": 0.0, "bass": 0.0, "rev": 0.0, "aeff": "none"}
+AFX_KEYS = ("pitch", "bass", "rev", "aeff")
+AUDIO_EFFECTS = ["none", "phone", "underwater", "8d", "echo"]
+_AEFF = {
+    "phone": "highpass=f=400,lowpass=f=3000",
+    "underwater": "lowpass=f=450,lowpass=f=450",
+    "8d": "aformat=channel_layouts=stereo,apulsator=hz=0.125:amount=0.9",
+    "echo": "aecho=0.8:0.6:350|700:0.45|0.25",
+}
+# пресети: тон / бас / реверб / ефект / швидкість кліпа (None — не чіпати) / гучність
+AUDIO_PRESETS = {
+    "none":      {"pitch": 0.0, "bass": 0.0, "rev": 0.0, "aeff": "none", "speed": 1.0},
+    "slowed":    {"pitch": -2.8, "bass": 4.0, "rev": 0.6, "aeff": "none", "speed": 0.85},
+    "nightcore": {"pitch": 3.9, "bass": 2.0, "rev": 0.0, "aeff": "none", "speed": 1.25},
+    "bass":      {"pitch": 0.0, "bass": 18.0, "rev": 0.0, "aeff": "none", "speed": None},
+    "earrape":   {"pitch": 0.0, "bass": 28.0, "rev": 0.0, "aeff": "none", "speed": None, "vol": 30.0},
+}
 
 FILTERS = ["none", "bw", "vivid", "warm", "cool", "vintage", "film", "fade"]
 _FILTER_VF = {
@@ -123,8 +141,65 @@ def alpha_factor(tau, dur, fin, fout):
     return a
 
 
-def audio_chain(vol, fades):
+VOL_MAX = 100.0     # 10000% — експериментально («для угару»)
+
+
+def pos_vol(pos):
+    """Позиція повзунка 0..1 -> гучність. Ліва половина 0..100%, права — 100%..10000%."""
+    pos = max(0.0, min(1.0, float(pos)))
+    if pos <= 0.5:
+        return pos * 2.0
+    return VOL_MAX ** ((pos - 0.5) * 2.0)
+
+
+def vol_pos(v):
+    import math
+    v = max(0.0, float(v))
+    if v <= 1.0:
+        return v / 2.0
+    return 0.5 + min(1.0, math.log(v) / math.log(VOL_MAX)) / 2.0
+
+
+def atempo_chain(sp):
+    parts, v = [], float(sp)
+    while v > 2.0:
+        parts.append("atempo=2.0"); v /= 2.0
+    while v < 0.5:
+        parts.append("atempo=0.5"); v /= 0.5
+    parts.append(f"atempo={v:.6f}")
+    return parts
+
+
+def afx_default(p):
+    return all(g(p, k) == PIECE_DEFAULTS[k] for k in AFX_KEYS)
+
+
+def afx_chain(p):
+    """Ефекти звуку: тон без зміни довжини, бас-буст, ефект (телефон/вода/8D/луна), реверб."""
+    if not p:
+        return []
     out = []
+    pitch = float(g(p, "pitch") or 0.0)
+    if abs(pitch) > 0.05:
+        r = 2.0 ** (pitch / 12.0)
+        out += ["aresample=44100", f"asetrate={int(round(44100 * r))}", "aresample=44100"]
+        out += atempo_chain(1.0 / r)              # повертаємо довжину — змінюється лише тон
+    bass = float(g(p, "bass") or 0.0)
+    if bass > 0.3:
+        out.append(f"bass=g={num(bass)}:f=100:w=0.6")
+    e = _AEFF.get(g(p, "aeff"))
+    if e:
+        out.append(e)
+    rev = float(g(p, "rev") or 0.0)
+    if rev > 0.02:
+        a = 0.12 + 0.5 * rev
+        out.append(f"aecho=0.85:{num(0.55 + 0.35 * rev)}:43|71|113|167|241:"
+                   f"{num(a)}|{num(a * 0.75)}|{num(a * 0.55)}|{num(a * 0.4)}|{num(a * 0.28)}")
+    return out
+
+
+def audio_chain(obj, vol, fades):
+    out = afx_chain(obj)
     if abs(float(vol) - 1.0) > 1e-3:
         out.append(f"volume={num(vol)}")
     return out + list(fades)

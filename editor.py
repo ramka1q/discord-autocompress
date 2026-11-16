@@ -612,10 +612,15 @@ class VideoEditor(tk.Toplevel):
         ec = tk.Frame(top, bg=C_DARK)
         ec.pack(side="right", padx=(6, 12), pady=7)
         self._btn(ec, E("ov_cancel"), self._close, primary=False).pack(side="left", padx=3)
-        self.gif_btn = self._btn(ec, "🎞 GIF", self._export_gif, primary=False)
-        self.gif_btn.pack(side="left", padx=3)
-        self.export_btn = self._btn(ec, E("ed_export"), self._export)
+        fm = self.cfg.get("editor_export")
+        self._xfmt = fm if fm in ("video", "audio", "gif") else "video"
+        self.fmt_btn = self._btn(ec, "🎬 MP4 ▾", self._fmt_menu, primary=False)
+        self.fmt_btn.pack(side="left", padx=3)
+        Tip(self.fmt_btn, E("ed_fmt_tt"))
+        self.gif_btn = self.fmt_btn          # під час збереження вимикається разом з експортом
+        self.export_btn = self._btn(ec, E("ed_export"), self._export_any)
         self.export_btn.pack(side="left", padx=3)
+        self._update_fmt()
         self.info_lbl = tk.Label(top, text="", bg=C_DARK, fg=C_TEXT, font=(FONT, 10, "bold"))
         self.info_lbl.pack(side="right", padx=10)
         # тонка смужка прогресу збереження під верхньою панеллю
@@ -2415,6 +2420,8 @@ class VideoEditor(tk.Toplevel):
                     lab += "  🎨"
                 if fx.g(p, "fin") > 0.01 or fx.g(p, "fout") > 0.01:
                     lab += "  ◐"
+                if not fx.afx_default(p):
+                    lab += "  🎛"
                 if self._src(p)["kind"] == "image":
                     lab = "🖼 " + lab
                 tx = max(cx1 + (14 if sel else 6), LX + 6)
@@ -3028,7 +3035,7 @@ class VideoEditor(tk.Toplevel):
         m.add_command(label=f"🎵  {sn['name']}", state="disabled")
         m.add_command(label=E("ed_listen"), command=lambda: self._preview_sound(sn))
         vol = self._menu_new()
-        for v in (0.25, 0.5, 0.75, 1.0, 1.5, 2.0):
+        for v in (0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 5.0, 10.0, 100.0):
             vol.add_command(label=(f"{int(v * 100)}%" + ("   ✓" if sn["vol"] == v else "")),
                             command=lambda v=v: self._set_snd_vol(i, v))
         m.add_cascade(label=E("ed_volume", v=int(sn['vol'] * 100)), menu=vol)
@@ -3539,7 +3546,7 @@ class VideoEditor(tk.Toplevel):
             return vf, None, False
         vol = 0.0 if piece["mute"] else fx.g(piece, "vol")
         ach = ["asetpts=PTS-STARTPTS"] + ([self._atempo(sp)] if sp != 1.0 else [])
-        ach += fx.audio_chain(vol, fx.fade_win(-off, cdur - off, fx.g(piece, "fin"),
+        ach += fx.audio_chain(piece, vol, fx.fade_win(-off, cdur - off, fx.g(piece, "fin"),
                                                fx.g(piece, "fout"), "a"))
         aparts = ["[in]" + ",".join(ach) + "[a0]"]
         labs = []
@@ -3552,7 +3559,7 @@ class VideoEditor(tk.Toplevel):
             if seek > 0.01:
                 mv += f":seek_point={seek:.3f}"
             ms = int(max(0.0, a) * 1000)
-            ach2 = ["asetpts=PTS-STARTPTS", "aresample=44100"] + fx.audio_chain(
+            ach2 = ["asetpts=PTS-STARTPTS", "aresample=44100"] + fx.audio_chain(sn,
                 sn["vol"], fx.fade_win(-seek, sn["dur"] - seek, sn.get("fin", 0.0),
                                        sn.get("fout", 0.0), "a"))
             if ms:
@@ -3731,6 +3738,18 @@ class VideoEditor(tk.Toplevel):
             return
         total = self._total()
         target = float(self.cfg["target_mb"])
+        if getattr(self, "_xfmt", "video") == "audio":
+            kb = self._mp3_kbps(total, target)
+            self.info_lbl.config(text=(f"🎵 MP3 · {kb} kbps" if kb else E("ed_q_long")),
+                                 fg=(C_GREEN if kb >= 128 else host.C_WARN if kb else C_RED))
+            self.export_btn.config(state=("normal" if kb else "disabled"))
+            return
+        if getattr(self, "_xfmt", "video") == "gif":
+            okg = total <= 30
+            self.info_lbl.config(text=("🎞 GIF" if okg else dc_core._t("core_gif_long")),
+                                 fg=(C_GREEN if okg else C_RED))
+            self.export_btn.config(state=("normal" if okg else "disabled"))
+            return
         has_a = bool(self.snds) or any(
             self._src(self.pieces[ix])["has_audio"] and not self.pieces[ix]["mute"]
             for ix in self.order) or any(
@@ -3846,7 +3865,7 @@ class VideoEditor(tk.Toplevel):
                         "-pix_fmt", "yuv420p"]
                 if use_a:
                     af = ([self._atempo(sp)] if sp != 1.0 else []) + ["aresample=44100"]
-                    af += fx.audio_chain(vol, afade)
+                    af += fx.audio_chain(p, vol, afade)
                     cmd += ["-af", ",".join(af), "-ac", "2", "-c:a", "aac", "-b:a", "192k"]
                 else:
                     cmd += ["-c:a", "aac", "-b:a", "192k", "-shortest"]
@@ -3966,7 +3985,7 @@ class VideoEditor(tk.Toplevel):
             vol = fx.g(o, "vol")
             if src["kind"] == "video" and src["has_audio"] and not o["mute"] and vol > 0.005:
                 ms = int(at * 1000)
-                af = [f"atrim=0:{d:.3f}", "aresample=44100"] + fx.audio_chain(
+                af = [f"atrim=0:{d:.3f}", "aresample=44100"] + fx.audio_chain(o,
                     vol, fx.fade_win(0.0, o["e"] - o["s"], fx.g(o, "fin"), fx.g(o, "fout"), "a"))
                 fc.append(f"[{idx}:a]{','.join(af)},adelay={ms}|{ms}[oa{j}]")
                 alabs.append(f"[oa{j}]")
@@ -3978,7 +3997,7 @@ class VideoEditor(tk.Toplevel):
         for k, (sn, at) in enumerate(snds):
             cmd += ["-i", sn["path"]]
             ms = int(at * 1000)
-            af = ["aresample=44100"] + fx.audio_chain(
+            af = ["aresample=44100"] + fx.audio_chain(sn,
                 sn["vol"], fx.fade_win(0.0, sn["dur"], sn.get("fin", 0.0), sn.get("fout", 0.0), "a"))
             fc.append(f"[{idx}:a]{','.join(af)},adelay={ms}|{ms}[sa{k}]")
             alabs.append(f"[sa{k}]")
@@ -4085,7 +4104,7 @@ class VideoEditor(tk.Toplevel):
                 fc.append(f"[{idx}:v]" + ",".join(chain) + f"[cv{i}]")
                 if use_a:
                     af = ["asetpts=PTS-STARTPTS"] + ([self._atempo(sp)] if sp != 1.0 else [])
-                    af += ["aresample=44100", afmt] + fx.audio_chain(fx.g(p, "vol"), afade)
+                    af += ["aresample=44100", afmt] + fx.audio_chain(p, fx.g(p, "vol"), afade)
                     af += ["apad", f"atrim=0:{dd:.3f}", "asetpts=PTS-STARTPTS"]
                     fc.append(f"[{idx}:a]" + ",".join(af) + f"[ca{i}]")
                 else:                     # кліп без звуку -> тиша рівно на його довжину
@@ -4217,6 +4236,167 @@ class VideoEditor(tk.Toplevel):
 
         threading.Thread(target=worker, daemon=True).start()
 
+    # ------------------------------ формат збереження: відео / звук / GIF ---- #
+    def _update_fmt(self):
+        try:
+            self.fmt_btn.config(text={"video": "🎬 MP4 ▾", "audio": "🎵 MP3 ▾", "gif": "🎞 GIF ▾"}[self._xfmt])
+            self.export_btn.config(text={"video": E("ed_export"), "audio": E("ed_export_audio"),
+                                         "gif": E("ed_export_gif")}[self._xfmt])
+        except (tk.TclError, AttributeError):
+            pass
+
+    def _fmt_menu(self):
+        if self.busy:
+            return
+        m = self._menu_new()
+        for k in ("video", "audio", "gif"):
+            m.add_command(label=E("fmt_" + k) + ("   ✓" if k == self._xfmt else ""),
+                          command=lambda k=k: self._set_fmt(k))
+        b = self.fmt_btn
+        self._popup(m, b.winfo_rootx(), b.winfo_rooty() + b.winfo_height())
+
+    def _set_fmt(self, k):
+        self._xfmt = k
+        self.cfg["editor_export"] = k          # запам'ятати вибір
+        try:
+            host.save_config(self.cfg)
+        except Exception:
+            pass
+        self._update_fmt()
+        self._update_info()
+
+    def _export_any(self):
+        if self._xfmt == "audio":
+            self._export_audio()
+        elif self._xfmt == "gif":
+            self._export_gif()
+        else:
+            self._export()
+
+    @staticmethod
+    def _mp3_kbps(total, target):
+        """Найкращий бітрейт MP3, з яким звук влазить у ліміт Discord (0 — задовго)."""
+        budget = dc_core.target_ceiling(target) * 1024 * 1024 * 0.97 * 8 / 1000.0 / max(0.1, total)
+        for kb in (192, 160, 128, 112, 96, 80, 64, 56, 48, 40, 32):
+            if kb <= budget:
+                return kb
+        return 0
+
+    def _export_audio(self):
+        if not self.order:
+            return
+        total = self._total()
+        target = float(self.cfg["target_mb"])
+        kb = self._mp3_kbps(total, target)
+        if not kb:
+            self.info_lbl.config(text=E("ed_q_long"), fg=C_RED)
+            return
+        self._pause()
+        self.busy = True
+        self.export_btn.config(state="disabled")
+        self.fmt_btn.config(state="disabled")
+        out_path = os.path.splitext(dc_core.output_name(self.file_path, target))[0] + ".mp3"
+        self._start_export_jokes()
+        prog = lambda p: self._ui(lambda: self._set_progress(p, E("ed_saving", p=int(p))))
+        t0 = time.monotonic()
+
+        def worker():
+            try:
+                ok, msg, mb = self._render_audio(out_path, kb, total, prog, self._cancelled)
+            except Exception as e:
+                import traceback
+                dc_core.dlog("AUDIO EXPORT EXCEPTION: " + repr(e) + "\n" + traceback.format_exc())
+                ok, msg, mb = False, f'{E("ov_err_prefix")} {str(e)[:60]}', 0.0
+            dc_core.dlog(f"AUDIO EXPORT ok={ok} kbps={kb} {mb:.2f} MB in {time.monotonic() - t0:.1f}s")
+            self._ui(lambda: self._done(ok, out_path, mb, msg))
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _render_audio(self, out_path, kb, total, prog, cancel):
+        """Звук УСЬОГО монтажу (гучність, фейди, швидкість, переходи, накладки, додані звуки)
+        -> MP3. Відео не декодується зовсім (-vn на входах) — дуже швидко."""
+        clips = [self.pieces[ix] for ix in self.order]
+        durs = [(p["e"] - p["s"]) / p["speed"] for p in clips]
+        trs = [self._tr_d(k) for k in range(len(clips))]
+        afmt = "aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo"
+        cmd = ["ffmpeg", "-y"]
+        fc = []
+        idx = 0
+        any_audio = False
+        for i, p in enumerate(clips):
+            src = self._src(p)
+            dd = durs[i]
+            sp = p["speed"]
+            vol = fx.g(p, "vol")
+            if src["kind"] == "video" and src["has_audio"] and not p["mute"] and vol > 0.005:
+                any_audio = True
+                cmd += ["-vn", "-ss", f"{p['s']:.3f}", "-t", f"{p['e'] - p['s']:.3f}", "-i", src["path"]]
+                af = ["asetpts=PTS-STARTPTS"] + ([self._atempo(sp)] if sp != 1.0 else [])
+                af += ["aresample=44100", afmt] + fx.audio_chain(p,
+                    vol, fx.fade_win(0.0, dd, fx.g(p, "fin"), fx.g(p, "fout"), "a"))
+                af += ["apad", f"atrim=0:{dd:.3f}", "asetpts=PTS-STARTPTS"]
+                fc.append(f"[{idx}:a]" + ",".join(af) + f"[ca{i}]")
+                idx += 1
+            else:
+                fc.append(f"anullsrc=r=44100:cl=stereo,atrim=0:{dd:.3f},{afmt}[ca{i}]")
+        n = len(clips)
+        if n == 1:
+            al = "[ca0]"
+        elif not any(x > 0.01 for x in trs):
+            fc.append("".join(f"[ca{i}]" for i in range(n)) + f"concat=n={n}:v=0:a=1[ja]")
+            al = "[ja]"
+        else:
+            al = "[ca0]"
+            for i in range(1, n):
+                if trs[i] > 0.01:
+                    fc.append(f"{al}[ca{i}]acrossfade=d={trs[i]:.3f}[ja{i}]")
+                else:
+                    fc.append(f"{al}[ca{i}]concat=n=2:v=0:a=1[ja{i}]")
+                al = f"[ja{i}]"
+        labs = []
+        for j, o in enumerate(self.ovls):
+            src = self.sources[o["src"]]
+            at = self._gapless(o["at"])
+            vol = fx.g(o, "vol")
+            if (at >= total - 0.05 or src["kind"] != "video" or not src["has_audio"]
+                    or o["mute"] or vol <= 0.005):
+                continue
+            any_audio = True
+            d = min(o["e"] - o["s"], total - at)
+            cmd += ["-vn", "-ss", f"{o['s']:.3f}", "-t", f"{d:.3f}", "-i", src["path"]]
+            ms = int(at * 1000)
+            af = [f"atrim=0:{d:.3f}", "aresample=44100"] + fx.audio_chain(o,
+                vol, fx.fade_win(0.0, o["e"] - o["s"], fx.g(o, "fin"), fx.g(o, "fout"), "a"))
+            fc.append(f"[{idx}:a]{','.join(af)},adelay={ms}|{ms}[oa{j}]")
+            labs.append(f"[oa{j}]")
+            idx += 1
+        for k, sn in enumerate(self.snds):
+            at = self._gapless(sn["at"])
+            if at >= total - 0.05 or sn["vol"] <= 0.005 or not os.path.isfile(sn["path"]):
+                continue
+            any_audio = True
+            cmd += ["-i", sn["path"]]
+            ms = int(at * 1000)
+            af = ["aresample=44100"] + fx.audio_chain(sn,
+                sn["vol"], fx.fade_win(0.0, sn["dur"], sn.get("fin", 0.0), sn.get("fout", 0.0), "a"))
+            fc.append(f"[{idx}:a]{','.join(af)},adelay={ms}|{ms}[sa{k}]")
+            labs.append(f"[sa{k}]")
+            idx += 1
+        if not any_audio:
+            return False, E("ed_no_audio"), 0.0
+        if labs:
+            fc.append(f"{al}{''.join(labs)}amix=inputs={len(labs) + 1}:duration=first:normalize=0[mx]")
+            al = "[mx]"
+        fc.append(f"{al}aresample=44100,{afmt}[aout]")
+        full = cmd + ["-filter_complex", ";".join(fc), "-map", "[aout]", "-c:a", "libmp3lame",
+                      "-b:a", f"{kb}k", "-ar", "44100", "-ac", "2", out_path]
+        rc = dc_core._run_pass(full, total, 0.0, 100.0, prog, cancel)
+        if cancel and cancel():
+            return False, dc_core.cancelled_msg(), 0.0
+        if rc != 0 or not os.path.exists(out_path):
+            dc_core.dlog("AUDIO EXPORT FAIL: " + " ".join(full)[-800:])
+            return False, E("ed_save_fail"), 0.0
+        return True, "OK", os.path.getsize(out_path) / 1024 / 1024
+
     def _export_gif(self):
         if not self.order:
             return
@@ -4317,7 +4497,8 @@ class VideoEditor(tk.Toplevel):
         try:                                    # статистика: обрізка/монтаж/gif = теж стиснення
             import stats
             orig_mb = os.path.getsize(self.file_path) / (1024 * 1024)
-            stats.record("video", orig_mb, mb, [out_path])
+            stats.record("audio" if out_path.lower().endswith(".mp3") else "video",
+                         orig_mb, mb, [out_path])
         except Exception:
             pass
         try:

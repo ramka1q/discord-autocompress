@@ -219,6 +219,64 @@ class Inspector(tk.Frame):
             self.ed._btn(f, text, cmd, primary=False, small=True).pack(side="left", padx=2, pady=2)
         return f
 
+    def _vol_slider(self, obj, has_mute):
+        """Гучність 0..10000%: ліва половина повзунка — до 100%, права — експериментальний «угар»."""
+        def get():
+            v = 0.0 if (has_mute and obj.get("mute")) else float(obj.get("vol", 1.0))
+            return fx.vol_pos(v)
+
+        def set_(pos):
+            v = fx.pos_vol(pos)
+            if abs(v - 1.0) < 0.03:        # липне до 100%
+                v = 1.0
+            obj["vol"] = v
+            if has_mute:
+                obj["mute"] = v < 0.005
+
+        def fmt(pos):
+            v = fx.pos_vol(pos)
+            t = f"{int(round(v * 100))}%"
+            return t + ("  💀" if v >= 20 else "  🔥" if v > 2.0 else "")
+        return self._slider(self.E("ins_volume_x"), 0.0, 1.0, get, set_, fmt, 0.5)
+
+    def _afx(self, obj, can_speed):
+        """Ефекти звуку: пресети (Slowed+Reverb, Nightcore, бас-буст, earrape), ефект, тон, бас, реверб."""
+        E, ed = self.E, self.ed
+        self._section(E("ins_afx"))
+
+        def set_preset(key):
+            pr = fx.AUDIO_PRESETS[key]
+            for k in fx.AFX_KEYS:
+                obj[k] = pr[k]
+            if "vol" in pr:
+                obj["vol"] = pr["vol"]
+                obj.pop("mute", None) if "mute" not in obj else obj.__setitem__("mute", False)
+            obj["apreset"] = key
+            if can_speed and pr.get("speed") is not None:
+                ed._set_speed(pr["speed"], undo=False)
+            self.after_idle(lambda: self.sync(force=True))   # оновити повзунки
+        self._chips([(k, E("ap_" + k)) for k in fx.AUDIO_PRESETS],
+                    lambda: obj.get("apreset", "none" if fx.afx_default(obj) else None),
+                    set_preset, per_row=3)
+        self._chips([(k, E("ae_" + k)) for k in fx.AUDIO_EFFECTS],
+                    lambda: fx.g(obj, "aeff"),
+                    lambda v: (obj.__setitem__("aeff", v), obj.__setitem__("apreset", None)), per_row=5)
+
+        def setter(key, snap=None):
+            def f(v):
+                v = float(v)
+                if snap:
+                    v = round(v / snap) * snap
+                obj[key] = v
+                obj["apreset"] = None
+            return f
+        self._slider(E("ins_pitch"), -12.0, 12.0, lambda: float(fx.g(obj, "pitch")), setter("pitch", 0.5),
+                     lambda v: f"{v:+.1f}", 0.0)
+        self._slider(E("ins_bass"), 0.0, 30.0, lambda: float(fx.g(obj, "bass")), setter("bass", 0.5),
+                     lambda v: f"+{v:.0f} dB" + ("  💥" if v >= 15 else ""), 0.0)
+        self._slider(E("ins_reverb"), 0.0, 1.0, lambda: float(fx.g(obj, "rev")), setter("rev"),
+                     self._pct, 0.0)
+
     def _pct(self, v):
         return f"{int(round(v * 100))}%"
 
@@ -302,10 +360,10 @@ class Inspector(tk.Frame):
                         lambda: p["speed"], lambda v: ed._set_speed(v, undo=False), per_row=6)
         self._section(E("ins_sound_fade"))
         if src["kind"] == "video" and src["has_audio"]:
-            self._slider(E("ins_volume"), 0.0, 2.0, lambda: 0.0 if p["mute"] else fx.g(p, "vol"),
-                         lambda v: (p.__setitem__("vol", float(v)), p.__setitem__("mute", v < 0.005)),
-                         self._pct, 1.0)
+            self._vol_slider(p, True)
         self._fades(p, dur)
+        if src["kind"] == "video" and src["has_audio"]:
+            self._afx(p, can_speed=True)
         if ed.sel > 0:
             self._section(E("ins_trans"))
             self._chips([(None, E("tr_none"))] + [(t, E("tr_" + t)) for t in fx.TRANSITIONS],
@@ -331,10 +389,10 @@ class Inspector(tk.Frame):
         self._slider(E("ins_opacity"), 0.0, 1.0, lambda: float(o.get("op", 1.0)),
                      self._setp(o, "op"), self._pct, 1.0)
         if src["kind"] == "video" and src["has_audio"]:
-            self._slider(E("ins_volume"), 0.0, 2.0, lambda: 0.0 if o["mute"] else fx.g(o, "vol"),
-                         lambda v: (o.__setitem__("vol", float(v)), o.__setitem__("mute", v < 0.005)),
-                         self._pct, 1.0)
+            self._vol_slider(o, True)
         self._fades(o, o["e"] - o["s"])
+        if src["kind"] == "video" and src["has_audio"]:
+            self._afx(o, can_speed=False)
         self._look(o)
         self._section(E("ins_transform"))
         self._row([("⟳ 90°", ed._rotate), ("⇋ " + E("ins_flip"), ed._flip),
@@ -409,8 +467,8 @@ class Inspector(tk.Frame):
         self.head.config(text="🎵  " + E("ins_sound"))
         self.sub.config(text=s["name"] if len(s["name"]) <= 34 else s["name"][:32] + "…")
         self._section(E("ins_sound_fade"))
-        self._slider(E("ins_volume"), 0.0, 2.0, lambda: float(s["vol"]), self._setp(s, "vol"),
-                     self._pct, 1.0)
+        self._vol_slider(s, False)
         self._fades(s, s["dur"])
+        self._afx(s, can_speed=False)
         self._row([("▶ " + E("ins_listen"), lambda: ed._preview_sound(s)),
                    ("🗑", lambda: ed._del_snd(ed.snds.index(s)) if s in ed.snds else None)])
