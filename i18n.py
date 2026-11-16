@@ -525,6 +525,7 @@ STR = {
     "tr_zoomin": {"uk": "Наближення", "ru": "Приближение", "en": "Zoom in"},
     "tr_pixelize": {"uk": "Пікселі", "ru": "Пиксели", "en": "Pixelate"},
     "tr_radial": {"uk": "Радар", "ru": "Радар", "en": "Radial"},
+    "ed_tt_insp": {"uk": "Панель налаштувань: фільтри, гучність, текст…  (P)", "ru": "Панель настроек: фильтры, громкость, текст…  (P)", "en": "Settings panel: filters, volume, text…  (P)"},
     "ed_got_it":        {"uk": "Зрозуміло", "ru": "Понятно", "en": "Got it"},
     "ed_add_title":     {"uk": "Додати відео / картинки / звуки", "ru": "Добавить видео / картинки / звуки",
                          "en": "Add videos / images / sounds"},

@@ -323,6 +323,11 @@ class IconBtn(tk.Canvas):
             self._icon = icon
             self._draw()
 
+    def set_on(self, on):
+        if bool(on) != self._on:
+            self._on = bool(on)
+            self._draw()
+
     def set_state(self, st):
         st = str(st)
         if st != self._state:
@@ -350,6 +355,8 @@ class IconBtn(tk.Canvas):
                 fill = ui.mix(self._pbg, C_TEXT, 0.22)
             elif not dis and self._hover:
                 fill = ui.mix(self._pbg, C_TEXT, 0.12)
+            if self._on and not dis and not self._hover and not self._down:
+                fill = ui.mix(self._pbg, C_BLURPLE, 0.55)
             fg = ui.mix(self._pbg, C_MUTED, 0.45) if dis else C_TEXT
         if self._round:
             self.create_oval(1, 1, s - 1, s - 1, fill=fill, outline="")
@@ -658,6 +665,8 @@ class VideoEditor(tk.Toplevel):
         sep(lb)
         self.b_txt = ib(lb, "T", self._add_text, E("ed_tt_text"), fs=14)
         self.b_add = ib(lb, "➕", self._add_dialog, E("ed_tt_add"))
+        sep(lb)
+        self.b_insp = ib(lb, "⚙", self._toggle_insp, E("ed_tt_insp"), fs=13)
 
         rb = tk.Frame(bar, bg=C_BG2)
         rb.pack(side="right", padx=8, pady=4)
@@ -692,7 +701,7 @@ class VideoEditor(tk.Toplevel):
         P = {"bg2": C_BG2, "dark": C_DARK, "text": C_TEXT, "muted": C_MUTED,
              "accent": C_BLURPLE, "font": FONT}
         self._insp = edit_inspector.Inspector(self.mid, self, P, E)
-        self._insp.pack(side="right", fill="y", padx=(0, 12), pady=8)
+        self._insp_on = False        # права панель відкривається кнопкою ⚙ на панелі інструментів
         self.video = tk.Canvas(self.mid, width=self.VW + 2 * self.VPAD,
                                height=self.VH + 2 * self.VPAD, bg=C_BG, highlightthickness=0)
         self.video.pack(side="left", expand=True)
@@ -783,7 +792,7 @@ class VideoEditor(tk.Toplevel):
             return
         if mw < 100 or mh < 100:
             return
-        avail_w = mw - edit_inspector.Inspector.W - 2 * self.VPAD - 28
+        avail_w = mw - (edit_inspector.Inspector.W + 12 if self._insp_on else 0) - 2 * self.VPAD - 28
         avail_h = mh - 2 * self.VPAD - 4
         vw = max(240, min(avail_w, int(avail_h * 16 / 9)))
         vh = max(135, int(vw * 9 / 16))
@@ -1385,9 +1394,31 @@ class VideoEditor(tk.Toplevel):
         self._tf_on = True
         self._show_poster(self.cur)
         self._redraw()
+        self._toggle_insp(True)
         self.after(80, self._focus_text_box)
 
+    def _toggle_insp(self, show=None):
+        """Показати/сховати праву панель властивостей (кнопка ⚙). Плеєр займає звільнене місце."""
+        show = (not self._insp_on) if show is None else bool(show)
+        if show == self._insp_on:
+            return
+        self._insp_on = show
+        try:
+            if show:
+                self._insp.pack(side="right", fill="y", padx=(0, 12), pady=8, before=self.video)
+                self._insp.sync(force=True)
+            else:
+                self._insp.pack_forget()
+                self.focus_set()
+            self.b_insp.set_on(show)
+            self.update_idletasks()
+        except tk.TclError:
+            return
+        self._apply_resize()
+
     def _focus_text_box(self):
+        if not self._insp_on:
+            self._toggle_insp(True)
         b = getattr(self._insp, "text_box", None) if self._insp else None
         try:
             if b is not None and b.winfo_exists():
@@ -3688,6 +3719,8 @@ class VideoEditor(tk.Toplevel):
             self._toggle_mute()
         elif not ctrl and kc == 84:
             self._add_text()
+        elif not ctrl and kc == 80:
+            self._toggle_insp()
         else:
             return None
         return "break"

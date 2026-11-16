@@ -10,6 +10,12 @@ changelog.py — версія програми та список змін по �
 REPO_URL = "https://github.com/ramka1q/discord-autocompress"
 
 CHANGES = [
+    {"v": "2.4.1", "date": "2026-11-16 17:23", "items": [
+        {"icon": "⚙", "tab": None,
+         "uk": ("Панель налаштувань — за кнопкою", "Права панель редактора схована, відкривається кнопкою ⚙ (або клавішею P) — плеєр став більшим."),
+         "ru": ("Панель настроек — по кнопке", "Правая панель редактора скрыта, открывается кнопкой ⚙ (или клавишей P) — плеер стал больше."),
+         "en": ("Settings panel on demand", "The editor's right panel is hidden; open it with the ⚙ button (or P) — the player is bigger.")},
+    ]},
     {"v": "2.4", "date": "2026-11-16 17:12", "items": [
         {"icon": "▭", "tab": None,
          "uk": ("Формат кадру", "9:16 для TikTok / Shorts / Reels, 1:1, 4:5, 16:9 — кнопка вгорі редактора."),
