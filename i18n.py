@@ -402,7 +402,7 @@ STR = {
     "ed_remove":        {"uk": "🗑 Прибрати", "ru": "🗑 Убрать", "en": "🗑 Remove"},
     "ed_export":        {"uk": "Зберегти і вставити  ▶", "ru": "Сохранить и вставить  ▶", "en": "Save & paste  ▶"},
     "ed_help_title":    {"uk": "Як користуватись", "ru": "Как пользоваться", "en": "How to use"},
-    "ed_tips":          {"uk": "T  Кнопка «T» або клавіша T — текст: тягни на відео, стиль і колір — у панелі справа\n🎨  Панель справа: гучність, плавна поява/зникнення, фільтри, яскравість, поворот\n🎬  Клік по кліпу — вибрати · білі ручки з боків — обрізати\n"
+    "ed_tips":          {"uk": "⋈  Іконка «+» між кліпами — перехід (розчинення, зсув, коло…)\n▭  Кнопка формату вгорі — 9:16 для TikTok/Shorts, 1:1, 4:5; фон — розмите відео\nT  Кнопка «T» або клавіша T — текст: тягни на відео, стиль і колір — у панелі справа\n🎨  Панель справа: гучність, плавна поява/зникнення, фільтри, яскравість, поворот\n🎬  Клік по кліпу — вибрати · білі ручки з боків — обрізати\n"
                                "↔  Тягни кліп — переставити · тягни його ВГОРУ — стане накладкою\n"
                                "⏯  Білий повзунок (плейхед) тягни мишкою або клікай по лінійці часу\n"
                                "🖲  Ctrl+колесо — зум ТУДИ, ДЕ МИШКА · колесо — прокрутка · повзунок зуму справа\n"
@@ -413,7 +413,7 @@ STR = {
                                "➕  Ctrl+O або перетягни файли у вікно — відео / картинки / звуки\n"
                                "⌨  Пробіл — грати · S — розрізати · Delete — видалити · Ctrl+D — дублювати · M — звук\n"
                                "⌨  ◀ ▶ — по кадру (Shift = 1с) · Home / End · Ctrl+Z / Ctrl+Y · Ctrl+0 — вмістити все",
-                         "ru": "T  Кнопка «T» или клавиша T — текст: тяни на видео, стиль и цвет — в панели справа\n🎨  Панель справа: громкость, плавное появление/исчезновение, фильтры, яркость, поворот\n🎬  Клик по клипу — выбрать · белые ручки по бокам — обрезать\n"
+                         "ru": "⋈  Иконка «+» между клипами — переход (растворение, сдвиг, круг…)\n▭  Кнопка формата вверху — 9:16 для TikTok/Shorts, 1:1, 4:5; фон — размытое видео\nT  Кнопка «T» или клавиша T — текст: тяни на видео, стиль и цвет — в панели справа\n🎨  Панель справа: громкость, плавное появление/исчезновение, фильтры, яркость, поворот\n🎬  Клик по клипу — выбрать · белые ручки по бокам — обрезать\n"
                                "↔  Тяни клип — переставить · тяни его ВВЕРХ — станет наложением\n"
                                "⏯  Белый ползунок (плейхед) тяни мышкой или кликай по линейке времени\n"
                                "🖲  Ctrl+колесо — зум ТУДА, ГДЕ МЫШКА · колесо — прокрутка · ползунок зума справа\n"
@@ -424,7 +424,7 @@ STR = {
                                "➕  Ctrl+O или перетащи файлы в окно — видео / картинки / звуки\n"
                                "⌨  Пробел — играть · S — разрезать · Delete — удалить · Ctrl+D — дублировать · M — звук\n"
                                "⌨  ◀ ▶ — по кадру (Shift = 1с) · Home / End · Ctrl+Z / Ctrl+Y · Ctrl+0 — вместить всё",
-                         "en": "T  The “T” button or T key — text: drag it on the video, style & color in the right panel\n🎨  Right panel: volume, fade in/out, filters, brightness, rotate\n🎬  Click a clip to select it · drag the white side handles to trim\n"
+                         "en": "⋈  The “+” icon between clips — transition (dissolve, slide, circle…)\n▭  Format button at the top — 9:16 for TikTok/Shorts, 1:1, 4:5; blurred-video background\nT  The “T” button or T key — text: drag it on the video, style & color in the right panel\n🎨  Right panel: volume, fade in/out, filters, brightness, rotate\n🎬  Click a clip to select it · drag the white side handles to trim\n"
                                "↔  Drag a clip to reorder · drag it UP to turn it into an overlay\n"
                                "⏯  Drag the white playhead with the mouse or click the time ruler\n"
                                "🖲  Ctrl+wheel — zoom WHERE THE MOUSE IS · wheel — scroll · zoom slider on the right\n"
@@ -507,6 +507,24 @@ STR = {
     "flt_vintage": {"uk": "Вінтаж", "ru": "Винтаж", "en": "Vintage"},
     "flt_film": {"uk": "Кіно", "ru": "Кино", "en": "Film"},
     "flt_fade": {"uk": "Блідо", "ru": "Бледно", "en": "Faded"},
+    "ratio_tt": {"uk": "Формат кадру і фон", "ru": "Формат кадра и фон", "en": "Frame format & background"},
+    "ratio_orig": {"uk": "Оригінал", "ru": "Оригинал", "en": "Original"},
+    "ratio_square": {"uk": "Квадрат", "ru": "Квадрат", "en": "Square"},
+    "bg_black": {"uk": "Фон: чорні смуги", "ru": "Фон: чёрные полосы", "en": "Background: black bars"},
+    "bg_blur": {"uk": "Фон: розмите відео", "ru": "Фон: размытое видео", "en": "Background: blurred video"},
+    "ins_trans": {"uk": "Перехід з попереднього кліпа", "ru": "Переход с предыдущего клипа", "en": "Transition from previous clip"},
+    "ins_trans_d": {"uk": "Тривалість переходу", "ru": "Длительность перехода", "en": "Transition length"},
+    "tr_none": {"uk": "Без", "ru": "Без", "en": "None"},
+    "tr_fade": {"uk": "Розчинення", "ru": "Растворение", "en": "Dissolve"},
+    "tr_fadeblack": {"uk": "Через чорне", "ru": "Через чёрное", "en": "Dip to black"},
+    "tr_fadewhite": {"uk": "Через біле", "ru": "Через белое", "en": "Dip to white"},
+    "tr_slideleft": {"uk": "Зсув", "ru": "Сдвиг", "en": "Slide"},
+    "tr_wipeleft": {"uk": "Шторка", "ru": "Шторка", "en": "Wipe"},
+    "tr_smoothleft": {"uk": "Плавний зсув", "ru": "Плавный сдвиг", "en": "Smooth slide"},
+    "tr_circleopen": {"uk": "Коло", "ru": "Круг", "en": "Circle"},
+    "tr_zoomin": {"uk": "Наближення", "ru": "Приближение", "en": "Zoom in"},
+    "tr_pixelize": {"uk": "Пікселі", "ru": "Пиксели", "en": "Pixelate"},
+    "tr_radial": {"uk": "Радар", "ru": "Радар", "en": "Radial"},
     "ed_got_it":        {"uk": "Зрозуміло", "ru": "Понятно", "en": "Got it"},
     "ed_add_title":     {"uk": "Додати відео / картинки / звуки", "ru": "Добавить видео / картинки / звуки",
                          "en": "Add videos / images / sounds"},

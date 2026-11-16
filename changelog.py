@@ -10,6 +10,20 @@ changelog.py — версія програми та список змін по �
 REPO_URL = "https://github.com/ramka1q/discord-autocompress"
 
 CHANGES = [
+    {"v": "2.4", "date": "2026-11-16 17:12", "items": [
+        {"icon": "▭", "tab": None,
+         "uk": ("Формат кадру", "9:16 для TikTok / Shorts / Reels, 1:1, 4:5, 16:9 — кнопка вгорі редактора."),
+         "ru": ("Формат кадра", "9:16 для TikTok / Shorts / Reels, 1:1, 4:5, 16:9 — кнопка вверху редактора."),
+         "en": ("Frame format", "9:16 for TikTok / Shorts / Reels, 1:1, 4:5, 16:9 — the button at the top of the editor.")},
+        {"icon": "◌", "tab": None,
+         "uk": ("Розмитий фон", "Замість чорних смуг — те саме відео, розмите на весь кадр, як у CapCut."),
+         "ru": ("Размытый фон", "Вместо чёрных полос — то же видео, размытое на весь кадр, как в CapCut."),
+         "en": ("Blurred background", "Instead of black bars — the same video blurred to fill the frame, like CapCut.")},
+        {"icon": "⋈", "tab": None,
+         "uk": ("Переходи між кліпами", "Клікни «+» на стику кліпів: розчинення, через чорне/біле, зсув, шторка, коло, наближення, пікселі, радар."),
+         "ru": ("Переходы между клипами", "Кликни «+» на стыке клипов: растворение, через чёрное/белое, сдвиг, шторка, круг, приближение, пиксели, радар."),
+         "en": ("Transitions between clips", "Click “+” where two clips meet: dissolve, dip to black/white, slide, wipe, circle, zoom, pixelate, radial.")},
+    ]},
     {"v": "2.3", "date": "2026-11-16 16:32", "items": [
         {"icon": "T", "tab": None,
          "uk": ("Текст на відео", "Кнопка «T»: титри з обведенням, фоном чи тінню, 7 кольорів, плавна поява. Тягни текст прямо на відео."),

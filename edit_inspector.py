@@ -306,6 +306,17 @@ class Inspector(tk.Frame):
                          lambda v: (p.__setitem__("vol", float(v)), p.__setitem__("mute", v < 0.005)),
                          self._pct, 1.0)
         self._fades(p, dur)
+        if ed.sel > 0:
+            self._section(E("ins_trans"))
+            self._chips([(None, E("tr_none"))] + [(t, E("tr_" + t)) for t in fx.TRANSITIONS],
+                        lambda: (p.get("tr") or {}).get("type"),
+                        lambda v: ed._set_tr(ed.sel, v, undo=False), per_row=3)
+
+            def set_d(v):
+                if p.get("tr"):
+                    p["tr"] = dict(p["tr"], d=float(v))
+            self._slider(E("ins_trans_d"), 0.2, 1.5, lambda: float((p.get("tr") or {}).get("d", 0.5)),
+                         set_d, self._sec, 0.5)
         self._look(p)
         self._section(E("ins_transform"))
         self._row([("⟳ 90°", ed._rotate), ("⇋ " + E("ins_flip"), ed._flip),
@@ -355,8 +366,19 @@ class Inspector(tk.Frame):
                 state["pushed"] = True
             t["text"] = txt
             ed._prop_changed()
+
+        def on_modified(_e):
+            # будь-яка зміна вмісту (клавіші, вставка, програмно) -> застосувати
+            try:
+                if box.edit_modified():
+                    box.edit_modified(False)
+                    on_key(None)
+            except tk.TclError:
+                pass
+        box.edit_modified(False)
         box.bind("<FocusIn>", on_focus)
         box.bind("<KeyRelease>", on_key)
+        box.bind("<<Modified>>", on_modified)
         self._section(E("ins_style"))
         self._chips([(s, E("st_" + s)) for s in fx.TEXT_STYLES], lambda: t.get("style", "outline"),
                     self._setp(t, "style", str), per_row=3)

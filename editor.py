@@ -464,6 +464,11 @@ class VideoEditor(tk.Toplevel):
         pk = min(self.VW / self._ccw, self.VH / self._cch)
         self._pcw = max(2, int(self._ccw * pk / 2) * 2)   # прев'ю-канвас (вписаний у 480x270)
         self._pch = max(2, int(self._cch * pk / 2) * 2)
+        self._w0, self._h0 = self._ccw, self._cch   # «Оригінал» для формату кадру
+        self._ratio = "orig"         # формат кадру: orig / 16:9 / 9:16 / 1:1 / 4:5 / 4:3
+        self._bgmode = "black"       # чим заповнити поля: black / blur (розмите відео)
+        self._uidn = 0               # унікальні мітки для графів фільтрів
+        self._junc = []              # іконки переходів на стиках кліпів
 
         self.playing = False
         self.cur = 0.0
@@ -590,8 +595,12 @@ class VideoEditor(tk.Toplevel):
         if len(nm) > 44:
             nm = nm[:42] + "…"
         tk.Label(top, text=nm, bg=C_DARK, fg=C_TEXT, font=(FONT, 10, "bold")).pack(side="left")
-        tk.Label(top, text=f"   {self._ccw}×{self._cch} · {self._cfps:g} fps", bg=C_DARK,
-                 fg=C_MUTED, font=(FONT, 9)).pack(side="left")
+        self.dims_lbl = tk.Label(top, text="", bg=C_DARK, fg=C_MUTED, font=(FONT, 9))
+        self.dims_lbl.pack(side="left")
+        self.ratio_btn = self._btn(top, "▭", self._ratio_menu, primary=False, small=True)
+        self.ratio_btn.pack(side="left", padx=(14, 0))
+        Tip(self.ratio_btn, E("ratio_tt"))
+        self._update_dims()
         ec = tk.Frame(top, bg=C_DARK)
         ec.pack(side="right", padx=(6, 12), pady=7)
         self._btn(ec, E("ov_cancel"), self._close, primary=False).pack(side="left", padx=3)
@@ -1700,7 +1709,7 @@ class VideoEditor(tk.Toplevel):
     def _snapshot(self):
         return ([dict(p) for p in self.pieces], list(self.order), self.sel,
                 [dict(s) for s in self.snds], [dict(o) for o in self.ovls],
-                [dict(t) for t in self.texts])
+                [dict(t) for t in self.texts], (self._ratio, self._bgmode))
 
     def _push_undo(self):
         self._undo.append(self._snapshot())
@@ -1711,6 +1720,9 @@ class VideoEditor(tk.Toplevel):
     def _apply_state(self, st):
         pieces, order, sel, snds, ovls = st[:5]
         self.texts = [dict(t) for t in (st[5] if len(st) > 5 else [])]
+        if len(st) > 6 and tuple(st[6]) != (self._ratio, self._bgmode):
+            self._ratio, self._bgmode = st[6]
+            self._apply_canvas()
         self.pieces = [dict(p) for p in pieces]
         self.order = list(order)
         self.snds = [dict(s) for s in snds]
@@ -1878,7 +1890,7 @@ class VideoEditor(tk.Toplevel):
         src = self._src(p)
         sc = src.get("scrub")
         if (not sc or src["kind"] != "video" or self.playing or self._is_transformed(p)
-                or not fx.look_default(p)):
+                or not fx.look_default(p) or self._bgmode == "blur"):
             return False
         mt = self._playhead_montage_t()
         if self._active_texts(mt) or any(o["at"] <= mt <= o["at"] + o["e"] - o["s"] for o in self.ovls):
@@ -1981,7 +1993,21 @@ class VideoEditor(tk.Toplevel):
                 for ix in self.order]
 
     def _total(self):
-        return max(0.1, sum(self._clip_durs()))   # тривалість ЕКСПОРТУ (без пропусків)
+        # тривалість ЕКСПОРТУ: без пропусків, мінус перекриття переходів
+        return max(0.1, sum(self._clip_durs()) - sum(self._tr_d(k) for k in range(len(self.order))))
+
+    def _tr_d(self, slot):
+        """Реальна тривалість переходу В кліп slot (не більше половини сусідніх кліпів)."""
+        if slot <= 0 or slot >= len(self.order):
+            return 0.0
+        p = self.pieces[self.order[slot]]
+        tr = p.get("tr")
+        if not tr:
+            return 0.0
+        q = self.pieces[self.order[slot - 1]]
+        dp = (q["e"] - q["s"]) / q["speed"]
+        dc = (p["e"] - p["s"]) / p["speed"]
+        return max(0.0, min(float(tr.get("d", 0.5)), dp * 0.5, dc * 0.5))
 
     def _layout_total(self):
         """Тривалість доріжки ЯК ВИДНО (з порожніми місцями)."""
@@ -2003,18 +2029,19 @@ class VideoEditor(tk.Toplevel):
         """Час доріжки (з пропусками) -> час ЕКСПОРТУ (пропуски стиснуто).
         Так звуки/накладки лягають у готовому відео саме туди, де їх видно."""
         acc = out = 0.0
-        for ix in self.order:
+        for k, ix in enumerate(self.order):
             p = self.pieces[ix]
             g = self._gapof(p)
             d = (p["e"] - p["s"]) / p["speed"]
+            out -= self._tr_d(k)               # перехід: кліп починається раніше
             if t <= acc + g:
-                return out                     # у порожньому місці -> початок кліпа
+                return max(0.0, out)           # у порожньому місці -> початок кліпа
             acc += g
             if t <= acc + d:
-                return out + (t - acc)
+                return max(0.0, out + (t - acc))
             acc += d
             out += d
-        return out
+        return max(0.0, out)
 
     def _pps(self):
         # px/сек: база (перше відео рівно по ширині) × зум. Обрізаєш кліп -> він
@@ -2371,6 +2398,144 @@ class VideoEditor(tk.Toplevel):
             if sel:
                 self._draw_handle(c, cx1 + 1, True, self._active == "L", y1, y2)
                 self._draw_handle(c, cx2 - 1, False, self._active == "R", y1, y2)
+        # стики кліпів: іконка переходу (клік -> вибрати перехід)
+        self._junc = []
+        cy = (y1 + y2) / 2.0
+        for k in range(1, len(self._clip_rects)):
+            slot, ix, cx1, cx2 = self._clip_rects[k]
+            pcx1, pcx2 = self._clip_rects[k - 1][2:]
+            if cx1 < LX + 8 or cx1 > W - 8 or (drag and drag["slot"] in (slot, slot - 1)):
+                continue
+            if cx2 - cx1 < 26 or pcx2 - pcx1 < 26:
+                continue
+            p = self.pieces[ix]
+            has = bool(p.get("tr"))
+            hv = self._hover == ("junc", slot)
+            r = 10 if hv else 9
+            fill = C_DROP if has else ("#5a5e6b" if hv else "#23252c")
+            c.create_polygon(host._rr_pts(cx1 - r, cy - r, cx1 + r, cy + r, 5), smooth=True,
+                             fill=fill, outline="#0b0c0f", width=1)
+            c.create_text(cx1, cy, text="⋈" if has else "+", fill=("#06222e" if has else "#ffffff"),
+                          font=(FONT, 9, "bold"))
+            self._junc.append((slot, cx1, cy))
+
+    def _junc_hit(self, x, y):
+        for slot, jx, jy in self._junc:
+            if abs(x - jx) <= 11 and abs(y - jy) <= 11:
+                return slot
+        return None
+
+    def _junc_menu(self, slot, ev):
+        """Меню переходу між кліпами slot-1 і slot."""
+        if self.playing:
+            self._pause()
+        self._select(None)
+        self.sel = slot
+        p = self.pieces[self.order[slot]]
+        self.cur = p["s"]
+        self._show_poster(self.cur)
+        self._redraw()
+        cur = (p.get("tr") or {}).get("type")
+        m = self._menu_new()
+        m.add_command(label=E("ins_trans"), state="disabled")
+        m.add_command(label=E("tr_none") + ("   ✓" if not cur else ""),
+                      command=lambda: self._set_tr(slot, None))
+        m.add_separator()
+        for t in fx.TRANSITIONS:
+            m.add_command(label=E("tr_" + t) + ("   ✓" if cur == t else ""),
+                          command=lambda t=t: self._set_tr(slot, t))
+        if cur:
+            dm = self._menu_new()
+            d0 = float(p["tr"].get("d", 0.5))
+            for d in (0.25, 0.5, 0.75, 1.0, 1.5):
+                dm.add_command(label=f"{d:g} s" + ("   ✓" if abs(d - d0) < 1e-6 else ""),
+                               command=lambda d=d: self._set_tr(slot, cur, d))
+            m.add_separator()
+            m.add_cascade(label=E("ins_trans_d"), menu=dm)
+        self._popup(m, ev.x_root, ev.y_root)
+
+    def _set_tr(self, slot, typ, d=None, undo=True):
+        if not (0 < slot < len(self.order)):
+            return
+        p = self.pieces[self.order[slot]]
+        old = p.get("tr")
+        new = None if typ is None else {"type": typ, "d": float(d if d is not None else
+                                                               (old or {}).get("d", 0.5))}
+        if new == old:
+            return
+        if undo:
+            self._push_undo()
+        p["tr"] = new                        # завжди НОВИЙ словник (undo тримає старий)
+        self._redraw()
+
+    # ---- формат кадру (9:16, 1:1 …) і фон ----
+    RATIOS = ["orig", "16:9", "9:16", "1:1", "4:5", "4:3"]
+
+    def _ratio_label(self, r):
+        return {"orig": E("ratio_orig"), "16:9": "16:9  YouTube", "9:16": "9:16  TikTok · Shorts · Reels",
+                "1:1": "1:1  " + E("ratio_square"), "4:5": "4:5  Instagram", "4:3": "4:3"}[r]
+
+    def _update_dims(self):
+        try:
+            self.dims_lbl.config(text=f"   {self._ccw}×{self._cch} · {self._cfps:g} fps")
+            short = E("ratio_orig") if self._ratio == "orig" else self._ratio
+            self.ratio_btn.config(text="▭  " + short + ("  · ◌" if self._bgmode == "blur" else ""))
+        except (tk.TclError, AttributeError):
+            pass
+
+    def _ratio_menu(self):
+        if self.busy:
+            return
+        m = self._menu_new()
+        for r in self.RATIOS:
+            m.add_command(label=self._ratio_label(r) + ("   ✓" if r == self._ratio else ""),
+                          command=lambda r=r: self._set_canvas(ratio=r))
+        m.add_separator()
+        for b in ("black", "blur"):
+            m.add_command(label=E("bg_" + b) + ("   ✓" if b == self._bgmode else ""),
+                          command=lambda b=b: self._set_canvas(bg=b))
+        bt = self.ratio_btn
+        self._popup(m, bt.winfo_rootx(), bt.winfo_rooty() + bt.winfo_height())
+
+    def _set_canvas(self, ratio=None, bg=None):
+        r = self._ratio if ratio is None else ratio
+        b = self._bgmode if bg is None else bg
+        if (r, b) == (self._ratio, self._bgmode):
+            return
+        if self.playing:
+            self._pause()
+        self._push_undo()
+        self._ratio, self._bgmode = r, b
+        self._apply_canvas()
+        self._redraw()
+
+    def _apply_canvas(self):
+        """Розмір кадру експорту з формату: коротка сторона = коротка сторона оригіналу (≤1080)."""
+        w0, h0 = self._w0, self._h0
+        if self._ratio == "orig":
+            cw, ch = w0, h0
+        else:
+            a, b = (int(v) for v in self._ratio.split(":"))
+            S = min(1080, min(w0, h0))
+            if a >= b:
+                ch, cw = S, S * a / float(b)
+            else:
+                cw, ch = S, S * b / float(a)
+            k = min(1.0, 1920.0 / max(cw, ch))
+            cw, ch = cw * k, ch * k
+        self._ccw = max(2, int(cw / 2) * 2)
+        self._cch = max(2, int(ch / 2) * 2)
+        pk = min(self.VW / self._ccw, self.VH / self._cch)
+        self._pcw = max(2, int(self._ccw * pk / 2) * 2)
+        self._pch = max(2, int(self._cch * pk / 2) * 2)
+        self._qcache.clear()
+        try:
+            self.video.delete("frame")
+        except tk.TclError:
+            pass
+        self._update_dims()
+        self._show_poster(self.cur)
+        self._draw_tfbox()
 
     def _draw_drag_ghost(self, c, W):
         d = self._clip_drag
@@ -2903,6 +3068,10 @@ class VideoEditor(tk.Toplevel):
             return
         if lane == "ruler":
             return self._ph_start(ev)
+        if lane == "clip":
+            j = self._junc_hit(x, y)
+            if j is not None:                            # іконка переходу на стику
+                return self._junc_menu(j, ev)
         handle = self._handle_hit(x, y)
         if not handle and abs(x - self._playhead_x) <= 5:   # білий повзунок — хапаємо
             return self._ph_start(ev)
@@ -3238,6 +3407,8 @@ class VideoEditor(tk.Toplevel):
                 cur, hv = "hand2", ("sb",)
         elif lane == "ruler":
             cur = "hand2"
+        elif lane == "clip" and self._junc_hit(x, y) is not None:
+            cur, hv = "hand2", ("junc", self._junc_hit(x, y))
         elif self._handle_hit(x, y):
             cur = "sb_h_double_arrow"
         elif abs(x - self._playhead_x) <= 5:
@@ -3542,12 +3713,13 @@ class VideoEditor(tk.Toplevel):
     def _is_simple(self):
         """Одне (початкове) джерело, без картинок/звуків/тексту/швидкості/муту/масштабу/
         фільтрів -> можна старим ШВИДКИМ шляхом compress_segments."""
-        if len(self.sources) != 1 or self.snds or self.ovls or self.texts:
+        if (len(self.sources) != 1 or self.snds or self.ovls or self.texts
+                or self._ratio != "orig" or self._bgmode != "black"):
             return False
         for ix in self.order:
             p = self.pieces[ix]
             if (p["src"] != 0 or p["speed"] != 1.0 or p["mute"] or self._is_transformed(p)
-                    or not fx.is_default(p)):
+                    or not fx.is_default(p) or p.get("tr")):
                 return False
         return True
 
@@ -3566,6 +3738,16 @@ class VideoEditor(tk.Toplevel):
         pw = max(sw + px, x0 + px + cw)
         ph = max(sh + py, y0 + py + ch)
         pre = fx.pre_vf(p)
+        if self._bgmode == "blur" and (sw < cw or sh < ch or x0 > 0 or y0 > 0
+                                       or x0 + cw > sw or y0 + ch > sh):
+            # поля кадру заповнює це ж відео, розмите на весь екран (як у CapCut)
+            self._uidn += 1
+            u = self._uidn
+            x, y = int(round(cx - sw / 2.0)), int(round(cy - sh / 2.0))
+            return ((pre + "," if pre else "") +
+                    f"split=2[bg{u}][fg{u}];[bg{u}]scale={cw}:{ch}:force_original_aspect_ratio=increase,"
+                    f"crop={cw}:{ch},boxblur=20:2,eq=brightness=-0.06[bb{u}];"
+                    f"[fg{u}]scale={sw}:{sh}[ff{u}];[bb{u}][ff{u}]overlay={x}:{y}")
         return ((pre + "," if pre else "") +
                 f"scale={sw}:{sh},pad={pw}:{ph}:{px}:{py}:black,"
                 f"crop={cw}:{ch}:{x0 + px}:{y0 + py}")
@@ -3642,6 +3824,20 @@ class VideoEditor(tk.Toplevel):
             files.append(f)
             acc += dd
 
+        trs = [self._tr_d(k) for k in range(len(clips))]
+        if any(x > 0.01 for x in trs):
+            joined = os.path.join(tmpd, "joined.mp4")
+            if not self._xfade_join(files, durs, trs, clips, joined, prog, cancel):
+                dc_core.dlog("MONTAGE xfade FAIL")
+                return None, total
+            total = max(0.1, total - sum(trs))
+            if prog:
+                prog(92.0)
+            joined = self._compose(tmpd, joined, total, prog, cancel)
+            if prog and joined:
+                prog(96.0)
+            return joined, total
+
         # склейка (усі сегменти нормалізовані однаково -> copy)
         listf = os.path.join(tmpd, "list.txt")
         with open(listf, "w", encoding="utf-8") as fh:
@@ -3662,6 +3858,39 @@ class VideoEditor(tk.Toplevel):
         if prog and joined:
             prog(96.0)
         return joined, total
+
+    def _xfade_join(self, files, durs, trs, clips, out, prog, cancel):
+        """Склейка з переходами: на стику з переходом — xfade + acrossfade, без нього — concat."""
+        norm = f"settb=AVTB,fps={self._cfps:g},format=yuv420p"
+        cmd = ["ffmpeg", "-y"]
+        for f in files:
+            cmd += ["-i", f]
+        fc = [f"[{i}:v]{norm}[n{i}]" for i in range(len(files))]
+        vl, al = "[n0]", "[0:a]"
+        cum = durs[0]
+        for i in range(1, len(files)):
+            d = trs[i]
+            if d > 0.01:
+                typ = (clips[i].get("tr") or {}).get("type", "fade")
+                if typ not in fx.TRANSITIONS:
+                    typ = "fade"
+                off = max(0.0, cum - d)
+                fc.append(f"{vl}[n{i}]xfade=transition={typ}:duration={d:.3f}:offset={off:.3f}[x{i}]")
+                fc.append(f"{al}[{i}:a]acrossfade=d={d:.3f}[a{i}]")
+                cum = off + durs[i]
+            else:
+                fc.append(f"{vl}{al}[n{i}][{i}:a]concat=n=2:v=1:a=1[c{i}][a{i}]")
+                cum += durs[i]
+            fc.append(f"[{'x' if d > 0.01 else 'c'}{i}]{norm}[v{i}]")
+            vl, al = f"[v{i}]", f"[a{i}]"
+        cmd += ["-filter_complex", ";".join(fc), "-map", vl, "-map", al,
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p",
+                "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", out]
+        rc = dc_core._run_pass(cmd, cum, 88.0, 4.0, prog, cancel)
+        if rc != 0 or not os.path.exists(out):
+            dc_core.dlog("XFADE cmd: " + " ".join(cmd)[-700:])
+            return False
+        return True
 
     def _compose(self, tmpd, joined, total, prog, cancel):
         """Накладає self.ovls (прозорість/фейди/колір), тексти (drawtext) і підмішує

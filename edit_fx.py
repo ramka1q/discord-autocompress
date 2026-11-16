@@ -25,6 +25,9 @@ _FILTER_VF = {
     "fade": "eq=contrast=0.86:brightness=0.05:saturation=0.75",
 }
 
+TRANSITIONS = ["fade", "fadeblack", "fadewhite", "slideleft", "wipeleft", "smoothleft",
+               "circleopen", "zoomin", "pixelize", "radial"]
+
 TEXT_COLORS = ["#ffffff", "#ffd23f", "#ff4d4d", "#4cc9ff", "#33c27f", "#ff7ad9", "#000000"]
 TEXT_STYLES = ["outline", "box", "shadow"]
 
