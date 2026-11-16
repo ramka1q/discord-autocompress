@@ -402,7 +402,7 @@ STR = {
     "ed_remove":        {"uk": "🗑 Прибрати", "ru": "🗑 Убрать", "en": "🗑 Remove"},
     "ed_export":        {"uk": "Зберегти і вставити  ▶", "ru": "Сохранить и вставить  ▶", "en": "Save & paste  ▶"},
     "ed_help_title":    {"uk": "Як користуватись", "ru": "Как пользоваться", "en": "How to use"},
-    "ed_tips":          {"uk": "🎬  Клік по кліпу — вибрати · білі ручки з боків — обрізати\n"
+    "ed_tips":          {"uk": "T  Кнопка «T» або клавіша T — текст: тягни на відео, стиль і колір — у панелі справа\n🎨  Панель справа: гучність, плавна поява/зникнення, фільтри, яскравість, поворот\n🎬  Клік по кліпу — вибрати · білі ручки з боків — обрізати\n"
                                "↔  Тягни кліп — переставити · тягни його ВГОРУ — стане накладкою\n"
                                "⏯  Білий повзунок (плейхед) тягни мишкою або клікай по лінійці часу\n"
                                "🖲  Ctrl+колесо — зум ТУДИ, ДЕ МИШКА · колесо — прокрутка · повзунок зуму справа\n"
@@ -413,7 +413,7 @@ STR = {
                                "➕  Ctrl+O або перетягни файли у вікно — відео / картинки / звуки\n"
                                "⌨  Пробіл — грати · S — розрізати · Delete — видалити · Ctrl+D — дублювати · M — звук\n"
                                "⌨  ◀ ▶ — по кадру (Shift = 1с) · Home / End · Ctrl+Z / Ctrl+Y · Ctrl+0 — вмістити все",
-                         "ru": "🎬  Клик по клипу — выбрать · белые ручки по бокам — обрезать\n"
+                         "ru": "T  Кнопка «T» или клавиша T — текст: тяни на видео, стиль и цвет — в панели справа\n🎨  Панель справа: громкость, плавное появление/исчезновение, фильтры, яркость, поворот\n🎬  Клик по клипу — выбрать · белые ручки по бокам — обрезать\n"
                                "↔  Тяни клип — переставить · тяни его ВВЕРХ — станет наложением\n"
                                "⏯  Белый ползунок (плейхед) тяни мышкой или кликай по линейке времени\n"
                                "🖲  Ctrl+колесо — зум ТУДА, ГДЕ МЫШКА · колесо — прокрутка · ползунок зума справа\n"
@@ -424,7 +424,7 @@ STR = {
                                "➕  Ctrl+O или перетащи файлы в окно — видео / картинки / звуки\n"
                                "⌨  Пробел — играть · S — разрезать · Delete — удалить · Ctrl+D — дублировать · M — звук\n"
                                "⌨  ◀ ▶ — по кадру (Shift = 1с) · Home / End · Ctrl+Z / Ctrl+Y · Ctrl+0 — вместить всё",
-                         "en": "🎬  Click a clip to select it · drag the white side handles to trim\n"
+                         "en": "T  The “T” button or T key — text: drag it on the video, style & color in the right panel\n🎨  Right panel: volume, fade in/out, filters, brightness, rotate\n🎬  Click a clip to select it · drag the white side handles to trim\n"
                                "↔  Drag a clip to reorder · drag it UP to turn it into an overlay\n"
                                "⏯  Drag the white playhead with the mouse or click the time ruler\n"
                                "🖲  Ctrl+wheel — zoom WHERE THE MOUSE IS · wheel — scroll · zoom slider on the right\n"
@@ -459,6 +459,54 @@ STR = {
     "ed_status_hint":   {"uk": "Ctrl+колесо — зум туди, де мишка · тягни білий повзунок або лінійку · тягни кліп, щоб переставити · Alt — без магніту",
                          "ru": "Ctrl+колесо — зум туда, где мышка · тяни белый ползунок или линейку · тяни клип, чтобы переставить · Alt — без магнита",
                          "en": "Ctrl+wheel — zoom where the mouse is · drag the white playhead or the ruler · drag a clip to reorder · Alt — no snapping"},
+    "ed_tt_text": {"uk": "Додати текст  (T)", "ru": "Добавить текст  (T)", "en": "Add text  (T)"},
+    "ed_text_default": {"uk": "Твій текст", "ru": "Твой текст", "en": "Your text"},
+    "ed_txt_hint": {"uk": "T  титри — кнопка «T» на панелі або клавіша T", "ru": "T  титры — кнопка «T» на панели или клавиша T", "en": "T  titles — the “T” button on the toolbar or the T key"},
+    "ed_tf_txt": {"uk": " (текст)", "ru": " (текст)", "en": " (text)"},
+    "ed_txt_edit": {"uk": "✏  Редагувати текст", "ru": "✏  Редактировать текст", "en": "✏  Edit text"},
+    "ed_txt_dup": {"uk": "📄  Дублювати", "ru": "📄  Дублировать", "en": "📄  Duplicate"},
+    "ed_txt_del": {"uk": "🗑  Видалити текст", "ru": "🗑  Удалить текст", "en": "🗑  Delete text"},
+    "ins_clip": {"uk": "Кліп", "ru": "Клип", "en": "Clip"},
+    "ins_overlay": {"uk": "Накладка", "ru": "Наложение", "en": "Overlay"},
+    "ins_text": {"uk": "Текст", "ru": "Текст", "en": "Text"},
+    "ins_sound": {"uk": "Звук", "ru": "Звук", "en": "Sound"},
+    "ins_speed": {"uk": "Швидкість", "ru": "Скорость", "en": "Speed"},
+    "ins_volume": {"uk": "Гучність", "ru": "Громкость", "en": "Volume"},
+    "ins_sound_fade": {"uk": "Звук і поява", "ru": "Звук и появление", "en": "Sound & fades"},
+    "ins_fade_in": {"uk": "Плавна поява", "ru": "Плавное появление", "en": "Fade in"},
+    "ins_fade_out": {"uk": "Плавне зникнення", "ru": "Плавное исчезновение", "en": "Fade out"},
+    "ins_filter": {"uk": "Фільтр", "ru": "Фильтр", "en": "Filter"},
+    "ins_adjust": {"uk": "Корекція", "ru": "Коррекция", "en": "Adjust"},
+    "ins_bright": {"uk": "Яскравість", "ru": "Яркость", "en": "Brightness"},
+    "ins_contrast": {"uk": "Контраст", "ru": "Контраст", "en": "Contrast"},
+    "ins_sat": {"uk": "Насиченість", "ru": "Насыщенность", "en": "Saturation"},
+    "ins_transform": {"uk": "Поворот", "ru": "Поворот", "en": "Rotate"},
+    "ins_flip": {"uk": "Дзеркало", "ru": "Зеркало", "en": "Mirror"},
+    "ins_reset": {"uk": "Скинути", "ru": "Сбросить", "en": "Reset"},
+    "ins_to_track": {"uk": "На доріжку", "ru": "На дорожку", "en": "To track"},
+    "ins_opacity": {"uk": "Прозорість", "ru": "Непрозрачность", "en": "Opacity"},
+    "ins_text_hint": {"uk": "тягни текст прямо на відео, кут — розмір", "ru": "тяни текст прямо на видео, угол — размер", "en": "drag the text right on the video, corner = size"},
+    "ins_style": {"uk": "Стиль", "ru": "Стиль", "en": "Style"},
+    "ins_color": {"uk": "Колір", "ru": "Цвет", "en": "Color"},
+    "ins_size": {"uk": "Розмір", "ru": "Размер", "en": "Size"},
+    "ins_pos": {"uk": "Позиція", "ru": "Позиция", "en": "Position"},
+    "ins_anim": {"uk": "Анімація", "ru": "Анимация", "en": "Animation"},
+    "ins_dup": {"uk": "Дублювати", "ru": "Дублировать", "en": "Duplicate"},
+    "ins_listen": {"uk": "Слухати", "ru": "Слушать", "en": "Listen"},
+    "st_outline": {"uk": "Обведення", "ru": "Обводка", "en": "Outline"},
+    "st_box": {"uk": "Фон", "ru": "Фон", "en": "Box"},
+    "st_shadow": {"uk": "Тінь", "ru": "Тень", "en": "Shadow"},
+    "pos_top": {"uk": "Вгорі", "ru": "Вверху", "en": "Top"},
+    "pos_mid": {"uk": "Центр", "ru": "Центр", "en": "Middle"},
+    "pos_bottom": {"uk": "Внизу", "ru": "Внизу", "en": "Bottom"},
+    "flt_none": {"uk": "Без", "ru": "Без", "en": "None"},
+    "flt_bw": {"uk": "Ч/Б", "ru": "Ч/Б", "en": "B&W"},
+    "flt_vivid": {"uk": "Яскраво", "ru": "Ярко", "en": "Vivid"},
+    "flt_warm": {"uk": "Тепло", "ru": "Тепло", "en": "Warm"},
+    "flt_cool": {"uk": "Холод", "ru": "Холод", "en": "Cool"},
+    "flt_vintage": {"uk": "Вінтаж", "ru": "Винтаж", "en": "Vintage"},
+    "flt_film": {"uk": "Кіно", "ru": "Кино", "en": "Film"},
+    "flt_fade": {"uk": "Блідо", "ru": "Бледно", "en": "Faded"},
     "ed_got_it":        {"uk": "Зрозуміло", "ru": "Понятно", "en": "Got it"},
     "ed_add_title":     {"uk": "Додати відео / картинки / звуки", "ru": "Добавить видео / картинки / звуки",
                          "en": "Add videos / images / sounds"},
