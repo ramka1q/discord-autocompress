@@ -14,6 +14,7 @@ Video Editor для Discord Auto-Compress
 Імпортується ліниво з discord_overlay.
 """
 import ctypes
+import math
 import os
 import shutil
 import subprocess
@@ -76,16 +77,35 @@ C_TEXT, C_MUTED, C_GREEN, C_RED = host.C_TEXT, host.C_MUTED, host.C_GREEN, host.
 FONT = host.FONT
 
 # ---- палітра таймлайна в стилі CapCut ----
-C_TRACK = "#17181c"          # тло доріжки
-C_CLIP = "#3a3d46"           # кліп у монтажі
+C_TRACK = "#121317"          # тло таймлайна
+C_LANE = "#1a1b20"           # смуга доріжки
+C_RULER = "#0e0f12"          # лінійка часу + ліва колонка
+C_CLIP = "#2c2f37"           # кліп у монтажі
 C_CLIP_SEL = host.C_BLURPLE  # вибраний кліп
 C_HANDLE = "#ffffff"         # білі ручки-хендли обрізки (як у CapCut)
 C_PLAY = "#ffffff"           # плейхед
-C_SND = "#3ba55d"            # блоки доданих звуків
-C_OVL = "#a06be0"            # блоки накладок (медіа поверх відео)
+C_SND = "#33c27f"            # блоки доданих звуків
+C_OVL = "#a77cf0"            # блоки накладок (медіа поверх відео)
 C_WAVE_IN = "#dfe6ff"        # хвиля всередині ВИБРАНОГО кліпа
-TLH = 66                     # висота доріжки монтажу
-THUMB_W = 40                 # ширина кадру кіно-стрічки
+C_SNAP = "#ffd23f"           # лінія «магніту»
+C_DROP = "#4cc9ff"           # куди ляже перетягнутий кліп
+TLH = 66                     # висота основної доріжки (кліпи)
+THUMB_H = TLH - 6            # висота кадру кіно-стрічки
+THUMB_W = 40                 # ширина кадру, поки пропорції невідомі
+SCRUB_H = 360                # висота кадрів кешу «живого» перемотування
+# ---- геометрія таймлайна (ОДИН канвас: лінійка + 3 доріжки + скролбар) ----
+LX = 44                      # ліва колонка з іконками доріжок
+PAD_L = 10                   # відступ від колонки до 00:00
+RUL_H = 26                   # лінійка часу
+OVL_Y = RUL_H + 8
+OVL_H = 30
+TL_Y = OVL_Y + OVL_H + 6
+SND_Y = TL_Y + TLH + 6
+SND_H = 30
+SB_Y = SND_Y + SND_H + 10
+SB_H = 8
+TL_TOTAL_H = SB_Y + SB_H + 6
+ZMIN, ZMAX = 0.02, 80.0      # межі зуму доріжки
 IMG_DUR = 4.0                # скільки секунд показувати додану картинку (тягнеться ручками)
 IMG_MAX = 3600.0             # стеля розтягування картинки
 
@@ -199,10 +219,195 @@ class PillBtn(tk.Canvas):
     configure = config
 
 
+class Tip:
+    """Підказка при наведенні (як у CapCut): назва дії + гаряча клавіша."""
+
+    def __init__(self, widget, text):
+        self.w, self.text = widget, text
+        self._after = None
+        self._win = None
+        widget.bind("<Enter>", self._enter, add="+")
+        widget.bind("<Leave>", self._leave, add="+")
+        widget.bind("<ButtonPress>", self._leave, add="+")
+
+    def _enter(self, _e=None):
+        self._cancel()
+        try:
+            self._after = self.w.after(450, self._show)
+        except tk.TclError:
+            self._after = None
+
+    def _cancel(self):
+        if self._after:
+            try:
+                self.w.after_cancel(self._after)
+            except Exception:
+                pass
+            self._after = None
+
+    def _leave(self, _e=None):
+        self._cancel()
+        if self._win is not None:
+            try:
+                self._win.destroy()
+            except tk.TclError:
+                pass
+            self._win = None
+
+    def _show(self):
+        self._after = None
+        txt = self.text() if callable(self.text) else self.text
+        if not txt:
+            return
+        try:
+            win = tk.Toplevel(self.w)
+            win.overrideredirect(True)
+            win.attributes("-topmost", True)
+            tk.Label(win, text=txt, bg="#0b0c0f", fg="#ffffff", font=(FONT, 9),
+                     padx=9, pady=4, highlightthickness=1,
+                     highlightbackground="#3a3d46").pack()
+            win.update_idletasks()
+            x = self.w.winfo_rootx() + self.w.winfo_width() // 2 - win.winfo_reqwidth() // 2
+            y = self.w.winfo_rooty() - win.winfo_reqheight() - 6
+            if y < 0:
+                y = self.w.winfo_rooty() + self.w.winfo_height() + 6
+            win.geometry(f"+{max(0, x)}+{y}")
+            self._win = win
+        except tk.TclError:
+            self._win = None
+
+
+class IconBtn(tk.Canvas):
+    """Кнопка-іконка панелі інструментів (як у CapCut): підсвітка при наведенні,
+    «натискання», вимкнений стан і підказка з гарячою клавішею."""
+
+    def __init__(self, parent, icon, cmd, tip="", size=32, fs=12, accent=False, round_=False):
+        self._icon, self._cmd, self._size, self._fs = icon, cmd, size, fs
+        self._accent, self._round = accent, round_
+        self._state, self._hover, self._down, self._on = "normal", False, False, False
+        try:
+            self._pbg = parent.cget("bg")
+        except tk.TclError:
+            self._pbg = C_BG
+        super().__init__(parent, width=size, height=size, bg=self._pbg,
+                         highlightthickness=0, cursor="hand2")
+        self.bind("<Enter>", lambda e: self._set(h=True))
+        self.bind("<Leave>", lambda e: self._set(h=False, d=False))
+        self.bind("<ButtonPress-1>", lambda e: self._set(d=True))
+        self.bind("<ButtonRelease-1>", self._release)
+        self.tip = Tip(self, tip) if tip else None
+        self._draw()
+
+    def _set(self, h=None, d=None):
+        if h is not None:
+            self._hover = h
+        if d is not None:
+            self._down = d
+        self._draw()
+
+    def _release(self, ev):
+        was = self._down
+        self._down = False
+        self._draw()
+        if (was and self._state == "normal" and self._cmd
+                and 0 <= ev.x <= self._size and 0 <= ev.y <= self._size):
+            self._cmd()
+
+    def set_icon(self, icon):
+        if icon != self._icon:
+            self._icon = icon
+            self._draw()
+
+    def set_state(self, st):
+        st = str(st)
+        if st != self._state:
+            self._state = st
+            self.configure(cursor=("hand2" if st == "normal" else ""))
+            self._draw()
+
+    def _draw(self):
+        try:
+            self.delete("all")
+        except tk.TclError:
+            return
+        s = self._size
+        dis = self._state != "normal"
+        if self._accent:
+            fill = C_DARK if dis else C_BLURPLE
+            if not dis and self._down:
+                fill = ui.darken(C_BLURPLE, 0.12)
+            elif not dis and self._hover:
+                fill = ui.lighten(C_BLURPLE, 0.14)
+            fg = "#ffffff"
+        else:
+            fill = self._pbg
+            if not dis and self._down:
+                fill = ui.mix(self._pbg, C_TEXT, 0.22)
+            elif not dis and self._hover:
+                fill = ui.mix(self._pbg, C_TEXT, 0.12)
+            fg = ui.mix(self._pbg, C_MUTED, 0.45) if dis else C_TEXT
+        if self._round:
+            self.create_oval(1, 1, s - 1, s - 1, fill=fill, outline="")
+        elif fill != self._pbg:
+            self.create_polygon(host._rr_pts(1, 1, s - 1, s - 1, 8), smooth=True,
+                                fill=fill, outline="")
+        off = 1 if (self._down and not dis) else 0
+        self.create_text(s / 2, s / 2 + off, text=self._icon, fill=fg, font=(FONT, self._fs))
+
+
+class ZoomSlider(tk.Canvas):
+    """Повзунок масштабу доріжки (логарифмічний, як у CapCut) — тягнеться мишкою."""
+
+    def __init__(self, parent, lo, hi, get, set_, width=120):
+        try:
+            bg = parent.cget("bg")
+        except tk.TclError:
+            bg = C_BG
+        super().__init__(parent, width=width, height=26, bg=bg, highlightthickness=0,
+                         cursor="hand2")
+        self._lo, self._hi, self._get, self._setf, self._sw = lo, hi, get, set_, width
+        self._hover = False
+        self.bind("<Button-1>", self._drag)
+        self.bind("<B1-Motion>", self._drag)
+        self.bind("<Enter>", lambda e: self._hov(True))
+        self.bind("<Leave>", lambda e: self._hov(False))
+        self.tip = Tip(self, E("ed_tt_zoom"))
+        self.redraw()
+
+    def _hov(self, on):
+        self._hover = on
+        self.redraw()
+
+    def _frac(self):
+        try:
+            z = max(self._lo, min(self._hi, float(self._get())))
+            return (math.log(z) - math.log(self._lo)) / (math.log(self._hi) - math.log(self._lo))
+        except (ValueError, ZeroDivisionError):
+            return 0.5
+
+    def _drag(self, ev):
+        f = max(0.0, min(1.0, (ev.x - 8) / float(self._sw - 16)))
+        z = math.exp(math.log(self._lo) + f * (math.log(self._hi) - math.log(self._lo)))
+        self._setf(z)
+        self.redraw()
+
+    def redraw(self):
+        try:
+            self.delete("all")
+        except tk.TclError:
+            return
+        x1, x2, y = 8, self._sw - 8, 13
+        kx = x1 + self._frac() * (x2 - x1)
+        self.create_line(x1, y, x2, y, fill=ui.mix(C_BG2, C_TEXT, 0.18), width=3, capstyle="round")
+        self.create_line(x1, y, kx, y, fill=C_BLURPLE, width=3, capstyle="round")
+        r = 7 if self._hover else 6
+        self.create_oval(kx - r, y - r, kx + r, y + r, fill="#ffffff", outline="")
+
+
 class VideoEditor(tk.Toplevel):
-    VW, VH = 480, 270
-    VPAD = 52        # поля навколо екрана плеєра — рамка масштабу видно й ЗА плеєром
-    TW = 600
+    VW, VH = 640, 360
+    VPAD = 40        # поля навколо екрана плеєра — рамка масштабу видно й ЗА плеєром
+    TW = 900
 
     def __init__(self, master, file_path, info, cfg, discord_hwnd, watcher, on_close):
         _sync_theme()
@@ -238,7 +443,7 @@ class VideoEditor(tk.Toplevel):
         self._cfps = min(60.0, float(info.get("fps", 30) or 30))
         # базовий масштаб доріжки: перше відео рівно вміщується у TW (далі НЕ перераховується
         # при обрізці — фіксований px/сек, як у CapCut)
-        self._base_pps = self.TW / max(0.1, info["duration"])
+        self._base_pps = (self.TW - LX - PAD_L - 40) / max(0.1, info["duration"])
         pk = min(self.VW / self._ccw, self.VH / self._cch)
         self._pcw = max(2, int(self._ccw * pk / 2) * 2)   # прев'ю-канвас (вписаний у 480x270)
         self._pch = max(2, int(self._cch * pk / 2) * 2)
@@ -267,13 +472,29 @@ class VideoEditor(tk.Toplevel):
         self._ffplay_pos = None      # РЕАЛЬНА позиція ffplay (парситься з його -stats)
         self._stat_offset = None
         self._stat_log_t = 0.0
-        self._sel_xs = self._sel_xe = 0
+        self._sel_xs = self._sel_xe = None
         self._clip_rects = []        # (slot, ix, cx1, cx2) для кліків по кліпах
         self._snd_rects = []         # (i, x1, x2) блоки звуків на нижній смужці
         self._snd_drag = None
         self._undo = []; self._redo = []
         self._zoom = 1.0
         self._scroll = 0.0
+        # ---- таймлайн: режим перетягування, магніт, підсвітка ----
+        self._mode = None            # 'ph' | 'trim' | 'clip' | 'ovl' | 'snd' | 'sb' | None
+        self._clip_drag = None
+        self._sb_drag = None
+        self._sb_thumb = None
+        self._snap_lt = None
+        self._nosnap = False
+        self._hover = None
+        self._cursor = ""
+        self._last_ev = None
+        self._edge_after = None
+        self._draw_after = None
+        self._fit_done = False
+        self._poster_busy = False
+        self._poster_dirty = False
+        self._qcache = {}            # кеш масштабованих кадрів для живого скрабу
         # ---- рамка масштабу/позиції на прев'ю (як у CapCut) ----
         self._tf_on = False
         self._tf_drag = None         # ("move"|"corner", дані початку)
@@ -286,6 +507,7 @@ class VideoEditor(tk.Toplevel):
         self._frames = [os.path.join(self._tmp, "a.png"), os.path.join(self._tmp, "b.png")]
         # ---- адаптивний розмір (вікно можна розтягнути/розгорнути на весь екран) ----
         self.VW, self.VH, self.TW = VideoEditor.VW, VideoEditor.VH, VideoEditor.TW
+        self._clip_rects, self._ovl_rects, self._snd_rects = [], [], []
         self._rs_after = None
         self._chrome_h = None
 
@@ -303,7 +525,7 @@ class VideoEditor(tk.Toplevel):
         self._show_poster(0.0)
         self._gen_visuals(si)        # кіно-стрічка + хвиля для першого джерела
         self.after(400, self._enable_dnd)   # перетягування файлів (після мапінгу вікна)
-        self.after(600, self._arm_resize)   # адаптивний розмір (після першого лейауту)
+        self._arm_resize()                  # велике вікно одразу + адаптивний розмір
 
     # ------------------------------------------------------------ джерела -- #
     def _new_piece(self, si, s, e):
@@ -339,100 +561,156 @@ class VideoEditor(tk.Toplevel):
 
     # ----------------------------------------------------------------- UI -- #
     def _build(self):
-        # ---- плеєр на заокругленій «картці» з акцентною смужкою (як в оверлеї) ----
-        # канвас ШИРШИЙ за екран плеєра (поля VPAD) -> рамка масштабу не обрізається
+        """Лейаут як у CapCut: верхня панель (файл + експорт) · великий плеєр ·
+        транспорт · панель інструментів · ОДИН таймлайн з лінійкою часу і плейхедом."""
+        top = tk.Frame(self, bg=C_DARK)
+        top.pack(side="top", fill="x")
+        tk.Label(top, text="✂", bg=C_DARK, fg=C_BLURPLE,
+                 font=(FONT, 15, "bold")).pack(side="left", padx=(14, 6), pady=8)
+        nm = os.path.basename(self.file_path)
+        if len(nm) > 44:
+            nm = nm[:42] + "…"
+        tk.Label(top, text=nm, bg=C_DARK, fg=C_TEXT, font=(FONT, 10, "bold")).pack(side="left")
+        tk.Label(top, text=f"   {self._ccw}×{self._cch} · {self._cfps:g} fps", bg=C_DARK,
+                 fg=C_MUTED, font=(FONT, 9)).pack(side="left")
+        ec = tk.Frame(top, bg=C_DARK)
+        ec.pack(side="right", padx=(6, 12), pady=7)
+        self._btn(ec, E("ov_cancel"), self._close, primary=False).pack(side="left", padx=3)
+        self.gif_btn = self._btn(ec, "🎞 GIF", self._export_gif, primary=False)
+        self.gif_btn.pack(side="left", padx=3)
+        self.export_btn = self._btn(ec, E("ed_export"), self._export)
+        self.export_btn.pack(side="left", padx=3)
+        self.info_lbl = tk.Label(top, text="", bg=C_DARK, fg=C_TEXT, font=(FONT, 10, "bold"))
+        self.info_lbl.pack(side="right", padx=10)
+        # тонка смужка прогресу збереження під верхньою панеллю
+        self.prog = tk.Canvas(self, height=3, bg=C_DARK, highlightthickness=0)
+        self.prog.pack(side="top", fill="x")
+
+        # ---- низ вікна пакуємо ЗНИЗУ: якщо місця мало, стискається плеєр, а не таймлайн ----
+        self.joke_lbl = tk.Label(self, text=E("ed_status_hint"), bg=C_BG, fg=C_MUTED,
+                                 font=(FONT, 9), anchor="w")
+        self.joke_lbl.pack(side="bottom", fill="x", padx=14, pady=(3, 5))
+
+        self.tl = tk.Canvas(self, width=self.TW, height=TL_TOTAL_H, bg=C_TRACK,
+                            highlightthickness=0)
+        self.tl.pack(side="bottom", fill="x")
+        self.tl.bind("<Configure>", self._on_tl_config)
+        self.tl.bind("<Button-1>", self._tl_press)
+        self.tl.bind("<B1-Motion>", self._tl_motion)
+        self.tl.bind("<ButtonRelease-1>", self._tl_release)
+        self.tl.bind("<Button-3>", self._tl_rclick)
+        self.tl.bind("<Motion>", self._tl_hover)
+        self.tl.bind("<Leave>", self._tl_leave)
+        self.tl.bind("<MouseWheel>", self._on_wheel)
+
+        # ---- панель інструментів над таймлайном ----
+        bar = tk.Frame(self, bg=C_BG2)
+        bar.pack(side="bottom", fill="x")
+        lb = tk.Frame(bar, bg=C_BG2)
+        lb.pack(side="left", padx=8, pady=4)
+
+        def sep(parent):
+            tk.Frame(parent, bg=ui.mix(C_BG2, C_TEXT, 0.16), width=1,
+                     height=20).pack(side="left", padx=7)
+
+        def ib(parent, icon, cmd, tip, **kw):
+            b = IconBtn(parent, icon, cmd, tip=tip, **kw)
+            b.pack(side="left", padx=1)
+            return b
+        self.b_undo = ib(lb, "↶", self._undo_action, E("ed_tt_undo"), fs=14)
+        self.b_redo = ib(lb, "↷", self._redo_action, E("ed_tt_redo"), fs=14)
+        sep(lb)
+        self.b_split = ib(lb, "✂", self._cut_here, E("ed_tt_split"))
+        self.b_del = ib(lb, "🗑", self._delete_selected, E("ed_tt_delete"))
+        self.b_dup = ib(lb, "📄", self._duplicate, E("ed_tt_dup"))
+        self.b_speed = ib(lb, "⚡", self._speed_popup, E("ed_tt_speed"))
+        self.b_mute = ib(lb, "🔊", self._toggle_mute, E("ed_tt_mute"))
+        self.b_ovl = ib(lb, "🎭", lambda: self._to_overlay(), E("ed_tt_ovl"))
+        sep(lb)
+        self.b_add = ib(lb, "➕", self._add_dialog, E("ed_tt_add"))
+
+        rb = tk.Frame(bar, bg=C_BG2)
+        rb.pack(side="right", padx=8, pady=4)
+        IconBtn(rb, "❓", self._show_help, tip=E("ed_help_title")).pack(side="right", padx=1)
+        tk.Frame(rb, bg=ui.mix(C_BG2, C_TEXT, 0.16), width=1, height=20).pack(side="right", padx=7)
+        IconBtn(rb, "⤢", self._zoom_fit, tip=E("ed_tt_fit"), fs=13).pack(side="right", padx=1)
+        IconBtn(rb, "+", lambda: self._zoom_at(1.25), tip=E("ed_tt_zin"), fs=14).pack(side="right", padx=1)
+        self.zoom_sl = ZoomSlider(rb, ZMIN, ZMAX, lambda: self._zoom, self._set_zoom, width=130)
+        self.zoom_sl.pack(side="right", padx=2)
+        IconBtn(rb, "−", lambda: self._zoom_at(0.8), tip=E("ed_tt_zout"), fs=14).pack(side="right", padx=1)
+
+        # ---- транспорт під плеєром: час · ⏮ ‹ ▶ › ⏭ · на весь екран ----
+        tb = tk.Frame(self, bg=C_BG, height=50)
+        tb.pack(side="bottom", fill="x")
+        tb.pack_propagate(False)
+        self.time_lbl = tk.Label(tb, text="", bg=C_BG, fg=C_TEXT, font=("Consolas", 11, "bold"))
+        self.time_lbl.pack(side="left", padx=16)
+        IconBtn(tb, "⛶", self._toggle_max, tip=E("ed_tt_max"), fs=13).pack(side="right", padx=14)
+        mid = tk.Frame(tb, bg=C_BG)
+        mid.place(relx=0.5, rely=0.5, anchor="center")
+        IconBtn(mid, "⏮", self._to_start, tip=E("ed_tt_start")).pack(side="left", padx=3)
+        IconBtn(mid, "‹", lambda: self._nudge(-1), tip=E("ed_tt_prev"), fs=17).pack(side="left", padx=3)
+        self.play_btn = IconBtn(mid, "▶", self._toggle_play, tip=E("ed_tt_play"),
+                                size=42, fs=15, accent=True, round_=True)
+        self.play_btn.pack(side="left", padx=8)
+        IconBtn(mid, "›", lambda: self._nudge(1), tip=E("ed_tt_next"), fs=17).pack(side="left", padx=3)
+        IconBtn(mid, "⏭", self._to_end, tip=E("ed_tt_end")).pack(side="left", padx=3)
+
+        # ---- плеєр: канвас ШИРШИЙ за екран (поля VPAD) -> рамку масштабу видно й за кадром ----
         self.video = tk.Canvas(self, width=self.VW + 2 * self.VPAD,
                                height=self.VH + 2 * self.VPAD, bg=C_BG, highlightthickness=0)
-        self.video.pack(pady=(8, 0))
+        self.video.pack(side="top", pady=(2, 0))
         self._draw_player_frame()
         self.video.bind("<Button-1>", self._video_press)
         self.video.bind("<B1-Motion>", self._video_motion)
         self.video.bind("<ButtonRelease-1>", self._video_release)
         self.video.bind("<Double-Button-1>", lambda e: self._tf_reset())
 
-        # ---- транспорт ----
-        pc = tk.Frame(self, bg=C_BG); pc.pack(pady=(8, 6))
-        self._btn(pc, "⏮", self._to_start, primary=False).pack(side="left", padx=3)
-        self.play_btn = self._btn(pc, E("ed_play"), self._toggle_play, minw=118)
-        self.play_btn.pack(side="left", padx=3)
-        self._btn(pc, E("ed_cut"), self._cut_here, primary=False).pack(side="left", padx=3)
-        self._btn(pc, E("ed_add"), self._add_dialog, primary=False).pack(side="left", padx=(14, 3))
-        self.undo_btn = self._btn(pc, "↶", self._undo_action, primary=False)
-        self.undo_btn.pack(side="left", padx=(14, 3))
-        self.redo_btn = self._btn(pc, "↷", self._redo_action, primary=False)
-        self.redo_btn.pack(side="left", padx=3)
-
-        # ---- панель доріжок (накладки / відео / звук) на спільній підложці ----
-        tp = tk.Frame(self, bg=C_BG2)
-        tp.pack(padx=14, pady=(2, 4))
-        self.OVL_H = 26
-        self.ovl = tk.Canvas(tp, width=self.TW, height=self.OVL_H, bg=C_TRACK, highlightthickness=0)
-        self.ovl.pack(padx=10, pady=(10, 3))
-        self.ovl.bind("<Button-1>", self._ovl_press)
-        self.ovl.bind("<B1-Motion>", self._ovl_motion)
-        self.ovl.bind("<ButtonRelease-1>", self._ovl_release)
-        self.ovl.bind("<Button-3>", self._ovl_menu)
-        self.tl = tk.Canvas(tp, width=self.TW, height=TLH, bg=C_TRACK, highlightthickness=0)
-        self.tl.pack(padx=10, pady=(0, 3))
-        self.WAVE_H = 26
-        self.wave = tk.Canvas(tp, width=self.TW, height=self.WAVE_H, bg=C_TRACK, highlightthickness=0)
-        self.wave.pack(padx=10, pady=(0, 10))
-        self.tl.bind("<Button-1>", self._tl_press)
-        self.tl.bind("<B1-Motion>", self._tl_motion)
-        self.tl.bind("<ButtonRelease-1>", self._tl_release)
-        self.tl.bind("<Button-3>", self._tl_menu)
-        self.tl.bind("<Control-MouseWheel>", self._on_zoom)
-        self.tl.bind("<MouseWheel>", self._on_scroll)
-        self.wave.bind("<Button-1>", self._wave_press)
-        self.wave.bind("<B1-Motion>", self._wave_motion)
-        self.wave.bind("<ButtonRelease-1>", self._wave_release)
-        self.wave.bind("<Button-3>", self._wave_menu)
-        self.bind("<Left>", lambda e: self._nudge(-1, big=False))
-        self.bind("<Right>", lambda e: self._nudge(1, big=False))
-        self.bind("<Shift-Left>", lambda e: self._nudge(-1, big=True))
-        self.bind("<Shift-Right>", lambda e: self._nudge(1, big=True))
-        self.bind("<Delete>", lambda e: self._remove())
+        # гарячі клавіші — по КОДУ клавіші (працюють і на укр/рус розкладці)
+        self.bind("<KeyPress>", self._on_key)
         try:
             self.focus_set()
         except tk.TclError:
             pass
 
-        # ---- дії з кліпом + зум + довідка (все дрібними пігулками в один рядок) ----
-        sc = tk.Frame(self, bg=C_BG); sc.pack(pady=(0, 2))
-        self._btn(sc, E("ed_move_l"), lambda: self._move(-1), primary=False, small=True).pack(side="left", padx=2)
-        self._btn(sc, E("ed_move_r"), lambda: self._move(1), primary=False, small=True).pack(side="left", padx=2)
-        self._btn(sc, E("ed_remove"), self._remove, primary=False, small=True).pack(side="left", padx=2)
-        self._btn(sc, "🔍−", lambda: self._zoom_step(0.8), primary=False, small=True).pack(side="left", padx=(14, 2))
-        self._btn(sc, "🔍+", lambda: self._zoom_step(1.25), primary=False, small=True).pack(side="left", padx=2)
-        self._btn(sc, "❓", self._show_help, primary=False, small=True).pack(side="left", padx=(14, 2))
-
-        self.bind("<Control-z>", lambda e: self._undo_action())
-        self.bind("<Control-y>", lambda e: self._redo_action())
-        self.bind("<Control-Z>", lambda e: self._redo_action())   # Ctrl+Shift+Z
-
-        self.info_lbl = tk.Label(self, text="", bg=C_BG, fg=C_TEXT, font=(FONT, 11, "bold"))
-        self.info_lbl.pack(pady=(8, 0))
-        self.joke_lbl = tk.Label(self, text="", bg=C_BG, fg=C_MUTED, font=(FONT, 9),
-                                 wraplength=self.VW, justify="center")
-        self.joke_lbl.pack(pady=(0, 2))
-        ec = tk.Frame(self, bg=C_BG); ec.pack(pady=(2, 12))
-        self.export_btn = self._btn(ec, E("ed_export"), self._export)
-        self.export_btn.pack(side="left", padx=4)
-        self.gif_btn = self._btn(ec, "🎞 GIF", self._export_gif, primary=False)
-        self.gif_btn.pack(side="left", padx=4)
-        self._btn(ec, E("ov_cancel"), self._close, primary=False).pack(side="left", padx=4)
-
     def _btn(self, parent, text, cmd, primary=True, minw=0, small=False):
         return PillBtn(parent, text, cmd, primary=primary, minw=minw, small=small)
+
+    def _set_play_icon(self, on):
+        try:
+            self.play_btn.set_icon("⏸" if on else "▶")
+        except (tk.TclError, AttributeError):
+            pass
+
+    def _set_progress(self, p, text=None, col=None):
+        """Тонка смужка прогресу під верхньою панеллю (+ текст у верхній панелі)."""
+        try:
+            if text is not None:
+                self.info_lbl.config(text=text, fg=col or C_BLURPLE)
+            c = self.prog
+            c.delete("all")
+            if p is None:
+                return
+            w = max(1, c.winfo_width())
+            x = w * max(0.0, min(100.0, p)) / 100.0
+            c.create_rectangle(0, 0, max(2, x), 3, fill=C_BLURPLE, outline="")
+        except (tk.TclError, Exception):
+            pass
+
+    def _toggle_max(self):
+        try:
+            self.state("normal" if self.state() == "zoomed" else "zoomed")
+        except tk.TclError:
+            pass
 
     def _draw_player_frame(self):
         """Картка-підложка і чорний екран плеєра (перемальовується при зміні розміру)."""
         c = self.video
         c.delete("card"); c.delete("screen")
-        m = 14
+        m = 10
         c.create_polygon(
             host._rr_pts(self.VPAD - m, self.VPAD - m,
-                         self.VPAD + self.VW + m, self.VPAD + self.VH + m, 16),
+                         self.VPAD + self.VW + m, self.VPAD + self.VH + m, 14),
             smooth=True, fill=C_BG2, outline="", tags="card")
         c.create_rectangle(self.VPAD, self.VPAD, self.VPAD + self.VW,
                            self.VPAD + self.VH, fill="#000000", outline=C_DARK,
@@ -440,14 +718,18 @@ class VideoEditor(tk.Toplevel):
         c.tag_lower("screen")
         c.tag_lower("card")
 
-    # ---- адаптивний розмір: редактор можна розтягнути/розгорнути на весь екран ----
+    # ---- адаптивний розмір: велике вікно одразу, плеєр росте разом з вікном ----
     def _arm_resize(self):
-        """Фіксує мінімальний розмір = початковий і вмикає реакцію на розтягування."""
         try:
             self.update_idletasks()
-            self.minsize(self.winfo_width(), self.winfo_height())
-            self._chrome_h = self.winfo_height() - (self.VH + 2 * self.VPAD)
+            self._chrome_h = self.winfo_reqheight() - int(float(self.video.cget("height")))
+            sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
+            W = max(600, min(sw - 60, 1320))
+            H = max(500, min(sh - 90, 900))
+            self.minsize(min(W, 860), min(H, self._chrome_h + 200 + 2 * self.VPAD))
+            self.geometry(f"{W}x{H}+{max(0, (sw - W) // 2)}+{max(0, (sh - H) // 2 - 30)}")
             self.bind("<Configure>", self._on_resize)
+            self.after(60, self._apply_resize)
         except tk.TclError:
             pass
 
@@ -457,7 +739,7 @@ class VideoEditor(tk.Toplevel):
         if self._rs_after:
             try: self.after_cancel(self._rs_after)
             except Exception: pass
-        self._rs_after = self.after(120, self._apply_resize)
+        self._rs_after = self.after(90, self._apply_resize)
 
     def _apply_resize(self):
         self._rs_after = None
@@ -465,35 +747,27 @@ class VideoEditor(tk.Toplevel):
             w, h = self.winfo_width(), self.winfo_height()
         except tk.TclError:
             return
-        if w < 200 or h < 200:
+        if w < 200 or h < 200 or self._chrome_h is None:
             return
-        if self._chrome_h is None:      # скільки висоти займає все, ОКРІМ плеєра
-            self._chrome_h = h - (self.VH + 2 * self.VPAD)
-        avail_ph = h - self._chrome_h - 2 * self.VPAD
-        vw = max(480, min(w - 2 * self.VPAD - 24, int(avail_ph * 16 / 9)))
-        vh = max(270, int(vw * 9 / 16))
-        tw = max(600, w - 90)
-        if abs(vw - self.VW) < 8 and abs(tw - self.TW) < 8:
+        avail_h = h - self._chrome_h - 2 * self.VPAD - 4
+        avail_w = w - 2 * self.VPAD - 16
+        vw = min(avail_w, int(avail_h * 16 / 9))
+        vw = max(320, vw)
+        vh = max(180, int(vw * 9 / 16))
+        if abs(vw - self.VW) < 6 and abs(vh - self.VH) < 6:
             return
-        self.VW, self.VH, self.TW = vw, vh, tw
+        self.VW, self.VH = vw, vh
         self.video.config(width=vw + 2 * self.VPAD, height=vh + 2 * self.VPAD)
         pk = min(self.VW / self._ccw, self.VH / self._cch)
         self._pcw = max(2, int(self._ccw * pk / 2) * 2)
         self._pch = max(2, int(self._cch * pk / 2) * 2)
         self._draw_player_frame()
-        for cnv in (self.ovl, self.tl, self.wave):
-            cnv.config(width=tw)
-        try:
-            self.joke_lbl.config(wraplength=vw)
-        except tk.TclError:
-            pass
         if self._embedded:              # вікно ffplay підганяємо під новий екран
             try:
                 _u32.MoveWindow(self._embedded, self.VPAD, self.VPAD, self.VW, self.VH, True)
             except Exception:
                 pass
-        self._clamp_scroll(self._pps())
-        self._redraw()
+        self.video.delete("frame")
         self._show_poster(self.cur)
 
     def _show_help(self):
@@ -668,15 +942,21 @@ class VideoEditor(tk.Toplevel):
             return 0
 
     # ----------------------------------------------- ПРЕВ'Ю (ffmpeg→PNG) --- #
-    def _show_poster(self, t):
+    def _show_poster(self, t, fast=False):
         self._pending = t
+        if fast:
+            self._quick_frame(t)            # миттєво з кешу, точний кадр — слідом
         if self._prev_after:
             try: self.after_cancel(self._prev_after)
             except Exception: pass
-        self._prev_after = self.after(110, self._run_poster)
+        self._prev_after = self.after(25 if fast else 110, self._run_poster)
 
     def _run_poster(self):
-        if self.playing:
+        self._prev_after = None
+        if self.playing or self._closed:
+            return
+        if self._poster_busy:              # кадр ще рендериться -> оновимо одразу після нього
+            self._poster_dirty = True
             return
         t = self._pending
         piece = dict(self._sel_piece())          # заморожений стан (фоновий потік)
@@ -712,13 +992,25 @@ class VideoEditor(tk.Toplevel):
                 vin = f"[b{j + 1}]"
             cmd += ["-filter_complex", ";".join(fc), "-map", vin, "-frames:v", "1", png]
 
+        self._poster_busy = True
+
         def work():
             try:
                 rc = subprocess.run(cmd, capture_output=True, creationflags=dc_core.NO_WINDOW).returncode
             except Exception:
                 rc = 1
-            if rc == 0 and os.path.exists(png):
-                self.after(0, lambda: self._draw_png(png))
+
+            def fin():
+                self._poster_busy = False
+                if rc == 0 and os.path.exists(png):
+                    self._draw_png(png)
+                if self._poster_dirty:        # живий скраб: одразу наступний кадр
+                    self._poster_dirty = False
+                    self._run_poster()
+            try:
+                self.after(0, fin)
+            except Exception:
+                self._poster_busy = False
         threading.Thread(target=work, daemon=True).start()
 
     def _draw_png(self, png):
@@ -865,6 +1157,11 @@ class VideoEditor(tk.Toplevel):
             self._pause()
         else:
             p = self._sel_piece()
+            if self.sel == len(self.order) - 1 and self.cur >= p["e"] - 0.06:
+                self.sel = 0                  # стоїмо в самому кінці -> граємо з початку
+                p = self._sel_piece()
+                self.cur = p["s"]
+                self._scroll = 0.0
             start = min(max(p["s"], self.cur), p["e"] - 0.05)
             self._launch(start, p["e"] - start)
 
@@ -889,10 +1186,7 @@ class VideoEditor(tk.Toplevel):
             self.playing = True
             self._play_t0 = time.monotonic()
             self._ffplay = None
-            try:
-                self.play_btn.config(text=E("ed_stop"))
-            except tk.TclError:
-                pass
+            self._set_play_icon(True)
             self._play_progress()
             return
         w, h = self.VW, self.VH          # ffplay = рівно екран плеєра (канвас ширший на поля)
@@ -919,10 +1213,7 @@ class VideoEditor(tk.Toplevel):
         dc_core.dlog(f"PLAY launch build={dc_core.BUILD} src={piece['src']} start={start:.3f} "
                      f"dur={dur} t0={self._play_t0:.3f}")
         threading.Thread(target=self._read_ffplay_stats, args=(self._ffplay,), daemon=True).start()
-        try:
-            self.play_btn.config(text=E("ed_stop"))
-        except tk.TclError:
-            pass
+        self._set_play_icon(True)
         self._embed_try(0)
         self._play_progress()
 
@@ -997,6 +1288,7 @@ class VideoEditor(tk.Toplevel):
         if pos >= self._play_end - 0.02:
             return self._advance_or_stop()
         self.cur = min(self._play_src_dur, pos)
+        self._follow_playhead()
         self._draw_track()
         self._tick_id = self.after(80, self._play_progress)
 
@@ -1025,10 +1317,9 @@ class VideoEditor(tk.Toplevel):
             try: self.after_cancel(self._tick_id)
             except Exception: pass
             self._tick_id = None
-        try:
-            self.play_btn.config(text=E("ed_play"))
-        except tk.TclError:
+        if self._closed:
             return
+        self._set_play_icon(False)
         self._show_poster(self.cur)   # повертаємо статичний кадр на екран
 
     def _seek(self, t):
@@ -1040,7 +1331,11 @@ class VideoEditor(tk.Toplevel):
         self._redraw()
 
     def _to_start(self):
-        self._seek(self._sel_piece()["s"])
+        if self.playing:
+            self._pause()
+        self._set_playhead_lt(0.0, fast=False)
+        self._scroll = 0.0
+        self._req_draw()
 
     # --------------------------------------------------------- ножиці ------ #
     def _cut_here(self):
@@ -1101,6 +1396,9 @@ class VideoEditor(tk.Toplevel):
 
     def _toggle_mute(self):
         p = self._sel_piece()
+        src = self._src(p)
+        if src["kind"] != "video" or not src["has_audio"]:
+            return
         self._push_undo()
         p["mute"] = not p["mute"]
         self._redraw()
@@ -1157,38 +1455,80 @@ class VideoEditor(tk.Toplevel):
 
     # --------------------------------------------------------- малювання --- #
     def _redraw(self):
-        self._draw_track(); self._update_info()
+        self._draw_track()
+        self._update_info()
+
+    def _req_draw(self):
+        """Перемальовка доріжки максимум раз за «кадр» — для плавних перетягувань."""
+        if self._draw_after:
+            return
+
+        def run():
+            self._draw_after = None
+            if not self._closed:
+                try:
+                    self._draw_track()
+                except tk.TclError:
+                    pass
+        try:
+            self._draw_after = self.after_idle(run)
+        except tk.TclError:
+            self._draw_after = None
+
+    # старі імена: звуки й накладки тепер на тому ж канвасі, що й кліпи
+    def _draw_wave(self):
+        self._req_draw()
+
+    def _draw_ovl(self):
+        self._req_draw()
 
     # ---- кіно-стрічка + хвиля: генеруються ОКРЕМО для кожного джерела ----
     def _gen_visuals(self, si):
         src = self.sources[si]
         if src["kind"] == "image":
+            tw = THUMB_W
+            if src["w"] and src["h"]:
+                tw = max(24, min(140, int(round(THUMB_H * src["w"] / float(src["h"]) / 2)) * 2))
             p = os.path.join(self._tmp, f"s{si}_img.png")
 
             def work_img():
-                subprocess.run(
-                    ["ffmpeg", "-y", "-i", src["path"], "-frames:v", "1", "-vf",
-                     f"scale={THUMB_W}:{TLH - 6}:force_original_aspect_ratio=increase,"
-                     f"crop={THUMB_W}:{TLH - 6}", p],
-                    capture_output=True, creationflags=dc_core.NO_WINDOW)
-                self.after(0, lambda: self._load_strip(si, [p], [0.0]))
-            threading.Thread(target=work_img, daemon=True).start()
-            return
-
-        n = 24
-        times = [(i + 0.5) / n * src["dur"] for i in range(n)]
-        paths = [os.path.join(self._tmp, f"s{si}_strip_{i:02d}.png") for i in range(n)]
-
-        def work():
-            for t, p in zip(times, paths):
                 try:
                     subprocess.run(
-                        ["ffmpeg", "-y", "-ss", f"{t:.3f}", "-i", src["path"],
-                         "-frames:v", "1", "-vf", f"scale={THUMB_W}:{TLH - 6}", p],
+                        ["ffmpeg", "-y", "-i", src["path"], "-frames:v", "1", "-vf",
+                         f"scale={tw}:{THUMB_H}:force_original_aspect_ratio=increase,"
+                         f"crop={tw}:{THUMB_H}", p],
                         capture_output=True, creationflags=dc_core.NO_WINDOW)
                 except Exception:
                     pass
-            self.after(0, lambda: self._load_strip(si, paths, times))
+                self._ui(lambda: self._load_strip(si, [p], [0.0]))
+            threading.Thread(target=work_img, daemon=True).start()
+            return
+
+        def work():
+            # два проходи: спершу 8 кадрів (стрічка з'являється майже одразу), потім 24 детальніше
+            done = []
+
+            def batch(ts, tag):
+                for k, t in enumerate(ts):
+                    if self._closed:
+                        return
+                    pth = os.path.join(self._tmp, f"s{si}_{tag}_{k:02d}.png")
+                    try:
+                        subprocess.run(
+                            ["ffmpeg", "-y", "-ss", f"{t:.3f}", "-i", src["path"],
+                             "-frames:v", "1", "-vf", f"scale=-2:{THUMB_H}", pth],
+                            capture_output=True, creationflags=dc_core.NO_WINDOW)
+                    except Exception:
+                        continue
+                    if os.path.exists(pth):
+                        done.append((t, pth))
+                items = sorted(done)
+                self._ui(lambda: self._load_strip(si, [q for _, q in items],
+                                                  [t for t, _ in items]))
+            d = src["dur"]
+            batch([(i + 0.5) / 8 * d for i in range(8)], "a")
+            if not self._closed:          # один прохід: кадри скрабу + детальна стрічка
+                self._gen_scrub(si)
         threading.Thread(target=work, daemon=True).start()
 
         if src["has_audio"]:
@@ -1197,21 +1537,114 @@ class VideoEditor(tk.Toplevel):
                 if env:
                     def apply():
                         src["env"] = env
-                        self._draw_track()   # і хвиля в кліпі, і нижня смужка
-                    self.after(0, apply)
+                        self._req_draw()
+                    self._ui(apply)
             threading.Thread(target=work_env, daemon=True).start()
 
-    def _load_strip(self, si, paths, times):
-        imgs = []
-        for p in paths:
+    def _gen_scrub(self, si):
+        """Кадри для ЖИВОГО перемотування: один прохід ffmpeg (fps-фільтр) у фоні.
+        Поки тягнеш повзунок — показуємо найближчий з них миттєво, точний кадр
+        підставляється, щойно ffmpeg його відрендерить."""
+        src = self.sources[si]
+        d = max(0.1, src["dur"])
+        rate = max(0.25, min(4.0, 160.0 / d))
+        pat = os.path.join(self._tmp, f"s{si}_sc_%04d.png")
+        try:
+            subprocess.run(["ffmpeg", "-y", "-threads", "2", "-i", src["path"], "-an", "-sn",
+                            "-vf", f"fps={rate:g},scale=-2:{SCRUB_H}", "-start_number", "0", pat],
+                           capture_output=True, creationflags=dc_core.NO_WINDOW)
+        except Exception:
+            return
+        paths = []
+        k = 0
+        while True:
+            q = pat % k
+            if not os.path.exists(q):
+                break
+            paths.append(q)
+            k += 1
+        if paths:
+            self._ui(lambda: self._apply_scrub(si, rate, paths))
+
+    def _apply_scrub(self, si, rate, paths):
+        """Кеш скрабу готовий -> з нього ж детальна кіно-стрічка (кадри /4 = висота стрічки)."""
+        src = self.sources[si]
+        src["scrub"] = (rate, paths)
+        n = min(len(paths), 48)
+        idx = sorted({int(round(i * (len(paths) - 1) / max(1, n - 1))) for i in range(n)})
+        imgs, ts = [], []
+        k = max(1, SCRUB_H // THUMB_H)
+        for i in idx:
             try:
-                imgs.append(tk.PhotoImage(file=p) if os.path.exists(p) else None)
+                im = tk.PhotoImage(file=paths[i])
+                imgs.append(im.subsample(k) if k > 1 else im)
+                ts.append(i / rate)
             except tk.TclError:
-                imgs.append(None)
-        if any(imgs):
-            self.sources[si]["strip"] = imgs
-            self.sources[si]["times"] = list(times)
-            self._draw_track()
+                continue
+        if imgs:
+            src["strip"], src["times"] = imgs, ts
+            src["tw"] = max(16, min(220, imgs[0].width()))
+            self._req_draw()
+
+    def _quick_frame(self, t):
+        """Миттєвий кадр із кешу скрабу (без ffmpeg). False — кешу ще нема."""
+        p = self._sel_piece()
+        src = self._src(p)
+        sc = src.get("scrub")
+        if (not sc or src["kind"] != "video" or self.playing or self._is_transformed(p)
+                or self.ovls):
+            return False
+        rate, paths = sc
+        k = min(len(paths) - 1, max(0, int(round(t * rate))))
+        key = (p["src"], k, self._pcw, self._pch)
+        im = self._qcache.pop(key, None)
+        if im is None:
+            try:
+                base = tk.PhotoImage(file=paths[k])
+            except tk.TclError:
+                return False
+            r = min(self._pcw / float(max(1, base.width())), self._pch / float(max(1, base.height())))
+            best, err = (1, 1), 9.0
+            for b in (1, 2):
+                a = max(1, int(r * b + 1e-6))
+                e = r - a / float(b)
+                if -1e-6 <= e < err:
+                    best, err = (a, b), e
+            a, b = best
+            im = base
+            if a > 1:
+                im = im.zoom(a)
+            if b > 1:
+                im = im.subsample(b)
+        self._qcache[key] = im                 # LRU: свіжий — у кінець
+        while len(self._qcache) > 48:
+            self._qcache.pop(next(iter(self._qcache)))
+        try:
+            self._img = im
+            self.video.delete("frame")
+            self.video.create_image(self.VPAD + self.VW // 2, self.VPAD + self.VH // 2,
+                                    image=im, tags="frame")
+            self.video.tag_lower("frame")
+            self.video.tag_lower("screen")
+            self.video.tag_lower("card")
+        except tk.TclError:
+            return False
+        return True
+
+    def _load_strip(self, si, paths, times):
+        imgs, ts = [], []
+        for p, t in zip(paths, times):
+            try:
+                im = tk.PhotoImage(file=p)
+            except tk.TclError:
+                continue
+            imgs.append(im)
+            ts.append(t)
+        if imgs:
+            src = self.sources[si]
+            src["strip"], src["times"] = imgs, ts
+            src["tw"] = max(16, min(220, imgs[0].width()))
+            self._req_draw()
 
     def _nearest_thumb(self, src, t):
         ts, imgs = src.get("times"), src.get("strip")
@@ -1220,30 +1653,40 @@ class VideoEditor(tk.Toplevel):
         i = min(range(len(ts)), key=lambda k: abs(ts[k] - t))
         return imgs[i % len(imgs)]
 
-    def _draw_clip_strip(self, c, cx1, cx2, piece):
+    def _draw_clip_strip(self, c, cx1, cx2, piece, y0, fit=False):
+        """Кадри кіно-стрічки в кліпі (лише видима частина). Кадр, що вилазить
+        за правий край, накривається маскою з _draw_clips."""
         src = self._src(piece)
         if not src.get("strip"):
             return
+        tw = src.get("tw") or THUMB_W
         width = cx2 - cx1
-        k = max(1, int(width // THUMB_W))
+        if width <= 2:
+            return
         s, e = piece["s"], piece["e"]
-        for j in range(k):
-            xx = cx1 + j * THUMB_W
-            if xx + THUMB_W > cx2 + 4:
+        j = max(0, int((LX - cx1) // tw))
+        n = 0
+        while n < 400:
+            xx = cx1 + j * tw
+            if xx >= cx2 or xx > self.TW:
                 break
-            im = self._nearest_thumb(src, s + (j + 0.5) / k * (e - s))
+            if fit and xx + tw > cx2:
+                break
+            t = s + min(1.0, (j * tw + tw / 2.0) / width) * (e - s)
+            im = self._nearest_thumb(src, t)
             if im:
-                c.create_image(int(xx), 3, image=im, anchor="nw")
+                c.create_image(int(xx), y0 + 3, image=im, anchor="nw")
+            j += 1
+            n += 1
 
-    def _draw_handle(self, c, x, left, active=False):
-        w = 10 if active else 8
+    def _draw_handle(self, c, x, left, active, y1, y2):
+        w = 11 if active else 9
         x1, x2 = (x, x + w) if left else (x - w, x)
-        col = C_PLAY if active else C_HANDLE
-        c.create_polygon(host._rr_pts(x1, 2, x2, TLH - 2, 4), smooth=True, fill=col, outline="")
+        c.create_polygon(host._rr_pts(x1, y1, x2, y2, 4), smooth=True, fill=C_HANDLE, outline="")
         cx = (x1 + x2) / 2
-        c.create_line(cx, TLH * 0.30, cx, TLH * 0.70, fill=C_DARK, width=2)
+        c.create_line(cx, y1 + (y2 - y1) * 0.32, cx, y1 + (y2 - y1) * 0.68, fill="#1e1f22", width=2)
 
-    # ---- масштаб/скрол доріжки ----
+    # ---- час доріжки <-> пікселі ----
     def _clip_durs(self):
         return [(self.pieces[ix]["e"] - self.pieces[ix]["s"]) / self.pieces[ix]["speed"]
                 for ix in self.order]
@@ -1255,6 +1698,15 @@ class VideoEditor(tk.Toplevel):
         """Тривалість доріжки ЯК ВИДНО (з порожніми місцями)."""
         return max(0.1, sum(self._gapof(self.pieces[ix]) for ix in self.order)
                    + sum(self._clip_durs()))
+
+    def _layout_end_all(self):
+        """Кінець УСЬОГО на таймлайні (кліпи, накладки, звуки) — до нього можна прокрутити."""
+        t = self._layout_total()
+        for o in self.ovls:
+            t = max(t, o["at"] + (o["e"] - o["s"]))
+        for s in self.snds:
+            t = max(t, s["at"] + s["dur"])
+        return t
 
     def _gapless(self, t):
         """Час доріжки (з пропусками) -> час ЕКСПОРТУ (пропуски стиснуто).
@@ -1274,28 +1726,23 @@ class VideoEditor(tk.Toplevel):
         return out
 
     def _pps(self):
-        # ФІКСОВАНИЙ масштаб (px/сек від тривалості ПЕРШОГО відео, не від поточного
-        # монтажу) — як у CapCut: обрізаєш кліп -> він КОРОТШАЄ, а не тягнеться
-        # на всю доріжку. Зум/скрол — поверх цієї бази.
+        # px/сек: база (перше відео рівно по ширині) × зум. Обрізаєш кліп -> він
+        # КОРОТШАЄ, а не тягнеться на всю доріжку (як у CapCut).
         return self._base_pps * self._zoom
 
     def _content_width(self, pps):
-        ds = self._clip_durs()
-        gaps = sum(self._gapof(self.pieces[ix]) for ix in self.order)
-        return 4.0 + (sum(ds) + gaps) * pps + 3 * max(0, len(ds) - 1)
+        return PAD_L + self._layout_end_all() * pps + 160
+
+    def _x_of(self, lt):
+        """Час доріжки -> x на канвасі."""
+        return LX + PAD_L + lt * self._pps() - self._scroll
+
+    def _lt_of(self, x):
+        """x на канвасі -> час доріжки."""
+        return (x - LX - PAD_L + self._scroll) / max(1e-6, self._pps())
 
     def _content_x_of(self, layout_t, pps):
-        """Час доріжки (з пропусками) -> x у контенті."""
-        x, acc, gpx = 2.0, 0.0, 3
-        for ix in self.order:
-            p = self.pieces[ix]
-            for span in (self._gapof(p), (p["e"] - p["s"]) / p["speed"]):
-                if layout_t <= acc + span:
-                    return x + (layout_t - acc) * pps
-                x += span * pps
-                acc += span
-            x += gpx
-        return x
+        return PAD_L + layout_t * pps
 
     def _playhead_montage_t(self):
         acc = 0.0
@@ -1307,30 +1754,116 @@ class VideoEditor(tk.Toplevel):
             acc += (p["e"] - p["s"]) / p["speed"]
         return acc
 
-    def _clamp_scroll(self, pps):
-        self._scroll = max(0.0, min(self._scroll, max(0.0, self._content_width(pps) - self.TW)))
+    def _locate(self, lt):
+        """Час доріжки -> (кліп, час у його джерелі). На стику — наступний кліп."""
+        n = len(self.order)
+        acc = 0.0
+        for slot in range(n):
+            p = self.pieces[self.order[slot]]
+            g = self._gapof(p)
+            d = (p["e"] - p["s"]) / p["speed"]
+            if lt < acc + g:
+                return slot, p["s"]
+            acc += g
+            if lt < acc + d or slot == n - 1:
+                t = p["s"] + max(0.0, lt - acc) * p["speed"]
+                return slot, min(max(p["s"], t), p["e"])
+            acc += d
+        return max(0, n - 1), self._sel_piece()["e"]
 
-    def _apply_zoom(self, factor):
-        old = self._pps()
-        ft = self._playhead_montage_t()
-        screen_x = self._content_x_of(ft, old) - self._scroll
-        self._zoom = min(60.0, max(0.15, self._zoom * factor))   # 0.15 = зум-аут, коли монтаж довгий
+    def _clip_edges(self):
+        pts, lt = [0.0], 0.0
+        for ix in self.order:
+            p = self.pieces[ix]
+            lt += self._gapof(p)
+            pts.append(lt)
+            lt += (p["e"] - p["s"]) / p["speed"]
+            pts.append(lt)
+        return pts
+
+    def _set_playhead_lt(self, lt, fast=True):
+        """Ставить ГЛОБАЛЬНИЙ плейхед: вибирає кліп під ним і час у джерелі."""
+        if not self.order:
+            return
+        slot, t = self._locate(max(0.0, lt))
+        if slot != self.sel:
+            self.sel = slot
+            self._tf_on = False
+            try:
+                self.video.delete("tf")
+            except tk.TclError:
+                pass
+        self.cur = t
+        self._show_poster(t, fast=fast)
+        self._req_draw()
+
+    def _clamp_scroll(self, pps):
+        vis = max(10, self.TW - LX)
+        self._scroll = max(0.0, min(self._scroll, max(0.0, self._content_width(pps) - vis)))
+
+    # ---- зум: Ctrl+колесо — ДО КУРСОРА миші; кнопки/клавіші — до плейхеда ----
+    def _zoom_at(self, factor, sx=None):
+        if sx is None:
+            px = self._x_of(self._playhead_montage_t())
+            sx = px if LX <= px <= self.TW else (LX + self.TW) / 2.0
+        lt = self._lt_of(sx)                       # час під точкою зуму лишається НА МІСЦІ
+        self._zoom = min(ZMAX, max(ZMIN, self._zoom * factor))
         new = self._pps()
-        self._scroll = self._content_x_of(ft, new) - screen_x
+        self._scroll = PAD_L + lt * new - (sx - LX)
         self._clamp_scroll(new)
         self._draw_track()
+        try:
+            self.zoom_sl.redraw()
+        except (tk.TclError, AttributeError):
+            pass
 
-    def _on_zoom(self, ev):
-        self._apply_zoom(1.25 if ev.delta > 0 else 0.8)
-        return "break"
+    def _set_zoom(self, z):
+        self._zoom_at(z / max(1e-6, self._zoom))
+
+    def _zoom_fit(self):
+        vis = max(50, self.TW - LX - PAD_L - 40)
+        self._zoom = min(ZMAX, max(ZMIN, vis / max(0.1, self._layout_end_all()) / self._base_pps))
+        self._scroll = 0.0
+        self._draw_track()
+        try:
+            self.zoom_sl.redraw()
+        except (tk.TclError, AttributeError):
+            pass
 
     def _zoom_step(self, factor):
-        self._apply_zoom(factor)
+        self._zoom_at(factor)
+
+    def _on_tl_config(self, ev):
+        w = int(ev.width)
+        if w < 80:
+            return
+        first = not self._fit_done
+        self.TW = w
+        if first:
+            self._fit_done = True
+            self._zoom_fit()
+            return
+        self._clamp_scroll(self._pps())
+        self._req_draw()
+
+    def _on_wheel(self, ev):
+        if ev.state & 0x4:                          # Ctrl -> зум до курсора
+            self._zoom_at(1.2 ** (ev.delta / 120.0), max(LX, ev.x))
+            return "break"
+        self._scroll -= (ev.delta / 120.0) * 90     # колесо / Shift+колесо -> прокрутка
+        self._clamp_scroll(self._pps())
+        self._draw_track()
+        return "break"
 
     # ---- точне підлаштування обрізки стрілками (по кадру) + час-підказка ----
     def _fmt_tt(self, t):
         t = max(0.0, t); m = int(t // 60)
         return f"{m}:{t - m * 60:04.1f}"
+
+    @staticmethod
+    def _fmt_tc(t):
+        t = max(0.0, t); m = int(t // 60)
+        return f"{m:02d}:{t - m * 60:05.2f}"
 
     def _nudge(self, direction, big=False):
         if self.busy:
@@ -1343,19 +1876,22 @@ class VideoEditor(tk.Toplevel):
         step = 1.0 if big else 1.0 / fps
         eps = 1.0 / fps
         lo, hi = 0.0, src["dur"]
-        if not self._nudge_active:      # уся серія стрілок = один крок undo
-            self._push_undo(); self._nudge_active = True
-        if self._active == "L":
-            ns = min(max(lo, p["s"] + direction * step), p["e"] - eps)
-            p["gap"] = max(0.0, self._gapof(p) + (ns - p["s"]) / p["speed"])
-            p["s"] = ns; self.cur = self._tip_t = ns
-        elif self._active == "R":
-            ne = max(min(hi, p["e"] + direction * step), p["s"] + eps)
-            p["e"] = ne; self.cur = self._tip_t = ne
-        else:                           # нема активної ручки -> рухаємо плейхед
-            self.cur = self._tip_t = min(max(p["s"], self.cur + direction * step), p["e"])
-        self._show_poster(self.cur)
-        self._redraw()
+        if self._active in ("L", "R") and self.sel_ovl is None and self._sel_snd is None:
+            if not self._nudge_active:      # уся серія стрілок = один крок undo
+                self._push_undo(); self._nudge_active = True
+            if self._active == "L":
+                ns = min(max(lo, p["s"] + direction * step), p["e"] - eps)
+                p["gap"] = max(0.0, self._gapof(p) + (ns - p["s"]) / p["speed"])
+                p["s"] = ns; self.cur = self._tip_t = ns
+            else:
+                ne = max(min(hi, p["e"] + direction * step), p["s"] + eps)
+                p["e"] = ne; self.cur = self._tip_t = ne
+            self._show_poster(self.cur)
+            self._redraw()
+        else:                               # нема активної ручки -> плейхед (через кліпи)
+            lt = self._playhead_montage_t() + direction * step / p["speed"]
+            self._set_playhead_lt(min(self._layout_total(), max(0.0, lt)), fast=False)
+            self._tip_t = None
         self._schedule_tip_clear()
         return "break"
 
@@ -1370,86 +1906,314 @@ class VideoEditor(tk.Toplevel):
         try: self._redraw()
         except Exception: pass
 
-    def _on_scroll(self, ev):
-        if self._content_width(self._pps()) <= self.TW:
-            return
-        self._scroll -= (ev.delta / 120.0) * 60
-        self._clamp_scroll(self._pps())
-        self._draw_track()
-        return "break"
+    def _to_end(self):
+        self._set_playhead_lt(self._layout_total(), fast=False)
 
+    def _follow_playhead(self):
+        """Під час відтворення доріжка сама їде за плейхедом (як у CapCut)."""
+        x = self._x_of(self._playhead_montage_t())
+        if x > self.TW - 30 or x < LX:
+            self._scroll += x - (LX + (self.TW - LX) * 0.15)
+            self._clamp_scroll(self._pps())
+
+    # ------------------------------------------------- малювання таймлайна --- #
     def _draw_track(self):
-        c = self.tl; c.delete("all"); W = self.TW
-        c.create_rectangle(0, 0, W, TLH, fill=C_TRACK, outline="")
+        c = self.tl
+        try:
+            c.delete("all")
+        except tk.TclError:
+            return
+        W = self.TW
         pps = self._pps()
-        x = 2.0 - self._scroll; gap = 3
+        self._clamp_scroll(pps)
+        c.create_rectangle(0, 0, W, TL_TOTAL_H, fill=C_TRACK, outline="")
+        for y, h in ((OVL_Y, OVL_H), (TL_Y, TLH), (SND_Y, SND_H)):
+            c.create_rectangle(LX, y, W, y + h, fill=C_LANE, outline="")
+        self._draw_ruler(c, W, pps)
+        self._draw_clips(c, W, pps)
+        self._draw_ovl_lane(c, W, pps)
+        self._draw_snd_lane(c, W, pps)
+        self._draw_drag_ghost(c, W)
+        if self._snap_lt is not None:              # жовта лінія «магніту»
+            sx = self._x_of(self._snap_lt)
+            if LX <= sx <= W:
+                c.create_line(sx, RUL_H, sx, SB_Y - 4, fill=C_SNAP, width=1, dash=(4, 3))
+        if self._tip_t is not None and self._sel_xs is not None:
+            tx = (self._sel_xe if self._active == "R"
+                  else self._sel_xs if self._active == "L" else self._playhead_x)
+            tx = min(max(LX + 32, tx), W - 32)
+            c.create_rectangle(tx - 30, TL_Y - 19, tx + 30, TL_Y - 3, fill=C_DARK, outline=C_PLAY)
+            c.create_text(tx, TL_Y - 11, text=self._fmt_tt(self._tip_t), fill="#ffffff",
+                          font=(FONT, 8, "bold"))
+        self._draw_gutter(c)
+        self._draw_playhead(c, W)
+        self._draw_scrollbar(c, W, pps)
+        try:
+            self.time_lbl.config(text=f"{self._fmt_tc(self._playhead_montage_t())}"
+                                      f"  /  {self._fmt_tc(self._layout_total())}")
+        except (tk.TclError, AttributeError):
+            pass
+        self._update_tools()
+
+    def _draw_ruler(self, c, W, pps):
+        c.create_rectangle(LX, 0, W, RUL_H, fill=C_RULER, outline="")
+        major = 600.0
+        for st in (0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600):
+            if st * pps >= 70:
+                major = float(st)
+                break
+        minor = major / 5.0 if major * pps / 5.0 >= 9 else major / 2.0
+        t0 = max(0.0, self._lt_of(LX))
+        t1 = self._lt_of(W)
+        i = int(t0 // minor)
+        n = 0
+        while n < 600:
+            t = i * minor
+            if t > t1:
+                break
+            x = self._x_of(t)
+            if x >= LX:
+                q = t / major
+                if abs(q - round(q)) < 1e-6:
+                    c.create_line(x, RUL_H - 10, x, RUL_H, fill=C_MUTED)
+                    m = int(round(t) // 60) if major >= 1 else int(t // 60)
+                    if major >= 1:
+                        lab = f"{m:02d}:{int(round(t)) - m * 60:02d}"
+                    else:
+                        lab = f"{m:02d}:{t - m * 60:04.1f}"
+                    c.create_text(x + 4, 9, text=lab, anchor="w", fill=C_MUTED, font=(FONT, 8))
+                else:
+                    c.create_line(x, RUL_H - 4, x, RUL_H, fill="#4a4d57")
+            i += 1
+            n += 1
+        c.create_line(LX, RUL_H - 0.5, W, RUL_H - 0.5, fill="#2a2c33")
+
+    def _draw_clips(self, c, W, pps):
         self._clip_rects = []
-        self._sel_xs = self._sel_xe = 0
+        self._sel_xs = self._sel_xe = None
+        y1, y2 = TL_Y, TL_Y + TLH
+        drag = self._clip_drag if (self._clip_drag and self._clip_drag["active"]) else None
+        focus_clip = self.sel_ovl is None and self._sel_snd is None
+        lt = 0.0
         for slot, ix in enumerate(self.order):
             p = self.pieces[ix]
             s, e = p["s"], p["e"]
-            w = max(6.0, (e - s) / p["speed"] * pps)
-            sel = slot == self.sel
+            g = self._gapof(p)
+            d = (e - s) / p["speed"]
             # порожнє місце перед кліпом: лишається на доріжці (зникне при збереженні)
-            gpx = self._gapof(p) * pps
-            if gpx > 0.5:
-                gx1, gx2 = x, x + gpx
-                if gx2 > 0 and gx1 < W:
-                    c.create_rectangle(gx1, 3, gx2, TLH - 3, fill="#101116", outline="")
-                    c.create_rectangle(gx1, 3, gx2, TLH - 3, fill=C_CLIP,
+            if g * pps > 0.5:
+                gx1, gx2 = self._x_of(lt), self._x_of(lt + g)
+                if gx2 > LX and gx1 < W:
+                    c.create_rectangle(gx1, y1 + 3, gx2, y2 - 3, fill="#101116", outline="")
+                    c.create_rectangle(gx1, y1 + 3, gx2, y2 - 3, fill=C_CLIP,
                                        stipple="gray12", outline="")
-                    if gpx > 76:
-                        c.create_text((gx1 + gx2) / 2, TLH / 2, text=E("ed_empty"),
+                    if gx2 - gx1 > 76:
+                        c.create_text((max(gx1, LX) + gx2) / 2, (y1 + y2) / 2, text=E("ed_empty"),
                                       fill=C_MUTED, font=(FONT, 8))
-                x += gpx
-            cx1, cx2 = x, x + w
-            c.create_rectangle(cx1, 3, cx2, TLH - 3, fill=C_CLIP, outline="")
-            self._draw_clip_strip(c, cx1, cx2, p)
-            if not sel:
-                c.create_rectangle(cx1, 3, cx2, TLH - 3, fill="#000000", stipple="gray25", outline="")
-            c.create_rectangle(cx1, 3, cx2, TLH - 3,
-                               outline=C_HANDLE if sel else C_DARK, width=2 if sel else 1)
-            # значки стану кліпа: швидкість / без звуку / масштаб / картинка
-            badges = []
-            if p["speed"] != 1.0: badges.append(f"{p['speed']:g}×")
-            if p["mute"]: badges.append("🔇")
-            if self._is_transformed(p): badges.append("🔍")
-            if self._src(p)["kind"] == "image": badges.append("🖼")
-            if badges:
-                c.create_text(cx1 + 5, 11, anchor="w", text=" ".join(badges),
-                              fill="#ffffff", font=(FONT, 8, "bold"))
+            lt += g
+            cx1, cx2 = self._x_of(lt), self._x_of(lt + d)
+            if cx2 - cx1 < 6:
+                cx2 = cx1 + 6
+            lt += d
+            self._clip_rects.append((slot, ix, cx1, cx2))
+            sel = slot == self.sel and focus_clip
             if sel:
                 self._sel_xs, self._sel_xe = cx1, cx2
-                # хвиля звуку прямо НА вибраному кліпі (внизу, як у CapCut)
-                env = self._src(p).get("env")
-                if env and not p["mute"]:
-                    by = TLH - 5
-                    span = max(0.001, e - s)
-                    xx = max(0.0, cx1)
-                    while xx < min(float(W), cx2):
-                        a = self._env_at(env, s + (xx - cx1) / max(1.0, cx2 - cx1) * span)
-                        c.create_line(xx, by - max(0.6, a * 17), xx, by, fill=C_WAVE_IN, width=1)
-                        xx += 2
-                self._draw_handle(c, cx1, left=True, active=self._active == "L")
-                self._draw_handle(c, cx2, left=False, active=self._active == "R")
-                if e > s:
-                    xh = cx1 + (self.cur - s) / (e - s) * (cx2 - cx1)
-                    xh = min(max(cx1, xh), cx2)
-                    self._playhead_x = xh
-                    c.create_line(xh, 3, xh, TLH, fill=C_PLAY, width=2)
-                    c.create_polygon(xh - 5, 0, xh + 5, 0, xh, 7, fill=C_PLAY, outline="")
-            self._clip_rects.append((slot, ix, cx1, cx2))
-            x = cx2 + gap
-        if self._tip_t is not None:
-            tx = (self._sel_xe if self._active == "R"
-                  else self._sel_xs if self._active == "L" else self._playhead_x)
-            tx = min(max(30, tx), W - 30)
-            c.create_rectangle(tx - 30, 0, tx + 30, 16, fill=C_DARK, outline=C_PLAY)
-            c.create_text(tx, 8, text=self._fmt_tt(self._tip_t), fill="#ffffff", font=(FONT, 8, "bold"))
-        self._draw_ovl()
-        self._draw_wave()
+            if cx2 < LX - 12 or cx1 > W + 12:
+                continue
+            if drag and drag["slot"] == slot:      # місце, звідки тягнемо кліп
+                c.create_rectangle(cx1 + 1, y1 + 2, cx2 - 1, y2 - 2, outline=C_MUTED,
+                                   dash=(4, 3), width=1)
+                continue
+            hv = self._hover == ("clip", slot)
+            c.create_rectangle(cx1 + 1, y1, cx2 - 1, y2, fill=C_CLIP, outline="")
+            self._draw_clip_strip(c, cx1 + 1, cx2 - 1, p, y1)
+            # маска: кадр, що вилазить за кліп, накриваємо (наступний кліп ляже зверху)
+            c.create_rectangle(cx2 - 1, y1, cx2 + 230, y2, fill=C_LANE, outline="")
+            # хвиля звуку прямо НА вибраному кліпі (внизу, як у CapCut)
+            env = self._src(p).get("env")
+            if sel and env and not p["mute"]:
+                by = y2 - 4
+                span = max(0.001, e - s)
+                xx = max(float(LX), cx1 + 1)
+                end = min(float(W), cx2 - 1)
+                c.create_rectangle(max(LX, cx1 + 1), y2 - 22, min(W, cx2 - 1), y2, fill="#000000",
+                                   stipple="gray50", outline="")
+                while xx < end:
+                    a = self._env_at(env, s + (xx - cx1) / max(1.0, cx2 - cx1) * span)
+                    c.create_line(xx, by - max(0.6, a * 17), xx, by, fill=C_WAVE_IN, width=1)
+                    xx += 2
+            if sel:
+                c.create_rectangle(cx1 + 1, y1 + 1, cx2 - 1, y2 - 1, outline=C_HANDLE, width=2)
+            elif hv:
+                c.create_rectangle(cx1 + 1, y1, cx2 - 1, y2, outline="#8a8f9c", width=1)
+            else:
+                c.create_rectangle(cx1 + 1, y1, cx2 - 1, y2, outline="#0d0e11", width=1)
+            # ярлик: тривалість + значки (швидкість / без звуку / масштаб / картинка)
+            if cx2 - cx1 > 34 and cx2 > LX + 20:
+                lab = f"{d:.1f}s"
+                if p["speed"] != 1.0:
+                    lab += f"  {p['speed']:g}×"
+                if p["mute"]:
+                    lab += "  🔇"
+                if self._is_transformed(p):
+                    lab += "  🔍"
+                if self._src(p)["kind"] == "image":
+                    lab = "🖼 " + lab
+                tx = max(cx1 + (14 if sel else 6), LX + 6)
+                tid = c.create_text(tx + 3, y1 + 11, anchor="w", text=lab, fill="#ffffff",
+                                    font=(FONT, 8, "bold"))
+                bb = c.bbox(tid)
+                if bb and bb[2] < cx2 - 4:
+                    r = c.create_rectangle(bb[0] - 4, bb[1] - 1, bb[2] + 4, bb[3] + 1,
+                                           fill="#000000", stipple="gray50", outline="")
+                    c.tag_lower(r, tid)
+                elif bb:
+                    c.delete(tid)
+            if sel:
+                self._draw_handle(c, cx1 + 1, True, self._active == "L", y1, y2)
+                self._draw_handle(c, cx2 - 1, False, self._active == "R", y1, y2)
 
-    # ---- хвиля кліпів (верх) + смужка доданих звуків (низ) ----
+    def _draw_drag_ghost(self, c, W):
+        d = self._clip_drag
+        if not d or not d["active"]:
+            return
+        x1 = d["x"] - d["grab_dx"]
+        x2 = x1 + d["w"]
+        p = self.pieces[d["ix"]]
+        if d["to_ovl"]:
+            y1, y2 = OVL_Y + 2, OVL_Y + OVL_H - 2
+            c.create_polygon(host._rr_pts(x1, y1, x2, y2, 6), smooth=True, fill=C_OVL, outline="")
+            c.create_rectangle(x1, y1, x2, y2, outline=C_HANDLE, width=2)
+            c.create_text(max(x1 + 8, LX + 8), (y1 + y2) / 2, anchor="w", text="🎭  " + E("ed_drop_ovl"),
+                          fill="#10121a", font=(FONT, 8, "bold"))
+            return
+        others = [r for r in self._clip_rects if r[0] != d["slot"]]
+        tgt = d["target"]
+        if others:
+            mx = others[-1][3] if tgt >= len(others) else others[tgt][2]
+            c.create_line(mx, TL_Y - 3, mx, TL_Y + TLH + 3, fill=C_DROP, width=3)
+            c.create_polygon(mx - 6, TL_Y - 8, mx + 6, TL_Y - 8, mx, TL_Y - 2, fill=C_DROP, outline="")
+        y1, y2 = TL_Y - 6, TL_Y + TLH - 6
+        c.create_rectangle(x1, y1, x2, y2, fill=C_CLIP, outline="")
+        self._draw_clip_strip(c, x1, x2, p, y1, fit=True)
+        c.create_rectangle(x1, y1, x2, y2, outline=C_HANDLE, width=2)
+
+    def _draw_ovl_lane(self, c, W, pps):
+        self._ovl_rects = []
+        y1, y2 = OVL_Y + 2, OVL_Y + OVL_H - 2
+        for i, o in enumerate(self.ovls):
+            x1 = self._x_of(o["at"])
+            x2 = x1 + max(10.0, (o["e"] - o["s"]) * pps)
+            self._ovl_rects.append((i, x1, x2))
+            if x2 < LX or x1 > W:
+                continue
+            sel = i == self.sel_ovl
+            hv = self._hover == ("ovl", i)
+            c.create_polygon(host._rr_pts(x1, y1, x2, y2, 6), smooth=True,
+                             fill=(ui.lighten(C_OVL, 0.1) if hv else C_OVL), outline="")
+            src = self.sources[o["src"]]
+            env = src.get("env")
+            if sel and env and not o["mute"]:          # хвиля вибраної накладки
+                mid = (y1 + y2) / 2.0
+                span = max(0.001, o["e"] - o["s"])
+                xx = max(float(LX), x1)
+                while xx < min(float(W), x2):
+                    a = self._env_at(env, o["s"] + (xx - x1) / max(1.0, x2 - x1) * span)
+                    h = max(0.5, a * (mid - y1 - 2))
+                    c.create_line(xx, mid - h, xx, mid + h, fill="#2a0d45", width=1)
+                    xx += 2
+            nm = src["name"]
+            if len(nm) > 22:
+                nm = nm[:20] + "…"
+            mut = " 🔇" if o["mute"] else ""
+            if x2 - x1 > 40:
+                c.create_text(max(x1 + 8, LX + 8), (y1 + y2) / 2, anchor="w",
+                              text=f"🎭 {nm}{mut}", fill="#10121a", font=(FONT, 8, "bold"))
+            if sel:
+                c.create_polygon(host._rr_pts(x1, y1, x2, y2, 6), smooth=True, fill="",
+                                 outline=C_HANDLE, width=2)
+                c.create_rectangle(x1, y1 + 4, x1 + 5, y2 - 4, fill=C_HANDLE, outline="")
+                c.create_rectangle(x2 - 5, y1 + 4, x2, y2 - 4, fill=C_HANDLE, outline="")
+        if not self.ovls and not (self._clip_drag and self._clip_drag["active"]):
+            c.create_text((LX + W) / 2, (y1 + y2) / 2, text=E("ed_ovl_hint"),
+                          fill="#6d717c", font=(FONT, 8))
+
+    def _draw_snd_lane(self, c, W, pps):
+        self._snd_rects = []
+        y1, y2 = SND_Y + 2, SND_Y + SND_H - 2
+        for i, sn in enumerate(self.snds):
+            x1 = self._x_of(sn["at"])
+            x2 = x1 + max(10.0, sn["dur"] * pps)
+            self._snd_rects.append((i, x1, x2))
+            if x2 < LX or x1 > W:
+                continue
+            sel = i == self._sel_snd
+            hv = self._hover == ("snd", i)
+            c.create_polygon(host._rr_pts(x1, y1, x2, y2, 6), smooth=True,
+                             fill=(ui.lighten(C_SND, 0.1) if hv else C_SND), outline="")
+            env = sn.get("env")
+            if env:                                    # хвиля звуку видна завжди
+                mid = (y1 + y2) / 2.0
+                xx = max(float(LX), x1)
+                while xx < min(float(W), x2):
+                    a = self._env_at(env, (xx - x1) / max(1.0, x2 - x1) * sn["dur"])
+                    h = max(0.5, a * (mid - y1 - 2))
+                    c.create_line(xx, mid - h, xx, mid + h, fill="#0d3d20", width=1)
+                    xx += 2
+            nm = sn["name"]
+            if len(nm) > 20:
+                nm = nm[:18] + "…"
+            v = "" if sn["vol"] == 1.0 else f" · {int(sn['vol'] * 100)}%"
+            if x2 - x1 > 40:
+                c.create_text(max(x1 + 8, LX + 8), (y1 + y2) / 2, anchor="w",
+                              text=f"🎵 {nm}{v}", fill="#071a0e", font=(FONT, 8, "bold"))
+            if sel:
+                c.create_polygon(host._rr_pts(x1, y1, x2, y2, 6), smooth=True, fill="",
+                                 outline=C_HANDLE, width=2)
+        if not self.snds:
+            c.create_text((LX + W) / 2, (y1 + y2) / 2, text=E("ed_snd_hint"),
+                          fill="#6d717c", font=(FONT, 8))
+
+    def _draw_gutter(self, c):
+        """Ліва колонка з іконками доріжок (накриває все, що заїхало за край)."""
+        c.create_rectangle(0, 0, LX, TL_TOTAL_H, fill=C_RULER, outline="")
+        c.create_line(LX - 0.5, 0, LX - 0.5, TL_TOTAL_H, fill="#2a2c33")
+        for y, h, ic in ((OVL_Y, OVL_H, "🎭"), (TL_Y, TLH, "🎬"), (SND_Y, SND_H, "🎵")):
+            c.create_text(LX / 2, y + h / 2, text=ic, fill=C_MUTED, font=(FONT, 11))
+
+    def _draw_playhead(self, c, W):
+        x = self._x_of(self._playhead_montage_t())
+        self._playhead_x = x
+        if x < LX - 1 or x > W + 1:
+            return
+        c.create_line(x, RUL_H - 4, x, SB_Y - 4, fill=C_PLAY, width=2)
+        c.create_polygon(x - 6, 3, x + 6, 3, x + 6, RUL_H - 11, x, RUL_H - 4, x - 6, RUL_H - 11,
+                         fill=C_PLAY, outline="")
+        if self._mode == "ph":                     # час біля голівки, поки тягнеш
+            lab = self._fmt_tc(self._playhead_montage_t())
+            bx = x + 10 if x + 84 < W else x - 84
+            c.create_rectangle(bx, 3, bx + 74, RUL_H - 5, fill=C_DARK, outline=C_PLAY)
+            c.create_text(bx + 37, (RUL_H - 2) / 2, text=lab, fill="#ffffff",
+                          font=(FONT, 8, "bold"))
+
+    def _draw_scrollbar(self, c, W, pps):
+        x1, x2 = LX + 6, W - 6
+        c.create_polygon(host._rr_pts(x1, SB_Y, x2, SB_Y + SB_H, 4), smooth=True,
+                         fill="#1d1e24", outline="")
+        vis = max(10, W - LX)
+        cw = self._content_width(pps)
+        if cw <= vis + 1:
+            self._sb_thumb = None
+            return
+        track = x2 - x1
+        tw = max(36.0, track * vis / cw)
+        tx = x1 + (track - tw) * (self._scroll / max(1.0, cw - vis))
+        self._sb_thumb = (tx, tx + tw, track, tw, cw, vis)
+        hot = self._mode == "sb" or self._hover == ("sb",)
+        c.create_polygon(host._rr_pts(tx, SB_Y, tx + tw, SB_Y + SB_H, 4), smooth=True,
+                         fill=("#8a8f9c" if hot else "#4a4d57"), outline="")
+
     def _env_at(self, env, t):
         if not env:
             return 0.0
@@ -1460,86 +2224,70 @@ class VideoEditor(tk.Toplevel):
             i = len(env) - 1
         return env[i]
 
-    def _draw_wave(self):
-        c = getattr(self, "wave", None)
-        if c is None:
-            return
+    def _update_tools(self):
+        """Стан кнопок панелі (сірі, коли дія зараз неможлива)."""
         try:
-            # великий графік звуку прибрано — хвиля видна прямо на вибраному кліпі;
-            # ця смужка лише для ДОДАНИХ звуків (зелені блоки)
-            c.delete("all")
-            W, H = self.TW, self.WAVE_H
-            LANE = 0
-            c.create_rectangle(0, 0, W, H, fill=C_TRACK, outline="")
-            self._snd_rects = []
-            pps = self._pps()
-            for i, sn in enumerate(self.snds):
-                x1 = self._content_x_of(sn["at"], pps) - self._scroll
-                x2 = x1 + max(10.0, sn["dur"] * pps)
-                self._snd_rects.append((i, x1, x2))
-                if x2 < 0 or x1 > W:
-                    continue
-                sel = i == self._sel_snd
-                c.create_polygon(host._rr_pts(x1, LANE + 3, x2, H - 2, 5),
-                                 smooth=True, fill=C_SND, outline="")
-                if sel:
-                    c.create_rectangle(x1, LANE + 3, x2, H - 2, outline=C_HANDLE, width=2)
-                # хвиля вибраного звуку прямо в його блоці
-                env = sn.get("env")
-                if sel and env:
-                    smid = (LANE + H) / 2.0
-                    xx = max(0.0, x1)
-                    while xx < min(float(W), x2):
-                        a = self._env_at(env, (xx - x1) / max(1.0, x2 - x1) * sn["dur"])
-                        h = max(0.5, a * (H - LANE - 6) / 2.0)
-                        c.create_line(xx, smid - h, xx, smid + h, fill="#0d3d20", width=1)
-                        xx += 2
-                nm = sn["name"]
-                if len(nm) > 16:
-                    nm = nm[:14] + "…"
-                v = "" if sn["vol"] == 1.0 else f" · {int(sn['vol'] * 100)}%"
-                c.create_text(max(x1 + 6, 6), (LANE + H) / 2 + 1, anchor="w",
-                              text=f"🎵 {nm}{v}", fill="#10121a", font=(FONT, 8, "bold"))
-            if not self.snds:
-                c.create_text(W // 2, (LANE + H) / 2 + 1,
-                              text=E("ed_snd_hint"),
-                              fill=C_MUTED, font=(FONT, 8))
-            xh = getattr(self, "_playhead_x", 0)
-            if xh:
-                c.create_line(xh, 0, xh, H, fill=C_PLAY, width=2)
-        except tk.TclError:
+            p = self._sel_piece()
+            src = self._src(p)
+            eps = 0.04
+            self.b_undo.set_state("normal" if self._undo and not self.busy else "disabled")
+            self.b_redo.set_state("normal" if self._redo and not self.busy else "disabled")
+            self.b_split.set_state("normal" if p["s"] + eps < self.cur < p["e"] - eps
+                                   and not self.busy else "disabled")
+            can_del = (self.sel_ovl is not None or self._sel_snd is not None
+                       or len(self.order) > 1)
+            self.b_del.set_state("normal" if can_del and not self.busy else "disabled")
+            self.b_dup.set_state("disabled" if self.busy else "normal")
+            vid = src["kind"] == "video"
+            self.b_speed.set_state("normal" if vid and not self.busy else "disabled")
+            self.b_mute.set_state("normal" if vid and src["has_audio"] and not self.busy
+                                  else "disabled")
+            self.b_mute.set_icon("🔇" if p["mute"] else "🔊")
+            self.b_ovl.set_state("normal" if len(self.order) > 1 and not self.busy else "disabled")
+            self.b_add.set_state("disabled" if self.busy else "normal")
+        except (tk.TclError, AttributeError, IndexError):
             pass
 
-    def _snd_hit(self, x):
-        for i, x1, x2 in self._snd_rects:
-            if x1 - 3 <= x <= x2 + 3:
-                return i
-        return None
+    # --------------------------------------------------------- «магніт» ---- #
+    def _snap_targets(self, exclude=None, playhead=True):
+        pts = self._clip_edges()
+        if playhead:
+            pts.append(self._playhead_montage_t())
+        for i, o in enumerate(self.ovls):
+            if ("ovl", i) != exclude:
+                pts += [o["at"], o["at"] + (o["e"] - o["s"])]
+        for i, s in enumerate(self.snds):
+            if ("snd", i) != exclude:
+                pts += [s["at"], s["at"] + s["dur"]]
+        return pts
 
-    def _wave_press(self, ev):
-        i = self._snd_hit(ev.x)
-        if i != self._sel_snd:
-            self._sel_snd = i          # вибраний звук -> його хвиля видно у блоці
-            self._draw_wave()
-        if i is None:
-            self._snd_drag = None
-            return
-        self._snd_drag = [i, ev.x, self.snds[i]["at"], False]   # undo лише при реальному русі
+    def _snap(self, lt, pts, thr_px=8):
+        """Притягує час до найближчої точки (краї кліпів, плейхед…) в межах thr_px."""
+        if self._nosnap:
+            self._snap_lt = None
+            return lt
+        thr = thr_px / max(1e-6, self._pps())
+        best = None
+        for q in pts:
+            if abs(q - lt) <= thr and (best is None or abs(q - lt) < abs(best - lt)):
+                best = q
+        self._snap_lt = best
+        return lt if best is None else best
 
-    def _wave_motion(self, ev):
-        if not self._snd_drag:
-            return
-        i, x0, at0, pushed = self._snd_drag
-        if not pushed:
-            self._push_undo()
-            self._snd_drag[3] = True
-        pps = self._pps()
-        at = at0 + (ev.x - x0) / max(0.001, pps)
-        self.snds[i]["at"] = max(0.0, min(self._layout_total() - 0.1, at))
-        self._draw_wave()
-
-    def _wave_release(self, _ev):
-        self._snd_drag = None
+    def _snap_span(self, at, dur, pts, thr_px=8):
+        """Те саме для блока: притягуємо або його початок, або кінець — що ближче."""
+        if self._nosnap:
+            self._snap_lt = None
+            return at
+        thr = thr_px / max(1e-6, self._pps())
+        best, delta = None, None
+        for q in pts:
+            for edge in (at, at + dur):
+                dd = q - edge
+                if abs(dd) <= thr and (delta is None or abs(dd) < abs(delta)):
+                    best, delta = q, dd
+        self._snap_lt = best
+        return at if delta is None else at + delta
 
     # --------------------- накладки: медіа ПОВЕРХ відео (як у CapCut) ------ #
     def _ovl_geom(self, o, cw, ch):
@@ -1554,23 +2302,27 @@ class VideoEditor(tk.Toplevel):
         y = int(round(ch / 2.0 + o["ny"] * ch - sh / 2.0))
         return sw, sh, x, y
 
-    def _to_overlay(self):
-        """Вибраний кліп доріжки -> накладка поверх відео (на тому ж місці монтажу)."""
+    def _to_overlay(self, at=None, slot=None):
+        """Кліп доріжки -> накладка поверх відео (на тому ж місці монтажу або в `at`)."""
         if len(self.order) <= 1 or self.busy:
             return
         self._push_undo()
-        slot = self.sel
+        slot = self.sel if slot is None else slot
         p = self.pieces[self.order[slot]]
-        at = 0.0                       # позиція кліпа на доріжці (з урахуванням пропусків)
-        for sl in range(slot):
-            q = self.pieces[self.order[sl]]
-            at += self._gapof(q) + (q["e"] - q["s"]) / q["speed"]
-        at += self._gapof(p)
-        self.ovls.append({"src": p["src"], "s": p["s"], "e": p["e"], "at": at,
+        if at is None:                 # позиція кліпа на доріжці (з урахуванням пропусків)
+            at = 0.0
+            for sl in range(slot):
+                q = self.pieces[self.order[sl]]
+                at += self._gapof(q) + (q["e"] - q["s"]) / q["speed"]
+            at += self._gapof(p)
+        self.ovls.append({"src": p["src"], "s": p["s"], "e": p["e"], "at": max(0.0, at),
                           "zoom": 0.5, "nx": 0.28, "ny": -0.22, "mute": p["mute"]})
         del self.order[slot]
-        self.sel = min(slot, len(self.order) - 1)
+        if self.sel >= slot and self.sel > 0:
+            self.sel -= 1
+        self.sel = min(self.sel, len(self.order) - 1)
         self.sel_ovl = len(self.ovls) - 1
+        self._sel_snd = None
         q = self._sel_piece()
         self.cur = min(max(self.cur, q["s"]), q["e"])
         self._tf_on = True                       # одразу показуємо рамку накладки
@@ -1601,6 +2353,8 @@ class VideoEditor(tk.Toplevel):
         self._push_undo()
         del self.ovls[i]
         self.sel_ovl = None
+        self._tf_on = False
+        self.video.delete("tf")
         self._show_poster(self.cur)
         self._redraw()
 
@@ -1610,115 +2364,125 @@ class VideoEditor(tk.Toplevel):
             return
         self._push_undo()
         self.ovls[i]["mute"] = not self.ovls[i]["mute"]
-        self._draw_ovl()
-
-    def _draw_ovl(self):
-        c = getattr(self, "ovl", None)
-        if c is None:
-            return
-        try:
-            c.delete("all")
-            W, H = self.TW, self.OVL_H
-            c.create_rectangle(0, 0, W, H, fill=C_TRACK, outline="")
-            self._ovl_rects = []
-            pps = self._pps()
-            if not self.ovls:
-                c.create_text(W // 2, H / 2, text=E("ed_ovl_hint"),
-                              fill=C_MUTED, font=(FONT, 8))
-            for i, o in enumerate(self.ovls):
-                x1 = self._content_x_of(o["at"], pps) - self._scroll
-                x2 = x1 + max(10.0, (o["e"] - o["s"]) * pps)
-                self._ovl_rects.append((i, x1, x2))
-                if x2 < 0 or x1 > W:
-                    continue
-                sel = i == self.sel_ovl
-                c.create_polygon(host._rr_pts(x1, 2, x2, H - 2, 5),
-                                 smooth=True, fill=C_OVL, outline="")
-                if sel:
-                    c.create_rectangle(x1, 2, x2, H - 2, outline=C_HANDLE, width=2)
-                src = self.sources[o["src"]]
-                # хвиля вибраної накладки прямо в блоці ("на тій доріжці, яку вибрали")
-                env = src.get("env")
-                if sel and env and not o["mute"]:
-                    mid = H / 2.0
-                    span = max(0.001, o["e"] - o["s"])
-                    xx = max(0.0, x1)
-                    while xx < min(float(W), x2):
-                        a = self._env_at(env, o["s"] + (xx - x1) / (x2 - x1) * span)
-                        h = max(0.5, a * (mid - 3))
-                        c.create_line(xx, mid - h, xx, mid + h, fill="#2a0d45", width=1)
-                        xx += 2
-                nm = src["name"]
-                if len(nm) > 18:
-                    nm = nm[:16] + "…"
-                mut = " 🔇" if o["mute"] else ""
-                c.create_text(max(x1 + 6, 6), H / 2, anchor="w",
-                              text=f"🎭 {nm}{mut}", fill="#10121a", font=(FONT, 8, "bold"))
-            xh = getattr(self, "_playhead_x", 0)
-            if xh:
-                c.create_line(xh, 0, xh, H, fill=C_PLAY, width=1)
-        except tk.TclError:
-            pass
+        self._req_draw()
 
     def _ovl_hit(self, x):
-        for i, x1, x2 in self._ovl_rects:
+        for i, x1, x2 in reversed(self._ovl_rects):
             if x1 - 3 <= x <= x2 + 3:
                 return i, x1, x2
         return None
 
-    def _ovl_press(self, ev):
-        hit = self._ovl_hit(ev.x)
-        if hit is None:
-            if self.sel_ovl is not None:
-                self.sel_ovl = None
-                self._show_poster(self.cur)
-                self._redraw()
-            self._ovl_drag = None
+    def _snd_hit(self, x):
+        for i, x1, x2 in reversed(self._snd_rects):
+            if x1 - 3 <= x <= x2 + 3:
+                return i
+        return None
+
+    def _clip_hit(self, x):
+        for r in self._clip_rects:
+            if r[2] <= x <= r[3]:
+                return r
+        return None
+
+    def _handle_hit(self, x, y):
+        """'L'/'R' — курсор над білою ручкою обрізки вибраного кліпа."""
+        if self._sel_xs is None or not (TL_Y <= y < TL_Y + TLH):
+            return None
+        dl, dr = abs(x - self._sel_xs), abs(x - self._sel_xe)
+        if min(dl, dr) > 10:
+            return None
+        return "L" if dl <= dr else "R"
+
+    def _lane_of(self, y):
+        if y < RUL_H:
+            return "ruler"
+        if OVL_Y <= y < OVL_Y + OVL_H:
+            return "ovl"
+        if TL_Y <= y < TL_Y + TLH:
+            return "clip"
+        if SND_Y <= y < SND_Y + SND_H:
+            return "snd"
+        if y >= SB_Y - 3:
+            return "sb"
+        return "gap"
+
+    # ------------------------------------------- контекстні меню (ПКМ) ----- #
+    def _menu_new(self):
+        return tk.Menu(self, tearoff=0, bg=C_BG2, fg=C_TEXT, bd=0,
+                       activebackground=C_BLURPLE, activeforeground="#ffffff",
+                       font=(FONT, 10))
+
+    def _popup(self, m, x, y):
+        try:
+            m.tk_popup(x, y)
+        finally:
+            m.grab_release()
+
+    def _tl_rclick(self, ev):
+        if self.busy or ev.x < LX:
             return
-        i, x1, x2 = hit
+        lane = self._lane_of(ev.y)
+        if lane == "clip":
+            self._tl_menu(ev)
+        elif lane == "ovl":
+            self._ovl_menu(ev)
+        elif lane == "snd":
+            self._wave_menu(ev)
+
+    def _tl_menu(self, ev):
+        hit = self._clip_hit(ev.x)
+        if hit is None:
+            return
+        slot, ix, cx1, cx2 = hit
         if self.playing:
             self._pause()
-        self.sel_ovl = i
-        o = self.ovls[i]
-        edge = "L" if abs(ev.x - x1) <= 8 else ("R" if abs(ev.x - x2) <= 8 else None)
-        self._ovl_drag = [i, ev.x, dict(o), edge, False]
+        p = self.pieces[ix]
+        if slot != self.sel:
+            self._tf_on = False
+            self.video.delete("tf")
+        self.sel = slot
+        self.sel_ovl = None
+        self._sel_snd = None
+        # плейхед — у точку кліку (для «розрізати тут»)
+        self.cur = min(max(p["s"], p["s"] + (ev.x - cx1) / max(1.0, cx2 - cx1) * (p["e"] - p["s"])), p["e"])
         self._show_poster(self.cur)
         self._redraw()
-
-    def _ovl_motion(self, ev):
-        if not self._ovl_drag:
-            return
-        i, x0, o0, edge, pushed = self._ovl_drag
-        if not pushed:
-            self._push_undo()
-            self._ovl_drag[4] = True
-        d = (ev.x - x0) / max(0.001, self._pps())
-        o = self.ovls[i]
-        src = self.sources[o["src"]]
-        hi = src["dur"] if src["kind"] == "video" else IMG_MAX
-        if edge == "L":      # лівий край: рухаємо і початок джерела, і позицію в монтажі
-            ns = min(max(0.0, o0["s"] + d), o0["e"] - 0.1)
-            o["s"] = ns
-            o["at"] = max(0.0, o0["at"] + (ns - o0["s"]))
-        elif edge == "R":
-            o["e"] = min(hi, max(o0["e"] + d, o0["s"] + 0.1))
-        else:
-            o["at"] = max(0.0, min(self._layout_total() - 0.1, o0["at"] + d))
-        self._draw_ovl()
-
-    def _ovl_release(self, _ev):
-        if self._ovl_drag and self._ovl_drag[4]:
-            self._show_poster(self.cur)
-        self._ovl_drag = None
+        src = self._src(p)
+        m = self._menu_new()
+        m.add_command(label=E("ed_cut_here") + "      S", command=lambda: self._cut_at(self.cur))
+        m.add_command(label=E("ed_dup") + "      Ctrl+D", command=self._duplicate)
+        if len(self.order) > 1:
+            m.add_command(label=E("ed_make_ovl"), command=lambda: self._to_overlay())
+        if src["kind"] == "video":
+            sp = self._menu_new()
+            for v in (0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0):
+                sp.add_command(label=(f"{v:g}×" + ("   ✓" if p["speed"] == v else "")),
+                               command=lambda v=v: self._set_speed(v))
+            m.add_cascade(label=E("ed_speed", s=f"{p['speed']:g}"), menu=sp)
+            if src["has_audio"]:
+                m.add_command(label=(E("ed_unmute") if p["mute"] else E("ed_mute")) + "      M",
+                              command=self._toggle_mute)
+        if self._is_transformed(p):
+            m.add_command(label=E("ed_reset_tf"), command=self._tf_reset)
+        if self._gapof(p) > 0.01:
+            m.add_command(label=E("ed_gap_rm"), command=self._gap_remove)
+        if any(self._gapof(self.pieces[k]) > 0.01 for k in self.order):
+            m.add_command(label=E("ed_gaps_rm"), command=self._gaps_remove_all)
+        m.add_separator()
+        m.add_command(label=E("ed_move_left"), command=lambda: self._move(-1))
+        m.add_command(label=E("ed_move_right"), command=lambda: self._move(1))
+        if len(self.order) > 1:
+            m.add_separator()
+            m.add_command(label=E("ed_rm_clip") + "      Del", command=self._remove)
+        self._popup(m, ev.x_root, ev.y_root)
 
     def _ovl_menu(self, ev):
-        if self.busy:
-            return
         hit = self._ovl_hit(ev.x)
         if hit is None:
             return
         i = hit[0]
         self.sel_ovl = i
+        self._sel_snd = None
         self._show_poster(self.cur)
         self._redraw()
         o = self.ovls[i]
@@ -1731,95 +2495,39 @@ class VideoEditor(tk.Toplevel):
         m.add_command(label=E("ed_fullscreen"), command=self._tf_reset)
         m.add_command(label=E("ed_to_track"), command=self._ovl_to_track)
         m.add_separator()
-        m.add_command(label=E("ed_del_ovl"), command=self._ovl_del)
-        try:
-            m.tk_popup(ev.x_root, ev.y_root)
-        finally:
-            m.grab_release()
-
-    # ------------------------------------------- контекстні меню (ПКМ) ----- #
-    def _menu_new(self):
-        return tk.Menu(self, tearoff=0, bg=C_BG2, fg=C_TEXT, bd=0,
-                       activebackground=C_BLURPLE, activeforeground="#ffffff",
-                       font=(FONT, 10))
-
-    def _tl_menu(self, ev):
-        if self.busy:
-            return
-        # вибираємо кліп під курсором (як лівий клік)
-        hit = None
-        for slot, ix, cx1, cx2 in self._clip_rects:
-            if cx1 - 2 <= ev.x <= cx2 + 2:
-                hit = (slot, ix, cx1, cx2)
-                break
-        if hit is None:
-            return
-        slot, ix, cx1, cx2 = hit
-        if self.playing:
-            self._pause()
-        p = self.pieces[ix]
-        if slot != self.sel:
-            self.sel = slot
-            self.cur = p["s"]
-        # плейхед — у точку кліку (для «розрізати тут»)
-        self.cur = min(max(p["s"], p["s"] + (ev.x - cx1) / max(1.0, cx2 - cx1) * (p["e"] - p["s"])), p["e"])
-        self._show_poster(self.cur)
-        self._redraw()
-        src = self._src(p)
-        m = self._menu_new()
-        m.add_command(label=E("ed_cut_here"), command=lambda: self._cut_at(self.cur))
-        m.add_command(label=E("ed_dup"), command=self._duplicate)
-        if len(self.order) > 1:
-            m.add_command(label=E("ed_make_ovl"), command=self._to_overlay)
-        if src["kind"] == "video":
-            sp = self._menu_new()
-            for v in (0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0):
-                sp.add_command(label=(f"{v:g}×" + ("   ✓" if p["speed"] == v else "")),
-                               command=lambda v=v: self._set_speed(v))
-            m.add_cascade(label=E("ed_speed", s=f"{p['speed']:g}"), menu=sp)
-            if src["has_audio"]:
-                m.add_command(label=(E("ed_unmute") if p["mute"] else E("ed_mute")),
-                              command=self._toggle_mute)
-        if self._is_transformed(p):
-            m.add_command(label=E("ed_reset_tf"), command=self._tf_reset)
-        if self._gapof(p) > 0.01:
-            m.add_command(label=E("ed_gap_rm"),
-                          command=self._gap_remove)
-        if any(self._gapof(self.pieces[ix]) > 0.01 for ix in self.order):
-            m.add_command(label=E("ed_gaps_rm"),
-                          command=self._gaps_remove_all)
-        m.add_separator()
-        m.add_command(label=E("ed_move_left"), command=lambda: self._move(-1))
-        m.add_command(label=E("ed_move_right"), command=lambda: self._move(1))
-        if len(self.order) > 1:
-            m.add_separator()
-            m.add_command(label=E("ed_rm_clip"), command=self._remove)
-        try:
-            m.tk_popup(ev.x_root, ev.y_root)
-        finally:
-            m.grab_release()
+        m.add_command(label=E("ed_del_ovl") + "      Del", command=self._ovl_del)
+        self._popup(m, ev.x_root, ev.y_root)
 
     def _wave_menu(self, ev):
-        if self.busy:
-            return
         i = self._snd_hit(ev.x)
         if i is None:
             return
+        self._sel_snd = i
+        self.sel_ovl = None
+        self._req_draw()
         sn = self.snds[i]
         m = self._menu_new()
         m.add_command(label=f"🎵  {sn['name']}", state="disabled")
         m.add_command(label=E("ed_listen"), command=lambda: self._preview_sound(sn))
         vol = self._menu_new()
-        for v in (0.5, 0.75, 1.0, 1.5, 2.0):
+        for v in (0.25, 0.5, 0.75, 1.0, 1.5, 2.0):
             vol.add_command(label=(f"{int(v * 100)}%" + ("   ✓" if sn["vol"] == v else "")),
                             command=lambda v=v: self._set_snd_vol(i, v))
         m.add_cascade(label=E("ed_volume", v=int(sn['vol'] * 100)), menu=vol)
         m.add_separator()
-        m.add_command(label=E("ed_del_snd"), command=lambda: self._del_snd(i))
-        try:
-            m.tk_popup(ev.x_root, ev.y_root)
-        finally:
-            m.grab_release()
+        m.add_command(label=E("ed_del_snd") + "      Del", command=lambda: self._del_snd(i))
+        self._popup(m, ev.x_root, ev.y_root)
+
+    def _speed_popup(self):
+        p = self._sel_piece()
+        if self._src(p)["kind"] != "video":
+            return
+        m = self._menu_new()
+        for v in (0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0):
+            m.add_command(label=(f"{v:g}×" + ("   ✓" if p["speed"] == v else "")),
+                          command=lambda v=v: self._set_speed(v))
+        b = self.b_speed
+        self._popup(m, b.winfo_rootx(), b.winfo_rooty() + b.winfo_height())
 
     def _preview_sound(self, sn):
         try:
@@ -1832,57 +2540,187 @@ class VideoEditor(tk.Toplevel):
     def _set_snd_vol(self, i, v):
         self._push_undo()
         self.snds[i]["vol"] = v
-        self._draw_wave()
+        self._req_draw()
 
     def _del_snd(self, i):
+        if not (0 <= i < len(self.snds)):
+            return
         self._push_undo()
         del self.snds[i]
-        self._draw_wave()
+        self._sel_snd = None
+        self._redraw()
 
-    # ---- взаємодія на доріжці: ручки / вибір кліпа / плейхед ----
-    def _tl_press(self, ev):
-        # 1) ручки обрізки вибраного кліпа
-        if abs(ev.x - self._sel_xs) <= 11 or abs(ev.x - self._sel_xe) <= 11:
-            p = self._sel_piece()
-            self._push_undo()
-            self._drag = "L" if abs(ev.x - self._sel_xs) <= 11 else "R"
-            self._active = self._drag
-            self._nudge_active = True         # drag уже штовхнув undo -> стрілки не дублюють
-            self._tip_t = p["s"] if self._drag == "L" else p["e"]
-            self._d0 = {"x0": ev.x, "s0": p["s"], "e0": p["e"], "g0": self._gapof(p),
-                        "pps": (self._sel_xe - self._sel_xs) / max(0.001, p["e"] - p["s"])}
-            self._redraw()
+    def _delete_selected(self):
+        """Delete / кнопка 🗑: видаляє те, що вибрано — накладку, звук або кліп."""
+        if self.busy:
             return
-        # 2) клік по кліпу: вибрати; всередині вибраного — перемістити плейхед
-        self._drag = None
-        self._active = None
-        self._tip_t = None
-        for slot, ix, cx1, cx2 in self._clip_rects:
-            if cx1 - 2 <= ev.x <= cx2 + 2:
-                p = self.pieces[ix]
-                if self.playing:
-                    self._pause()
-                if slot == self.sel:
-                    self.cur = min(max(p["s"], p["s"] + (ev.x - cx1) / max(1.0, cx2 - cx1)
-                                       * (p["e"] - p["s"])), p["e"])
-                else:
-                    self.sel = slot
-                    self.cur = p["s"]
-                    self._tf_on = False
-                self.sel_ovl = None          # фокус на кліпі -> рамка керує кліпом
-                self._show_poster(self.cur)
-                self._redraw()
-                return
+        if self.sel_ovl is not None and self.sel_ovl < len(self.ovls):
+            self._ovl_del()
+        elif self._sel_snd is not None and self._sel_snd < len(self.snds):
+            self._del_snd(self._sel_snd)
+        else:
+            self._remove()
+
+    # ---------------- мишка на таймлайні: плейхед / ручки / кліпи / блоки ---- #
+    def _tl_press(self, ev):
+        try:
+            self.focus_set()
+        except tk.TclError:
+            pass
+        if self.busy:
+            return
+        self._nosnap = bool(ev.state & 0x20000)       # Alt — без магніту
+        self._last_ev = (ev.x, ev.y)
+        x, y = ev.x, ev.y
+        lane = self._lane_of(y)
+        if lane == "sb":
+            return self._sb_press(ev)
+        if x < LX:
+            return
+        if lane == "ruler":
+            return self._ph_start(ev)
+        handle = self._handle_hit(x, y)
+        if not handle and abs(x - self._playhead_x) <= 5:   # білий повзунок — хапаємо
+            return self._ph_start(ev)
+        if lane == "clip":
+            return self._clip_press(ev, handle)
+        if lane == "ovl":
+            return self._ovl_press(ev)
+        if lane == "snd":
+            return self._snd_press(ev)
+        return self._ph_start(ev)
 
     def _tl_motion(self, ev):
-        if not self._drag:
+        self._nosnap = bool(ev.state & 0x20000)
+        self._last_ev = (ev.x, ev.y)
+        self._motion_dispatch(ev.x, ev.y)
+        if self._mode in ("ph", "clip", "ovl", "snd") and not self._edge_after:
+            self._edge_tick()
+
+    def _motion_dispatch(self, x, y):
+        m = self._mode
+        if m == "ph":
+            self._ph_to(x)
+        elif m == "trim":
+            self._trim_motion(x)
+        elif m == "clip":
+            self._clip_motion(x, y)
+        elif m == "ovl":
+            self._ovl_motion(x)
+        elif m == "snd":
+            self._snd_motion(x)
+        elif m == "sb":
+            self._sb_motion(x)
+
+    def _edge_tick(self):
+        """Тягнеш щось до краю — доріжка сама прокручується (навіть якщо мишка стоїть)."""
+        self._edge_after = None
+        if self._mode not in ("ph", "clip", "ovl", "snd") or self._last_ev is None:
             return
+        x = self._last_ev[0]
+        d = 0.0
+        if x > self.TW - 30:
+            d = min(40.0, (x - (self.TW - 30)) * 0.8 + 4)
+        elif x < LX + 30 and self._scroll > 0:
+            d = -min(40.0, ((LX + 30) - x) * 0.8 + 4)
+        if not d:
+            return
+        old = self._scroll
+        self._scroll += d
+        self._clamp_scroll(self._pps())
+        if self._scroll == old:
+            return
+        self._motion_dispatch(*self._last_ev)
+        try:
+            self._edge_after = self.after(30, self._edge_tick)
+        except tk.TclError:
+            pass
+
+    def _tl_release(self, ev):
+        m = self._mode
+        self._mode = None
+        if self._edge_after:
+            try: self.after_cancel(self._edge_after)
+            except Exception: pass
+            self._edge_after = None
+        if m == "trim":
+            self._drag = None
+            if self._tip_t is not None:
+                self._schedule_tip_clear()
+        elif m == "clip":
+            self._clip_release()
+        elif m == "ovl":
+            if self._ovl_drag and self._ovl_drag["pushed"]:
+                self._show_poster(self.cur)
+            self._ovl_drag = None
+        elif m == "snd":
+            self._snd_drag = None
+        elif m == "ph":
+            self._show_poster(self.cur)
+        self._sb_drag = None
+        self._snap_lt = None
+        self._redraw()
+
+    # ---- плейхед (білий повзунок): тягнеться по лінійці та по доріжках ----
+    def _ph_start(self, ev):
         if self.playing:
             self._pause()
+        self._mode = "ph"
+        self._ph_to(ev.x)
+
+    def _ph_to(self, x):
+        lt = min(max(0.0, self._lt_of(x)), self._layout_total())
+        lt = self._snap(lt, self._clip_edges(), thr_px=6)
+        self._set_playhead_lt(lt)
+
+    # ---- кліпи: обрізка ручками / вибір / перетягування (переставити або в накладку) ----
+    def _clip_press(self, ev, handle):
+        if self.playing:
+            self._pause()
+        if handle:
+            p = self._sel_piece()
+            self._mode = "trim"
+            self._drag = self._active = handle
+            self._nudge_active = True         # drag штовхне undo -> стрілки не дублюють
+            self._tip_t = p["s"] if handle == "L" else p["e"]
+            self._d0 = {"lt0": self._lt_of(ev.x), "s0": p["s"], "e0": p["e"],
+                        "g0": self._gapof(p), "pushed": False}
+            self._redraw()
+            return
+        self._active = None
+        self._tip_t = None
+        hit = self._clip_hit(ev.x)
+        if hit is None:                       # порожнє місце доріжки -> плейхед туди
+            self.sel_ovl = None
+            self._sel_snd = None
+            return self._ph_start(ev)
+        slot, ix, cx1, cx2 = hit
+        p = self.pieces[ix]
+        if slot != self.sel or self.sel_ovl is not None:
+            self._tf_on = False
+            self.video.delete("tf")
+        self.sel = slot
+        self.sel_ovl = None
+        self._sel_snd = None
+        self.cur = min(max(p["s"], p["s"] + (ev.x - cx1) / max(1.0, cx2 - cx1)
+                           * (p["e"] - p["s"])), p["e"])
+        self._show_poster(self.cur, fast=True)
+        self._clip_drag = {"slot": slot, "ix": ix, "grab_dx": ev.x - cx1, "w": cx2 - cx1,
+                           "x0": ev.x, "y0": ev.y, "x": ev.x, "y": ev.y, "active": False,
+                           "target": slot, "to_ovl": False}
+        self._mode = "clip"
+        self._redraw()
+
+    def _trim_motion(self, x):
         p = self._sel_piece()
         src = self._src(p)
         d0 = self._d0
-        dsrc = (ev.x - d0["x0"]) / d0["pps"]
+        dsrc = (self._lt_of(x) - d0["lt0"]) * p["speed"]
+        if not d0["pushed"]:
+            if abs(dsrc) < 1e-4:
+                return
+            self._push_undo()
+            d0["pushed"] = True
         lo, hi = 0.0, src["dur"]
         if self._drag == "L":
             ns = max(lo, min(d0["s0"] + dsrc, d0["e0"] - 0.1))
@@ -1892,15 +2730,256 @@ class VideoEditor(tk.Toplevel):
         else:
             ne = min(hi, max(d0["e0"] + dsrc, d0["s0"] + 0.1))
             p["e"] = ne; self.cur = self._tip_t = ne
+        self._show_poster(self.cur, fast=True)
+        self._req_draw()
+
+    def _clip_motion(self, x, y):
+        d = self._clip_drag
+        if not d:
+            return
+        if not d["active"]:
+            if abs(x - d["x0"]) + abs(y - d["y0"]) < 6 or len(self.order) < 2:
+                return
+            d["active"] = True
+            try:
+                self.tl.config(cursor="fleur")
+                self._cursor = "fleur"
+            except tk.TclError:
+                pass
+        d["x"], d["y"] = x, y
+        d["to_ovl"] = y < TL_Y - 6
+        center = x - d["grab_dx"] + d["w"] / 2.0
+        others = [r for r in self._clip_rects if r[0] != d["slot"]]
+        d["target"] = sum(1 for r in others if (r[2] + r[3]) / 2.0 < center)
+        self._req_draw()
+
+    def _clip_release(self):
+        d = self._clip_drag
+        self._clip_drag = None
+        if not d or not d["active"]:
+            return
+        if d["to_ovl"]:                       # кинули на доріжку накладок
+            at = max(0.0, self._lt_of(d["x"] - d["grab_dx"]))
+            self._to_overlay(at=at, slot=d["slot"])
+            return
+        old, tgt = d["slot"], d["target"]
+        if tgt != old:
+            self._push_undo()
+            ix = self.order.pop(old)
+            self.order.insert(tgt, ix)
+            self.pieces[ix]["gap"] = 0.0      # переставлений кліп стає впритул
+            self.sel = tgt
+            self._show_poster(self.cur)
+
+    # ---- накладки на своїй доріжці: рух / обрізка країв ----
+    def _ovl_press(self, ev):
+        hit = self._ovl_hit(ev.x)
+        if hit is None:
+            if self.sel_ovl is not None:
+                self.sel_ovl = None
+                self._tf_on = False
+                self.video.delete("tf")
+                self._show_poster(self.cur)
+            return self._ph_start(ev)
+        i, x1, x2 = hit
+        if self.playing:
+            self._pause()
+        self.sel_ovl = i
+        self._sel_snd = None
+        o = self.ovls[i]
+        edge = None
+        if x2 - x1 > 22:
+            edge = "L" if abs(ev.x - x1) <= 7 else ("R" if abs(ev.x - x2) <= 7 else None)
+        self._ovl_drag = {"i": i, "lt0": self._lt_of(ev.x), "o0": dict(o), "edge": edge,
+                          "pushed": False, "x0": ev.x,
+                          "pts": self._snap_targets(("ovl", i))}
+        self._mode = "ovl"
+        self._tf_on = True                    # рамка на прев'ю одразу керує накладкою
         self._show_poster(self.cur)
         self._redraw()
 
-    def _tl_release(self, _ev):
-        self._drag = None
-        if self._tip_t is not None:
-            self._schedule_tip_clear()
+    def _ovl_motion(self, x):
+        d = self._ovl_drag
+        if not d:
+            return
+        if not d["pushed"]:
+            if abs(x - d["x0"]) < 3:
+                return
+            self._push_undo()
+            d["pushed"] = True
+        dl = self._lt_of(x) - d["lt0"]
+        o = self.ovls[d["i"]]
+        o0 = d["o0"]
+        src = self.sources[o["src"]]
+        hi = src["dur"] if src["kind"] == "video" else IMG_MAX
+        if d["edge"] == "L":   # лівий край: і початок джерела, і позиція в монтажі
+            ns = min(max(0.0, o0["s"] + dl), o0["e"] - 0.1)
+            ns = max(ns, o0["s"] - o0["at"])
+            at = self._snap(o0["at"] + (ns - o0["s"]), d["pts"])
+            ns = min(max(0.0, o0["s"] + (at - o0["at"])), o0["e"] - 0.1)
+            o["s"] = ns
+            o["at"] = max(0.0, o0["at"] + (ns - o0["s"]))
+        elif d["edge"] == "R":
+            ne = min(hi, max(o0["e"] + dl, o0["s"] + 0.1))
+            end = self._snap(o0["at"] + (ne - o0["s"]), d["pts"])
+            o["e"] = min(hi, max(o0["s"] + 0.1, o0["s"] + (end - o0["at"])))
+        else:
+            at = max(0.0, o0["at"] + dl)
+            at = self._snap_span(at, o0["e"] - o0["s"], d["pts"])
+            o["at"] = max(0.0, min(self._layout_end_all() + 5.0, at))
+        self._req_draw()
+
+    # ---- звуки на своїй доріжці: рух ----
+    def _snd_press(self, ev):
+        i = self._snd_hit(ev.x)
+        if i is None:
+            self._sel_snd = None
+            return self._ph_start(ev)
+        self._sel_snd = i
+        self.sel_ovl = None
+        self._snd_drag = {"i": i, "lt0": self._lt_of(ev.x), "at0": self.snds[i]["at"],
+                          "pushed": False, "x0": ev.x, "pts": self._snap_targets(("snd", i))}
+        self._mode = "snd"
+        self._redraw()
+
+    def _snd_motion(self, x):
+        d = self._snd_drag
+        if not d:
+            return
+        if not d["pushed"]:
+            if abs(x - d["x0"]) < 3:
+                return
+            self._push_undo()
+            d["pushed"] = True
+        sn = self.snds[d["i"]]
+        at = max(0.0, d["at0"] + self._lt_of(x) - d["lt0"])
+        at = self._snap_span(at, sn["dur"], d["pts"])
+        sn["at"] = max(0.0, min(self._layout_total() - 0.1, at))
+        self._req_draw()
+
+    # ---- горизонтальний скролбар під доріжками ----
+    def _sb_press(self, ev):
+        t = self._sb_thumb
+        if not t:
+            return
+        tx1, tx2 = t[0], t[1]
+        if tx1 <= ev.x <= tx2:
+            self._sb_drag = (ev.x, self._scroll)
+            self._mode = "sb"
+        else:                                  # клік повз повзунок — сторінка
+            self._scroll += (1 if ev.x > tx2 else -1) * (self.TW - LX) * 0.8
+            self._clamp_scroll(self._pps())
+            self._draw_track()
+
+    def _sb_motion(self, x):
+        t = self._sb_thumb
+        if not self._sb_drag or not t:
+            return
+        x0, s0 = self._sb_drag
+        _, _, track, tw, cw, vis = t
+        self._scroll = s0 + (x - x0) * (cw - vis) / max(1.0, track - tw)
+        self._clamp_scroll(self._pps())
+        self._req_draw()
+
+    # ---- курсор і підсвітка при наведенні ----
+    def _tl_hover(self, ev):
+        if self._mode:
+            return
+        x, y = ev.x, ev.y
+        lane = self._lane_of(y)
+        cur, hv = "", None
+        if x < LX:
+            pass
+        elif lane == "sb":
+            t = self._sb_thumb
+            if t and t[0] <= x <= t[1]:
+                cur, hv = "hand2", ("sb",)
+        elif lane == "ruler":
+            cur = "hand2"
+        elif self._handle_hit(x, y):
+            cur = "sb_h_double_arrow"
+        elif abs(x - self._playhead_x) <= 5:
+            cur = "sb_h_double_arrow"
+        elif lane == "clip":
+            r = self._clip_hit(x)
+            if r:
+                cur, hv = "hand2", ("clip", r[0])
+        elif lane == "ovl":
+            h = self._ovl_hit(x)
+            if h:
+                i, x1, x2 = h
+                edge = x2 - x1 > 22 and (abs(x - x1) <= 7 or abs(x - x2) <= 7)
+                cur, hv = ("sb_h_double_arrow" if edge else "fleur"), ("ovl", i)
+        elif lane == "snd":
+            i = self._snd_hit(x)
+            if i is not None:
+                cur, hv = "fleur", ("snd", i)
+        if cur != self._cursor:
+            self._cursor = cur
+            try:
+                self.tl.config(cursor=cur)
+            except tk.TclError:
+                pass
+        if hv != self._hover:
+            self._hover = hv
+            self._req_draw()
+
+    def _tl_leave(self, _ev):
+        if self._hover is not None and not self._mode:
+            self._hover = None
+            self._req_draw()
+
+    # ---- гарячі клавіші (по коду клавіші — не залежать від розкладки) ----
+    def _on_key(self, ev):
+        if self.busy:
+            return None
+        kc = ev.keycode
+        ctrl = bool(ev.state & 0x4)
+        shift = bool(ev.state & 0x1)
+        if kc == 32:
+            self._toggle_play()
+        elif kc == 37:
+            self._nudge(-1, big=shift)
+        elif kc == 39:
+            self._nudge(1, big=shift)
+        elif kc == 36:
+            self._to_start()
+        elif kc == 35:
+            self._to_end()
+        elif kc in (46, 8):
+            self._delete_selected()
+        elif kc == 27:
+            self._active = None
+            self.sel_ovl = None
+            self._sel_snd = None
+            self._tf_on = False
+            self.video.delete("tf")
+            self._redraw()
+        elif ctrl and kc == 90:
+            (self._redo_action if shift else self._undo_action)()
+        elif ctrl and kc == 89:
+            self._redo_action()
+        elif ctrl and kc == 68:
+            self._duplicate()
+        elif (ctrl and kc == 66) or (not ctrl and kc == 83):
+            self._cut_here()
+        elif ctrl and kc in (187, 107):
+            self._zoom_at(1.25)
+        elif ctrl and kc in (189, 109):
+            self._zoom_at(0.8)
+        elif ctrl and kc in (48, 96):
+            self._zoom_fit()
+        elif (ctrl and kc == 79) or (not ctrl and kc == 73):
+            self._add_dialog()
+        elif not ctrl and kc == 77:
+            self._toggle_mute()
+        else:
+            return None
+        return "break"
 
     def _update_info(self):
+        if self.busy:
+            return
         total = self._total()
         target = float(self.cfg["target_mb"])
         has_a = bool(self.snds) or any(
@@ -1913,8 +2992,7 @@ class VideoEditor(tk.Toplevel):
         elif v >= 50: col, tag = host.C_WARN, E("ed_q_weak")
         else: col, tag = C_RED, E("ed_q_long")
         self.info_lbl.config(text=tag, fg=col)   # без цифр — лише оцінка якості
-        if not self.busy:
-            self.export_btn.config(state=("normal" if v >= 50 else "disabled"))
+        self.export_btn.config(state=("normal" if v >= 50 else "disabled"))
 
     # ----------------------------------------------------------- експорт --- #
     def _is_simple(self):
@@ -2119,8 +3197,7 @@ class VideoEditor(tk.Toplevel):
         target = float(self.cfg["target_mb"])
         out_path = dc_core.output_name(self.file_path, target)
         self._start_export_jokes()
-        prog = lambda p: self._ui(lambda: self.info_lbl.config(
-            text=E("ed_saving", p=int(p)), fg=C_BLURPLE))
+        prog = lambda p: self._ui(lambda: self._set_progress(p, E("ed_saving", p=int(p))))
 
         if self._is_simple():
             segs = [(self.pieces[ix]["s"], self.pieces[ix]["e"]) for ix in self.order]
@@ -2163,8 +3240,7 @@ class VideoEditor(tk.Toplevel):
         self.gif_btn.config(state="disabled")
         out_path = dc_core.gif_out_name(self.file_path)
         self._start_export_jokes()
-        prog = lambda p: self._ui(lambda: self.info_lbl.config(
-            text=E("ed_gif_prog", p=int(p)), fg=C_BLURPLE))
+        prog = lambda p: self._ui(lambda: self._set_progress(p, E("ed_gif_prog", p=int(p))))
 
         if self._is_simple():
             segs = [(self.pieces[ix]["s"], self.pieces[ix]["e"]) for ix in self.order]
@@ -2234,6 +3310,7 @@ class VideoEditor(tk.Toplevel):
                 except OSError: pass
             return
         self.busy = False                       # зупиняє ротацію фактів
+        self._set_progress(None)
         try:
             self.joke_lbl.config(text="")
             self.gif_btn.config(state="normal")

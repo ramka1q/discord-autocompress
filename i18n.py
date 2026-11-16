@@ -403,32 +403,62 @@ STR = {
     "ed_export":        {"uk": "Зберегти і вставити  ▶", "ru": "Сохранить и вставить  ▶", "en": "Save & paste  ▶"},
     "ed_help_title":    {"uk": "Як користуватись", "ru": "Как пользоваться", "en": "How to use"},
     "ed_tips":          {"uk": "🎬  Клік по кліпу — вибрати · білі ручки з боків — обрізати\n"
-                               "✂  «Розрізати» ділить кліп по плейхеду\n"
-                               "🖱  Права кнопка миші по кліпу / накладці / звуку — всі дії\n"
+                               "↔  Тягни кліп — переставити · тягни його ВГОРУ — стане накладкою\n"
+                               "⏯  Білий повзунок (плейхед) тягни мишкою або клікай по лінійці часу\n"
+                               "🖲  Ctrl+колесо — зум ТУДИ, ДЕ МИШКА · колесо — прокрутка · повзунок зуму справа\n"
+                               "🧲  Блоки липнуть до країв кліпів і плейхеда (Alt — без магніту)\n"
                                "🔍  Клік по відео — масштаб і позиція (кут — розмір, середина — рухати,\n"
                                "      подвійний клік — скинути)\n"
-                               "➕  Кнопка «Додати» або перетягни файли у вікно — відео / картинки / звуки\n"
-                               "🕳  Порожні місця лишаються на доріжці й зникають при збереженні\n"
-                               "⌨  ◀ ▶ — точно по кадру (Shift = 1с) · Ctrl+Z / Ctrl+Y — скасувати / повторити\n"
-                               "🖲  Ctrl+колесо — зум доріжки · колесо — прокрутка · Delete — прибрати кліп",
+                               "🖱  Права кнопка миші по кліпу / накладці / звуку — всі дії\n"
+                               "➕  Ctrl+O або перетягни файли у вікно — відео / картинки / звуки\n"
+                               "⌨  Пробіл — грати · S — розрізати · Delete — видалити · Ctrl+D — дублювати · M — звук\n"
+                               "⌨  ◀ ▶ — по кадру (Shift = 1с) · Home / End · Ctrl+Z / Ctrl+Y · Ctrl+0 — вмістити все",
                          "ru": "🎬  Клик по клипу — выбрать · белые ручки по бокам — обрезать\n"
-                               "✂  «Разрезать» делит клип по плейхеду\n"
-                               "🖱  Правая кнопка мыши по клипу / наложению / звуку — все действия\n"
+                               "↔  Тяни клип — переставить · тяни его ВВЕРХ — станет наложением\n"
+                               "⏯  Белый ползунок (плейхед) тяни мышкой или кликай по линейке времени\n"
+                               "🖲  Ctrl+колесо — зум ТУДА, ГДЕ МЫШКА · колесо — прокрутка · ползунок зума справа\n"
+                               "🧲  Блоки липнут к краям клипов и плейхеда (Alt — без магнита)\n"
                                "🔍  Клик по видео — масштаб и позиция (угол — размер, середина — двигать,\n"
                                "      двойной клик — сбросить)\n"
-                               "➕  Кнопка «Добавить» или перетащи файлы в окно — видео / картинки / звуки\n"
-                               "🕳  Пустые места остаются на дорожке и исчезают при сохранении\n"
-                               "⌨  ◀ ▶ — точно по кадру (Shift = 1с) · Ctrl+Z / Ctrl+Y — отменить / повторить\n"
-                               "🖲  Ctrl+колесо — зум дорожки · колесо — прокрутка · Delete — убрать клип",
+                               "🖱  Правая кнопка мыши по клипу / наложению / звуку — все действия\n"
+                               "➕  Ctrl+O или перетащи файлы в окно — видео / картинки / звуки\n"
+                               "⌨  Пробел — играть · S — разрезать · Delete — удалить · Ctrl+D — дублировать · M — звук\n"
+                               "⌨  ◀ ▶ — по кадру (Shift = 1с) · Home / End · Ctrl+Z / Ctrl+Y · Ctrl+0 — вместить всё",
                          "en": "🎬  Click a clip to select it · drag the white side handles to trim\n"
-                               "✂  'Split' cuts the clip at the playhead\n"
-                               "🖱  Right-click a clip / overlay / sound for every action\n"
+                               "↔  Drag a clip to reorder · drag it UP to turn it into an overlay\n"
+                               "⏯  Drag the white playhead with the mouse or click the time ruler\n"
+                               "🖲  Ctrl+wheel — zoom WHERE THE MOUSE IS · wheel — scroll · zoom slider on the right\n"
+                               "🧲  Blocks snap to clip edges and the playhead (Alt — no snapping)\n"
                                "🔍  Click the video for scale & position (corner = size, middle = move,\n"
                                "      double-click = reset)\n"
-                               "➕  'Add' button or drag files into the window — videos / images / sounds\n"
-                               "🕳  Empty gaps stay on the track and are removed when saving\n"
-                               "⌨  ◀ ▶ — frame-accurate (Shift = 1 s) · Ctrl+Z / Ctrl+Y — undo / redo\n"
-                               "🖲  Ctrl+wheel — zoom the track · wheel — scroll · Delete — remove clip"},
+                               "🖱  Right-click a clip / overlay / sound for every action\n"
+                               "➕  Ctrl+O or drag files into the window — videos / images / sounds\n"
+                               "⌨  Space — play · S — split · Delete — delete · Ctrl+D — duplicate · M — sound\n"
+                               "⌨  ◀ ▶ — frame by frame (Shift = 1 s) · Home / End · Ctrl+Z / Ctrl+Y · Ctrl+0 — fit all"},
+    "ed_tt_undo":       {"uk": "Скасувати  (Ctrl+Z)", "ru": "Отменить  (Ctrl+Z)", "en": "Undo  (Ctrl+Z)"},
+    "ed_tt_redo":       {"uk": "Повторити  (Ctrl+Y)", "ru": "Повторить  (Ctrl+Y)", "en": "Redo  (Ctrl+Y)"},
+    "ed_tt_split":      {"uk": "Розрізати по плейхеду  (S)", "ru": "Разрезать по плейхеду  (S)", "en": "Split at playhead  (S)"},
+    "ed_tt_delete":     {"uk": "Видалити вибране  (Delete)", "ru": "Удалить выбранное  (Delete)", "en": "Delete selected  (Delete)"},
+    "ed_tt_dup":        {"uk": "Дублювати кліп  (Ctrl+D)", "ru": "Дублировать клип  (Ctrl+D)", "en": "Duplicate clip  (Ctrl+D)"},
+    "ed_tt_speed":      {"uk": "Швидкість кліпа", "ru": "Скорость клипа", "en": "Clip speed"},
+    "ed_tt_mute":       {"uk": "Звук кліпа увімк./вимк.  (M)", "ru": "Звук клипа вкл./выкл.  (M)", "en": "Clip sound on/off  (M)"},
+    "ed_tt_ovl":        {"uk": "Зробити накладкою (поверх відео)", "ru": "Сделать наложением (поверх видео)", "en": "Make overlay (on top of video)"},
+    "ed_tt_add":        {"uk": "Додати відео / картинки / звуки  (Ctrl+O)", "ru": "Добавить видео / картинки / звуки  (Ctrl+O)",
+                         "en": "Add videos / images / sounds  (Ctrl+O)"},
+    "ed_tt_zin":        {"uk": "Наблизити  (Ctrl+колесо)", "ru": "Приблизить  (Ctrl+колесо)", "en": "Zoom in  (Ctrl+wheel)"},
+    "ed_tt_zout":       {"uk": "Віддалити  (Ctrl+колесо)", "ru": "Отдалить  (Ctrl+колесо)", "en": "Zoom out  (Ctrl+wheel)"},
+    "ed_tt_zoom":       {"uk": "Масштаб доріжки — тягни", "ru": "Масштаб дорожки — тяни", "en": "Timeline zoom — drag"},
+    "ed_tt_fit":        {"uk": "Вмістити все  (Ctrl+0)", "ru": "Вместить всё  (Ctrl+0)", "en": "Fit everything  (Ctrl+0)"},
+    "ed_tt_max":        {"uk": "На весь екран", "ru": "На весь экран", "en": "Maximize"},
+    "ed_tt_start":      {"uk": "На початок  (Home)", "ru": "В начало  (Home)", "en": "To start  (Home)"},
+    "ed_tt_end":        {"uk": "В кінець  (End)", "ru": "В конец  (End)", "en": "To end  (End)"},
+    "ed_tt_prev":       {"uk": "Кадр назад  (←, Shift = 1 с)", "ru": "Кадр назад  (←, Shift = 1 с)", "en": "Previous frame  (←, Shift = 1 s)"},
+    "ed_tt_next":       {"uk": "Кадр вперед  (→, Shift = 1 с)", "ru": "Кадр вперёд  (→, Shift = 1 с)", "en": "Next frame  (→, Shift = 1 s)"},
+    "ed_tt_play":       {"uk": "Грати / пауза  (Пробіл)", "ru": "Играть / пауза  (Пробел)", "en": "Play / pause  (Space)"},
+    "ed_drop_ovl":      {"uk": "відпусти — стане накладкою", "ru": "отпусти — станет наложением", "en": "release to make it an overlay"},
+    "ed_status_hint":   {"uk": "Ctrl+колесо — зум туди, де мишка · тягни білий повзунок або лінійку · тягни кліп, щоб переставити · Alt — без магніту",
+                         "ru": "Ctrl+колесо — зум туда, где мышка · тяни белый ползунок или линейку · тяни клип, чтобы переставить · Alt — без магнита",
+                         "en": "Ctrl+wheel — zoom where the mouse is · drag the white playhead or the ruler · drag a clip to reorder · Alt — no snapping"},
     "ed_got_it":        {"uk": "Зрозуміло", "ru": "Понятно", "en": "Got it"},
     "ed_add_title":     {"uk": "Додати відео / картинки / звуки", "ru": "Добавить видео / картинки / звуки",
                          "en": "Add videos / images / sounds"},
@@ -444,9 +474,9 @@ STR = {
     "ed_empty":         {"uk": "порожньо", "ru": "пусто", "en": "empty"},
     "ed_snd_hint":      {"uk": "🎵 сюди можна додати звук — ➕ або перетягни файл", "ru": "🎵 сюда можно добавить звук — ➕ или перетащи файл",
                          "en": "🎵 add a sound here — ➕ or drag a file in"},
-    "ed_ovl_hint":      {"uk": "накладки поверх відео: ПКМ по кліпу → «🎭 Зробити накладкою»",
-                         "ru": "наложения поверх видео: ПКМ по клипу → «🎭 Сделать наложением»",
-                         "en": "overlays on top of the video: right-click a clip → '🎭 Make overlay'"},
+    "ed_ovl_hint":      {"uk": "🎭 накладки поверх відео — перетягни сюди кліп з доріжки нижче",
+                         "ru": "🎭 наложения поверх видео — перетащи сюда клип с дорожки ниже",
+                         "en": "🎭 overlays on top of the video — drag a clip up here from the track below"},
     "ed_unmute":        {"uk": "🔊  Увімкнути звук", "ru": "🔊  Включить звук", "en": "🔊  Unmute"},
     "ed_mute":          {"uk": "🔇  Вимкнути звук", "ru": "🔇  Выключить звук", "en": "🔇  Mute"},
     "ed_fullscreen":    {"uk": "🔍  На весь екран (скинути масштаб)", "ru": "🔍  На весь экран (сбросить масштаб)",
