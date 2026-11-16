@@ -8,6 +8,7 @@ edit_fx.py — фільтри редактора для ffmpeg/ffplay (без tk
 Один і той самий код будує кадр прев'ю, відтворення (ffplay) і експорт —
 тому що бачиш у редакторі, те й отримуєш у файлі.
 """
+import math
 import os
 
 # ---- властивості кліпа за замовчуванням (нові поля; старі кліпи їх не мають) ----
@@ -141,23 +142,69 @@ def alpha_factor(tau, dur, fin, fout):
     return a
 
 
-VOL_MAX = 100.0     # 10000% — експериментально («для угару»)
+VOL_MAX_DB = 888.0          # стеля підсилення: справжні +888 dB (експериментально, «для угару»)
+_DB300 = 20.0 * math.log10(3.0)   # 300% = +9.54 dB — далі показуємо децибели
+
+
+def vol_db(v):
+    """Гучність (множник амплітуди) -> dB. 1.0 = 0 dB, 3.0 = +9.54 dB."""
+    v = float(v)
+    return 20.0 * math.log10(v) if v > 0 else -math.inf
 
 
 def pos_vol(pos):
-    """Позиція повзунка 0..1 -> гучність. Ліва половина 0..100%, права — 100%..10000%."""
+    """Позиція повзунка 0..1 -> множник гучності.
+    0..0.5 -> 0..100%;  0.5..0.6 -> 100..300%;  0.6..1 -> +9.5 dB .. +888 dB (квадратично)."""
     pos = max(0.0, min(1.0, float(pos)))
     if pos <= 0.5:
         return pos * 2.0
-    return VOL_MAX ** ((pos - 0.5) * 2.0)
+    if pos <= 0.6:
+        db = (pos - 0.5) / 0.1 * _DB300
+    else:
+        db = _DB300 + (VOL_MAX_DB - _DB300) * ((pos - 0.6) / 0.4) ** 2
+    return 10.0 ** (db / 20.0)
 
 
 def vol_pos(v):
-    import math
     v = max(0.0, float(v))
     if v <= 1.0:
         return v / 2.0
-    return 0.5 + min(1.0, math.log(v) / math.log(VOL_MAX)) / 2.0
+    db = min(VOL_MAX_DB, vol_db(v))
+    if db <= _DB300:
+        return 0.5 + db / _DB300 * 0.1
+    return 0.6 + 0.4 * math.sqrt((db - _DB300) / (VOL_MAX_DB - _DB300))
+
+
+def vol_label(v):
+    """До 300% — проценти, далі — децибели (як просили)."""
+    v = float(v)
+    if v <= 3.0 + 1e-9:
+        return f"{int(round(v * 100))}%"
+    db = vol_db(v)
+    return f"+{db:.0f} dB" if db >= 100 else f"+{db:.1f} dB"
+
+
+def gain_chain(vol):
+    """Справжнє підсилення на vol (до +888 dB). Число 10^44 не влазить у семпли, тому
+    підсилюємо сходинками ≤40 dB з жорстким обрізанням після кожної — математично це
+    РІВНО «помножити на vol, а потім цифрова стеля 0 dBFS»."""
+    v = float(vol)
+    if abs(v - 1.0) <= 1e-3:
+        return []
+    if v <= 0:
+        return ["volume=0"]
+    db = vol_db(v)
+    if db <= 40.0:
+        return [f"volume={db:.4f}dB"]
+    n = int(math.ceil(db / 40.0))
+    out = []
+    for _ in range(n):
+        out += [f"volume={db / n:.4f}dB", "asoftclip=type=hard"]
+    return out
+
+
+# моно -> стерео БЕЗ втрати 3 dB (стандартне перетворення ffmpeg робить тихіше на 3 dB)
+UPMIX = "aformat=channel_layouts=mono|stereo,pan=stereo|FL=FL+FC|FR=FR+FC"
 
 
 def atempo_chain(sp):
@@ -199,10 +246,7 @@ def afx_chain(p):
 
 
 def audio_chain(obj, vol, fades):
-    out = afx_chain(obj)
-    if abs(float(vol) - 1.0) > 1e-3:
-        out.append(f"volume={num(vol)}")
-    return out + list(fades)
+    return [UPMIX] + afx_chain(obj) + gain_chain(vol) + list(fades)
 
 
 # ----------------------------------------------------------------- текст -- #

@@ -1353,9 +1353,30 @@ class VideoEditor(tk.Toplevel):
             return None
 
     def _prop_changed(self):
-        """Змінили властивість у правій панелі -> прев'ю + доріжка."""
+        """Змінили властивість у правій панелі -> прев'ю + доріжка (+ відтворення наживо)."""
         self._show_poster(self.cur)
         self._req_draw()
+        self._replay_soon()
+
+    def _replay_soon(self):
+        """Якщо зараз грає — перезапускаємо ffplay з ТОГО Ж місця з новими налаштуваннями
+        (з затримкою: поки тягнеш повзунок, не перезапускаємо на кожен піксель)."""
+        if not self.playing:
+            return
+        if getattr(self, "_replay_after", None):
+            try:
+                self.after_cancel(self._replay_after)
+            except Exception:
+                pass
+        self._replay_after = self.after(300, self._replay_now)
+
+    def _replay_now(self):
+        self._replay_after = None
+        if not self.playing or self._closed or not self.order:
+            return
+        p = self._sel_piece()
+        t = min(max(self.cur, p["s"]), p["e"] - 0.05)
+        self._launch(t, p["e"] - t)
 
     def _look_target(self):
         if self.sel_ovl is not None and self.sel_ovl < len(self.ovls):
@@ -1721,6 +1742,7 @@ class VideoEditor(tk.Toplevel):
                 self._push_undo()
             p["speed"] = sp
             self._redraw()
+            self._replay_soon()
 
     def _toggle_mute(self):
         p = self._sel_piece()
@@ -1730,6 +1752,7 @@ class VideoEditor(tk.Toplevel):
         self._push_undo()
         p["mute"] = not p["mute"]
         self._redraw()
+        self._replay_soon()
 
     def _gap_remove(self):
         self._push_undo()
@@ -2510,6 +2533,34 @@ class VideoEditor(tk.Toplevel):
     # ---- формат кадру (9:16, 1:1 …) і фон ----
     RATIOS = ["orig", "16:9", "9:16", "1:1", "4:5", "4:3"]
 
+    def _measure_peak(self, d):
+        """Пік звуку файла (dBFS, ffmpeg volumedetect) у фоні -> d["peak_db"].
+        Потрібен, щоб чесно показати, до скількох % гучність ще без спотворень."""
+        if d.get("_peak_busy") or "peak_db" in d:
+            return
+        d["_peak_busy"] = True
+        path = d.get("path")
+
+        def work():
+            peak = None
+            try:
+                r = subprocess.run(["ffmpeg", "-hide_banner", "-vn", "-i", path, "-af", "volumedetect",
+                                    "-f", "null", "-"], capture_output=True, text=True,
+                                   encoding="utf-8", errors="replace", creationflags=dc_core.NO_WINDOW)
+                for ln in r.stderr.splitlines():
+                    if "max_volume:" in ln:
+                        peak = float(ln.split("max_volume:")[1].split("dB")[0].strip())
+            except Exception:
+                peak = None
+
+            def apply():
+                d["peak_db"] = peak if peak is not None else -91.0
+                d.pop("_peak_busy", None)
+                if self._insp and self._insp_on:
+                    self._insp.sync(force=True)
+            self._ui(apply)
+        threading.Thread(target=work, daemon=True).start()
+
     def _ratio_label(self, r):
         return {"orig": E("ratio_orig"), "16:9": "16:9  YouTube", "9:16": "9:16  TikTok · Shorts · Reels",
                 "1:1": "1:1  " + E("ratio_square"), "4:5": "4:5  Instagram", "4:3": "4:3"}[r]
@@ -2666,7 +2717,7 @@ class VideoEditor(tk.Toplevel):
             nm = sn["name"]
             if len(nm) > 20:
                 nm = nm[:18] + "…"
-            v = "" if sn["vol"] == 1.0 else f" · {int(sn['vol'] * 100)}%"
+            v = "" if sn["vol"] == 1.0 else f" · {fx.vol_label(sn['vol'])}"
             if x2 - x1 > 40:
                 c.create_text(max(x1 + 8, LX + 8), (y1 + y2) / 2, anchor="w",
                               text=f"🎵 {nm}{v}", fill="#071a0e", font=(FONT, 8, "bold"))
@@ -2880,6 +2931,7 @@ class VideoEditor(tk.Toplevel):
         self._push_undo()
         self.ovls[i]["mute"] = not self.ovls[i]["mute"]
         self._req_draw()
+        self._replay_soon()
 
     def _ovl_hit(self, x):
         for i, x1, x2 in reversed(self._ovl_rects):
@@ -3035,10 +3087,11 @@ class VideoEditor(tk.Toplevel):
         m.add_command(label=f"🎵  {sn['name']}", state="disabled")
         m.add_command(label=E("ed_listen"), command=lambda: self._preview_sound(sn))
         vol = self._menu_new()
-        for v in (0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 5.0, 10.0, 100.0):
-            vol.add_command(label=(f"{int(v * 100)}%" + ("   ✓" if sn["vol"] == v else "")),
+        for v in (0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 10.0, 100.0, 10 ** (888 / 20.0)):
+            vol.add_command(label=(fx.vol_label(v) + ("  💀" if v > 100 else "")
+                                   + ("   ✓" if abs(sn["vol"] - v) <= 1e-9 * v else "")),
                             command=lambda v=v: self._set_snd_vol(i, v))
-        m.add_cascade(label=E("ed_volume", v=int(sn['vol'] * 100)), menu=vol)
+        m.add_cascade(label=E("ed_volume", v=fx.vol_label(sn['vol'])), menu=vol)
         m.add_separator()
         m.add_command(label=E("ed_del_snd") + "      Del", command=lambda: self._del_snd(i))
         self._popup(m, ev.x_root, ev.y_root)
@@ -3066,6 +3119,7 @@ class VideoEditor(tk.Toplevel):
         self._push_undo()
         self.snds[i]["vol"] = v
         self._req_draw()
+        self._replay_soon()
 
     def _del_snd(self, i):
         if not (0 <= i < len(self.snds)):
@@ -4104,7 +4158,7 @@ class VideoEditor(tk.Toplevel):
                 fc.append(f"[{idx}:v]" + ",".join(chain) + f"[cv{i}]")
                 if use_a:
                     af = ["asetpts=PTS-STARTPTS"] + ([self._atempo(sp)] if sp != 1.0 else [])
-                    af += ["aresample=44100", afmt] + fx.audio_chain(p, fx.g(p, "vol"), afade)
+                    af += ["aresample=44100"] + fx.audio_chain(p, fx.g(p, "vol"), afade) + [afmt]
                     af += ["apad", f"atrim=0:{dd:.3f}", "asetpts=PTS-STARTPTS"]
                     fc.append(f"[{idx}:a]" + ",".join(af) + f"[ca{i}]")
                 else:                     # кліп без звуку -> тиша рівно на його довжину
@@ -4331,8 +4385,8 @@ class VideoEditor(tk.Toplevel):
                 any_audio = True
                 cmd += ["-vn", "-ss", f"{p['s']:.3f}", "-t", f"{p['e'] - p['s']:.3f}", "-i", src["path"]]
                 af = ["asetpts=PTS-STARTPTS"] + ([self._atempo(sp)] if sp != 1.0 else [])
-                af += ["aresample=44100", afmt] + fx.audio_chain(p,
-                    vol, fx.fade_win(0.0, dd, fx.g(p, "fin"), fx.g(p, "fout"), "a"))
+                af += ["aresample=44100"] + fx.audio_chain(p,
+                    vol, fx.fade_win(0.0, dd, fx.g(p, "fin"), fx.g(p, "fout"), "a")) + [afmt]
                 af += ["apad", f"atrim=0:{dd:.3f}", "asetpts=PTS-STARTPTS"]
                 fc.append(f"[{idx}:a]" + ",".join(af) + f"[ca{i}]")
                 idx += 1
