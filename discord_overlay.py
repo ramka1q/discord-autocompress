@@ -1076,18 +1076,16 @@ class Overlay(tk.Toplevel):
 
     # ---- свій розмір у МБ з екрана пропозиції (✏ на рядку розміру) ----
     def _custom_input(self):
-        """Екран вводу СВОГО розміру: не менше ліміту з налаштувань, менше за сам файл."""
+        """Екран вводу СВОГО розміру: від 0.5 МБ до розміру самого файла (можна й менше ліміту)."""
         lim = float(self.cfg["target_mb"])
-        self._size_input("✏", L("ov_custom_type", min=f"{lim:g}", max=f"{self.size_mb:.1f}"),
-                         f"{lim:g}", self._do_custom_typed, self._show_offer)
+        init = lim if lim < self.size_mb else max(1, int(self.size_mb * 0.6))
+        self._size_input("✏", L("ov_custom_type", min="0.5", max=f"{self.size_mb:.1f}"),
+                         f"{init:g}", self._do_custom_typed, self._show_offer)
 
     def _do_custom_typed(self):
-        lim = float(self.cfg["target_mb"])
         val = self._read_mb()
-        if val is None:
+        if val is None or val < 0.5:
             return self._input_err(L("ov_shrink_bad"))
-        if val < lim:      # не можна нижче за ліміт із налаштувань
-            return self._input_err(L("ov_custom_low", min=f"{lim:g}"))
         if val >= self.size_mb:
             return self._input_err(L("ov_shrink_toobig", max=f"{self.size_mb:.1f}"))
         if self.kind == "image":

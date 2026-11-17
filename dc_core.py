@@ -213,7 +213,7 @@ def have_ffmpeg() -> bool:
         return False
 
 
-BUILD = "2026-11-16-v2.7-honest-volume"   # маркер версії коду — щоб у логах бачити, чи юзер на новому коді
+BUILD = "2026-11-17-v2.7.1-custom-size"   # маркер версії коду — щоб у логах бачити, чи юзер на новому коді
 
 
 def probe_diag(path: str) -> str:
