@@ -3808,13 +3808,13 @@ class VideoEditor(tk.Toplevel):
             self._src(self.pieces[ix])["has_audio"] and not self.pieces[ix]["mute"]
             for ix in self.order) or any(
             self.sources[o["src"]]["has_audio"] and not o["mute"] for o in self.ovls)
-        v = dc_core.calc_video_kbps(total, target, self.cfg["audio_kbps"], has_a) or 0
+        v = dc_core.fit_bitrates(total, target, self.cfg["audio_kbps"], has_a)[1] or 0
         if v >= 600: col, tag = C_GREEN, E("ed_q_good")
         elif v >= 150: col, tag = host.C_WARN, E("ed_q_ok")
-        elif v >= 50: col, tag = host.C_WARN, E("ed_q_weak")
+        elif v >= dc_core.MIN_VKBPS: col, tag = host.C_WARN, E("ed_q_weak")
         else: col, tag = C_RED, E("ed_q_long")
         self.info_lbl.config(text=tag, fg=col)   # без цифр — лише оцінка якості
-        self.export_btn.config(state=("normal" if v >= 50 else "disabled"))
+        self.export_btn.config(state=("normal" if v >= dc_core.MIN_VKBPS else "disabled"))
 
     # ----------------------------------------------------------- експорт --- #
     def _is_simple(self):
@@ -4117,9 +4117,8 @@ class VideoEditor(tk.Toplevel):
         durs = [(p["e"] - p["s"]) / p["speed"] for p in clips]
         trs = [self._tr_d(k) for k in range(len(clips))]
         total = max(0.1, sum(durs) - sum(trs))
-        akbps = int(self.cfg["audio_kbps"])
-        v_kbps = dc_core.calc_video_kbps(total, target, akbps, True)
-        if not v_kbps or v_kbps < 50:
+        akbps, v_kbps = dc_core.fit_bitrates(total, target, int(self.cfg["audio_kbps"]), True)
+        if not v_kbps:
             return False, dc_core._t("core_toolong"), 0.0
         # розмір під ліміт рахуємо НАПЕРЕД і будуємо весь граф одразу в ньому:
         # переходи/текст/розмиття на 480p замість 1080p — у рази менше роботи
@@ -4197,11 +4196,11 @@ class VideoEditor(tk.Toplevel):
             fc.append(f"{vl}format=yuv420p[vout]")
             graph = ";".join(fc)
             ceiling = dc_core.target_ceiling(target)
-            kb, mb = max(50, int(v_kbps * 0.93)), 0.0
+            kb, mb = max(20, int(v_kbps * 0.93)), 0.0
             for attempt in range(3):
                 full = cmd + ["-filter_complex", graph, "-map", "[vout]", "-map", al,
                               *dc_core._hw_args(hw, kb), "-pix_fmt", "yuv420p",
-                              "-c:a", "aac", "-b:a", f"{akbps}k", "-ac", "2",
+                              *dc_core.audio_enc_args(akbps),
                               "-movflags", "+faststart", out_path]
                 rc = dc_core._run_pass(full, total, 0.0, 100.0, prog, cancel)
                 if cancel and cancel():
@@ -4211,10 +4210,13 @@ class VideoEditor(tk.Toplevel):
                     return None
                 mb = os.path.getsize(out_path) / 1024 / 1024
                 dc_core.dlog(f"SINGLE-PASS {hw} try={attempt} kbps={kb} -> {mb:.2f} MB (ceil {ceiling:.2f})")
-                if mb <= ceiling or kb <= 50:
+                if mb <= ceiling:
                     return True, "OK", mb
-                kb = max(50, int(kb * (ceiling / mb) * 0.95))
-            return True, "OK", mb
+                if kb <= 20 or mb > ceiling * 1.3:
+                    break
+                kb = max(20, int(kb * (ceiling / mb) * 0.95))
+            dc_core.dlog(f"SINGLE-PASS over limit ({mb:.2f} MB) -> exact legacy export")
+            return None
         finally:
             shutil.rmtree(tmpd, ignore_errors=True)
 

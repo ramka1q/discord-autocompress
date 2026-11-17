@@ -34,7 +34,7 @@ class ScaleTests(unittest.TestCase):
 
     def test_long_video_is_downscaled(self):
         info = {"duration": 600, "width": 1920, "height": 1080, "has_audio": True}
-        self.assertIn(dc_core.pick_auto_scale(info, 20, 128), (480, 360))
+        self.assertIn(dc_core.pick_auto_scale(info, 20, 128), (480, 360, 240))
 
 
 class MessageTests(unittest.TestCase):

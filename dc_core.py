@@ -213,7 +213,7 @@ def have_ffmpeg() -> bool:
         return False
 
 
-BUILD = "2026-11-17-v2.7.1-custom-size"   # маркер версії коду — щоб у логах бачити, чи юзер на новому коді
+BUILD = "2026-11-17-v2.7.2-low-bitrate"   # маркер версії коду — щоб у логах бачити, чи юзер на новому коді
 
 
 def probe_diag(path: str) -> str:
@@ -280,13 +280,41 @@ def calc_video_kbps(duration: float, target_mb: float, audio_kbps: int, has_audi
     return int((target_bits - audio_bits) / duration / 1000)
 
 
+MIN_VKBPS = 30     # нижче цього відео — суцільна каша; відмовляємось чесно
+
+
+def fit_bitrates(duration: float, target_mb: float, audio_kbps: int, has_audio: bool):
+    """Бітрейти (звук, відео) під ліміт. Якщо на відео лишається замало (довге відео в
+    малий розмір) — звук автоматично знижується аж до 24 kbps моно, щоб відео вистачило.
+    Повертає (audio_kbps, video_kbps) або (audio_kbps, None), якщо не влізе навіть так."""
+    a = int(audio_kbps or 0)
+    v = calc_video_kbps(duration, target_mb, a, has_audio)
+    if not has_audio or a <= 0:
+        return a, (v if v and v >= MIN_VKBPS else None)
+    if v and v >= 150:
+        return a, v
+    for a2 in (64, 48, 32, 24):
+        if a2 >= a:
+            continue
+        a, v = a2, calc_video_kbps(duration, target_mb, a2, has_audio)
+        if v and v >= 150:
+            return a, v
+    return a, (v if v and v >= MIN_VKBPS else None)
+
+
+def audio_enc_args(audio_kbps: int) -> list:
+    """AAC під бітрейт; на дуже низькому — моно (звучить краще, ніж стерео з 24 kbps)."""
+    return ["-c:a", "aac", "-b:a", f"{int(audio_kbps)}k"] + (["-ac", "1"] if audio_kbps <= 48 else [])
+
+
 def pick_auto_scale(info: dict, target_mb: float, audio_kbps: int) -> int:
     """Авто-підбір висоти кадру так, щоб бітрейт лишався пристойним.
     0 = лишити оригінал. Повертає одне з: 0/1080/720/480/360 — це КОРОТША сторона кадру,
     тож вертикальне відео з телефона (1080x1920) не стискається втричі сильніше за горизонтальне."""
     w, h = info.get("width") or 0, info.get("height") or 0
     h = min(w, h) if (w and h) else (h or 9999)
-    candidates = [0] + [c for c in (1080, 720, 480, 360) if c < h]
+    candidates = [0] + [c for c in (1080, 720, 480, 360, 240) if c < h]
+    audio_kbps, _ = fit_bitrates(info["duration"], target_mb, audio_kbps, info["has_audio"])
     for scale in candidates:
         eff_h = h if scale == 0 else min(scale, h)
         # орієнтовний «добрий» бітрейт ~ 2.2 kbps на рядок висоти (груба евристика)
@@ -336,10 +364,10 @@ def compress(path, out_path, target_mb, scale, audio_kbps, info,
     force_enc — "x264" або h264_* (для тесту швидкості); None = за налаштуваннями.
     Повертає (ok: bool, message: str, final_mb: float)."""
     duration = dur if dur is not None else info["duration"]
+    audio_kbps, v_kbps = fit_bitrates(duration, target_mb, audio_kbps, info["has_audio"])
     has_audio = info["has_audio"] and audio_kbps > 0
     ceiling_mb = target_ceiling(target_mb)
-    v_kbps = calc_video_kbps(duration, target_mb, audio_kbps, info["has_audio"])
-    if not v_kbps or v_kbps < 50:
+    if not v_kbps:
         return False, _t("core_lowbr"), 0.0
 
     # ТОЧНА обрізка: -ss ПЕРЕД -i = швидкий і (при перекодуванні) кадрово-точний старт;
@@ -367,7 +395,7 @@ def compress(path, out_path, target_mb, scale, audio_kbps, info,
         return ["ffmpeg", "-y", *inss, "-i", path, *outdur, *cfr, "-c:v", "libx264",
                 "-b:v", f"{kbps}k", "-preset", "medium", *vf, "-pix_fmt", "yuv420p"]
 
-    audio_args = ["-c:a", "aac", "-b:a", f"{audio_kbps}k"] if has_audio else ["-an"]
+    audio_args = audio_enc_args(audio_kbps) if has_audio else ["-an"]
 
     # ---- ВІДЕОКАРТА (NVENC / Quick Sync / AMF): один прохід, у 3–4 рази швидше ----
     hw = (("" if force_enc == "x264" else force_enc) if force_enc else active_hw())
@@ -388,11 +416,14 @@ def compress(path, out_path, target_mb, scale, audio_kbps, info,
                     return False, _t("core_pass2"), 0.0
                 break
             final_mb = os.path.getsize(out_path) / 1024 / 1024
-            if final_mb <= ceiling_mb or kb <= 50:
+            if final_mb <= ceiling_mb:
                 return True, "OK", final_mb
-            kb = max(50, int(kb * (ceiling_mb / final_mb) * 0.95))
-        else:
-            return True, "OK", final_mb
+            if kb <= 20 or final_mb > ceiling_mb * 1.3:
+                break      # NVENC упирається у свій мінімум -> не марнуємо час на спроби
+            kb = max(20, int(kb * (ceiling_mb / final_mb) * 0.95))
+        # відеокарта не влізла в ліміт (на дуже низькому бітрейті NVENC перебирає) ->
+        # точний 2-прохідний x264 на процесорі
+        dlog(f"HW encode {hw}: {final_mb:.2f} MB > {ceiling_mb:.2f} -> x264 2-pass")
         if progress_cb:
             progress_cb(0.0)
 
@@ -418,10 +449,16 @@ def compress(path, out_path, target_mb, scale, audio_kbps, info,
                 return False, _t("core_pass2"), 0.0
 
             final_mb = os.path.getsize(out_path) / 1024 / 1024
-            if final_mb <= ceiling_mb or v_kbps <= 50:
-                break  # влізло у стелю (або бітрейт вже на мінімумі) — готово
+            if final_mb <= ceiling_mb or v_kbps <= 20:
+                break  # влізло у стелю (або бітрейт вже на мінімумі)
             # перевищили стелю -> знижуємо бітрейт пропорційно (з невеликим запасом) і повторюємо
-            v_kbps = max(50, int(v_kbps * (ceiling_mb / final_mb) * 0.97))
+            v_kbps = max(20, int(v_kbps * (ceiling_mb / final_mb) * 0.97))
+        if final_mb > target_mb:      # НІКОЛИ не кажемо «готово», якщо Discord його не прийме
+            try:
+                os.remove(out_path)
+            except OSError:
+                pass
+            return False, _t("core_lowbr"), final_mb
         return True, "OK", final_mb
     finally:
         for ext in (".log", ".log.mbtree", "-0.log", "-0.log.mbtree",
@@ -448,8 +485,8 @@ def compress_segments(path, out_path, target_mb, scale, audio_kbps, info, segmen
     if not segs:
         return False, _t("core_noseg"), 0.0
     total = sum(e - s for s, e in segs)
-    v_kbps = calc_video_kbps(total, target_mb, audio_kbps, info["has_audio"])
-    if not v_kbps or v_kbps < 50:
+    _a, v_kbps = fit_bitrates(total, target_mb, audio_kbps, info["has_audio"])
+    if not v_kbps:
         return False, _t("core_toolong"), 0.0
 
     # ОДИН фрагмент -> одразу через швидкий вхідний seek (compress зі start/dur) — найшвидше й точно

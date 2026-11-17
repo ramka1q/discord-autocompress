@@ -1103,8 +1103,8 @@ class Overlay(tk.Toplevel):
             return self._show_error(L("ov_read_fail"), allow_split=False, allow_trim=False)
         target = float(target_override) if target_override else float(self.cfg["target_mb"])
         # перевірка здійсненності: навіть якщо ВЕСЬ бюджет віддати відео — чи вистачить?
-        best = dc_core.calc_video_kbps(info["duration"], target, 0, False)
-        if not best or best < 50:
+        _a, best = dc_core.fit_bitrates(info["duration"], target, self.cfg["audio_kbps"], info["has_audio"])
+        if not best:
             mins = info["duration"] / 60
             return self._show_error(L("ov_too_big", mb=f"{target:g}", mins=f"{mins:.0f}"))
         scale = (dc_core.pick_auto_scale(info, target, self.cfg["audio_kbps"])
