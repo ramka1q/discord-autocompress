@@ -421,9 +421,11 @@ class VideoEditor(tk.Toplevel):
     VPAD = 40        # поля навколо екрана плеєра — рамка масштабу видно й ЗА плеєром
     TW = 900
 
-    def __init__(self, master, file_path, info, cfg, discord_hwnd, watcher, on_close):
+    def __init__(self, master, file_path, info, cfg, discord_hwnd, watcher, on_close, empty=False):
         _sync_theme()
         super().__init__(master)
+        # empty=True — порожній проєкт: file_path — темна заглушка, перше додане медіа її замінить
+        self._empty = bool(empty)
         self.file_path, self.info, self.cfg = file_path, info, cfg
         self.discord_hwnd, self.watcher, self.on_close = discord_hwnd, watcher, on_close
         self._cancel_flag = False    # закриття під час експорту зупиняє ffmpeg
@@ -432,10 +434,10 @@ class VideoEditor(tk.Toplevel):
         # ---- джерела медіа (source 0 = початкове відео) ----
         self.sources = []
         self._tmp = tempfile.mkdtemp(prefix="dedit_")
-        si = self._add_source(file_path, "video", info)
+        si = self._add_source(file_path, "image" if self._empty else "video", info)
 
         # ---- кліпи доріжки: словники (src, s, e, zoom, nx, ny, speed, mute) ----
-        self.pieces = [self._new_piece(si, 0.0, max(0.1, info["duration"]))]
+        self.pieces = [self._new_piece(si, 0.0, 5.0 if self._empty else max(0.1, info["duration"]))]
         self.order = [0]
         self.sel = 0
         self.snds = []               # додані звуки: {"path","at","dur","vol","name","env"}
@@ -557,6 +559,7 @@ class VideoEditor(tk.Toplevel):
         self._show_poster(0.0)
         self._gen_visuals(si)        # кіно-стрічка + хвиля для першого джерела
         self.after(400, self._enable_dnd)   # перетягування файлів (після мапінгу вікна)
+        self.after(50, self._draw_empty_hint)
         self._arm_resize()                  # велике вікно одразу + адаптивний розмір
 
     # ------------------------------------------------------------ джерела -- #
@@ -604,7 +607,9 @@ class VideoEditor(tk.Toplevel):
         nm = os.path.basename(self.file_path)
         if len(nm) > 44:
             nm = nm[:42] + "…"
-        tk.Label(top, text=nm, bg=C_DARK, fg=C_TEXT, font=(FONT, 10, "bold")).pack(side="left")
+        self.name_lbl = tk.Label(top, text=(E("ed_new_project") if self._empty else nm), bg=C_DARK,
+                                 fg=C_TEXT, font=(FONT, 10, "bold"))
+        self.name_lbl.pack(side="left")
         self.dims_lbl = tk.Label(top, text="", bg=C_DARK, fg=C_MUTED, font=(FONT, 9))
         self.dims_lbl.pack(side="left")
         self.ratio_btn = self._btn(top, "▭", self._ratio_menu, primary=False, small=True)
@@ -826,6 +831,7 @@ class VideoEditor(tk.Toplevel):
         self._qcache.clear()
         self._show_poster(self.cur, fast=True)
         self._draw_tfbox()
+        self._draw_empty_hint()
 
     def _show_help(self):
         """Довідка окремим маленьким вікном (замість написів у самому редакторі)."""
@@ -866,6 +872,7 @@ class VideoEditor(tk.Toplevel):
             return
         snap = self._snapshot()
         added, skipped = 0, 0
+        first_vis = None                 # перше відео/фото — задає кадр порожнього проєкту
         for p in paths:
             try:
                 kind = media.kind_of(p)
@@ -875,6 +882,7 @@ class VideoEditor(tk.Toplevel):
                         skipped += 1
                         continue
                     si = self._add_source(p, "video", inf)
+                    first_vis = first_vis or (p, inf)
                     self.pieces.append(self._new_piece(si, 0.0, inf["duration"]))
                     self.order.append(len(self.pieces) - 1)
                     self.sel = len(self.order) - 1
@@ -884,6 +892,8 @@ class VideoEditor(tk.Toplevel):
                     si = self._add_source(p, "image",
                                           {"duration": 0, "has_audio": False,
                                            "width": w, "height": h, "fps": self._cfps})
+                    first_vis = first_vis or (p, {"duration": IMG_DUR, "has_audio": False,
+                                                  "width": w, "height": h, "fps": self._cfps})
                     self.pieces.append(self._new_piece(si, 0.0, IMG_DUR))
                     self.order.append(len(self.pieces) - 1)
                     self.sel = len(self.order) - 1
@@ -898,14 +908,21 @@ class VideoEditor(tk.Toplevel):
                           "fin": 0.0, "fout": 0.0}
                     self.snds.append(sn)
                     self._gen_snd_env(sn)
+                    if self._empty:      # лише звук: проєкт рівно під звуки (для MP3)
+                        self.pieces[0]["e"] = max(0.5, max(x["at"] + x["dur"] for x in self.snds))
+                        self.file_path = p
                 else:
                     skipped += 1
                     continue
                 added += 1
             except Exception:
                 skipped += 1
+        if added and self._empty and first_vis:
+            self._leave_empty(*first_vis)
+            added = -1                   # undo назад у порожню заглушку не пропонуємо
         if added:
-            self._undo.append(snap)
+            if added > 0:
+                self._undo.append(snap)
             if len(self._undo) > 80:
                 self._undo.pop(0)
             self._redo.clear()
@@ -918,6 +935,45 @@ class VideoEditor(tk.Toplevel):
                 self.info_lbl.config(text=E("ed_unsupported"), fg=C_RED)
             except tk.TclError:
                 pass
+
+    def _leave_empty(self, path, info):
+        """Перше відео/фото в порожньому проєкті: заглушку геть, кадр проєкту — з цього файла."""
+        self._empty = False
+        self.order = [ix for ix in self.order if self.pieces[ix]["src"] != 0]
+        self.sel = 0
+        self.file_path, self.info = path, info
+        w0 = int(info.get("width") or 1280) or 1280
+        h0 = int(info.get("height") or 720) or 720
+        k = min(1.0, 1920.0 / max(w0, h0))
+        self._w0, self._h0 = max(2, int(w0 * k / 2) * 2), max(2, int(h0 * k / 2) * 2)
+        self._cfps = min(60.0, float(info.get("fps", 30) or 30))
+        self._base_pps = (self.TW - LX - PAD_L - 40) / max(0.1, float(info.get("duration") or IMG_DUR))
+        self._undo.clear()
+        self._redo.clear()
+        p = self._sel_piece()
+        self.cur = p["s"]
+        try:
+            self.name_lbl.config(text=os.path.basename(path)[:44])
+        except tk.TclError:
+            pass
+        self._apply_canvas()
+        self._draw_empty_hint()
+        self._zoom_fit()
+
+    def _draw_empty_hint(self):
+        """Підказка в плеєрі порожнього проєкту."""
+        c = self.video
+        try:
+            c.delete("emptyhint")
+            if not self._empty:
+                return
+            cx, cy = self.VPAD + self.VW / 2, self.VPAD + self.VH / 2
+            c.create_text(cx, cy - 22, text="➕", fill=C_BLURPLE, font=(FONT, 34, "bold"), tags="emptyhint")
+            c.create_text(cx, cy + 26, text=E("ed_empty_hint"), fill=C_TEXT, font=(FONT, 11, "bold"),
+                          justify="center", tags="emptyhint")
+            c.tag_raise("emptyhint")
+        except tk.TclError:
+            pass
 
     def _gen_snd_env(self, sn):
         """Хвиля доданого звуку — малюється всередині його блока, коли він вибраний."""
@@ -1111,6 +1167,7 @@ class VideoEditor(tk.Toplevel):
             self.video.tag_lower("screen")      # чорний екран — під кадром
             self.video.tag_lower("card")        # картка-підложка — на самому дні
             self._draw_tfbox()
+            self._draw_empty_hint()
         except tk.TclError:
             pass
 
@@ -1206,6 +1263,8 @@ class VideoEditor(tk.Toplevel):
     def _video_press(self, ev):
         if self.busy:
             return
+        if self._empty:                   # порожній проєкт: клік по плеєру = «додати»
+            return self._add_dialog()
         try:
             self.focus_set()
         except tk.TclError:
@@ -2445,6 +2504,11 @@ class VideoEditor(tk.Toplevel):
                 self._sel_xs, self._sel_xe = cx1, cx2
             if cx2 < LX - 12 or cx1 > W + 12:
                 continue
+            if self._empty and p["src"] == 0:      # порожній проєкт: замість кліпа — запрошення
+                c.create_rectangle(cx1 + 1, y1 + 2, cx2 - 1, y2 - 2, fill=C_LANE, outline=C_MUTED,
+                                   dash=(5, 4), width=1)
+                self._block_label(c, cx1 + 4, cx2, W, (y1 + y2) / 2, "➕  " + E("ed_empty_clip"), C_MUTED)
+                continue
             if drag and drag["slot"] == slot:      # місце, звідки тягнемо кліп
                 c.create_rectangle(cx1 + 1, y1 + 2, cx2 - 1, y2 - 2, outline=C_MUTED,
                                    dash=(4, 3), width=1)
@@ -3486,6 +3550,8 @@ class VideoEditor(tk.Toplevel):
         self._active = None
         self._tip_t = None
         hit = self._clip_hit(ev.x)
+        if hit is not None and self._empty and self.pieces[hit[1]]["src"] == 0:
+            return self._add_dialog()
         if hit is None:                       # порожнє місце доріжки -> плейхед туди
             self.sel_ovl = None
             self.sel_txt = None
@@ -4014,6 +4080,10 @@ class VideoEditor(tk.Toplevel):
 
     def _update_info(self):
         if self.busy:
+            return
+        if self._empty and not self.snds:
+            self.info_lbl.config(text=E("ed_add_first"), fg=C_MUTED)
+            self.export_btn.config(state="disabled")
             return
         total = self._total()
         target = float(self.cfg["target_mb"])

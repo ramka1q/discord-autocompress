@@ -1664,7 +1664,7 @@ class Watcher:
 
         def _editor():
             import library
-            library.pick_and_edit(self)
+            library.open_empty_editor(self)
 
         kw = dict(on_save=self._on_settings_save, on_apply=self._on_settings_apply,
                   on_close=_closed, on_restart=self.restart_app,

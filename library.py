@@ -107,6 +107,28 @@ def open_editor(watcher, path, discord_hwnd=None):
         watcher.overlay_open = False
 
 
+def _placeholder() -> str:
+    """Темний кадр 1280x720 — «полотно» порожнього проєкту."""
+    p = os.path.join(tempfile.gettempdir(), "dac_empty_project.png")
+    if not os.path.exists(p):
+        subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "color=c=0x111214:s=1280x720",
+                        "-frames:v", "1", p], capture_output=True, creationflags=dc_core.NO_WINDOW)
+    return p
+
+
+def open_empty_editor(watcher, discord_hwnd=None):
+    """Редактор одразу, БЕЗ вибору файла — порожній проєкт (як новий проєкт у CapCut)."""
+    from editor import VideoEditor
+    info = {"duration": 0.0, "width": 1280, "height": 720, "fps": 30.0, "has_audio": False}
+    watcher.overlay_open = True
+    try:
+        VideoEditor(watcher.root, _placeholder(), info, watcher.cfg, discord_hwnd, watcher,
+                    on_close=watcher._closed, empty=True)
+    except Exception as e:
+        dc_core.dlog("LIBRARY open_empty_editor fail " + repr(e))
+        watcher.overlay_open = False
+
+
 def pick_and_edit(watcher, parent=None, discord_hwnd=None):
     pats = " ".join("*" + e for e in sorted(dc_core.VIDEO_EXT))
     try:
@@ -263,7 +285,7 @@ class Gallery(tk.Toplevel):
 
     def _new(self):
         self.destroy()
-        pick_and_edit(self.w, None, self.dhwnd)
+        open_empty_editor(self.w, self.dhwnd)
 
     def _open_folder(self):
         try:
