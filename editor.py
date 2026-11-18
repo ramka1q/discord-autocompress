@@ -1572,10 +1572,11 @@ class VideoEditor(tk.Toplevel):
         self._play_start = start
         self._play_end = min(piece["e"], start + dur) if dur else piece["e"]
         if src["kind"] == "image":
-            # картинка: «граємо» по годиннику, без ffplay
+            # картинка: «граємо» по годиннику, без ffplay; додані звуки — окремим програвачем
             self.playing = True
             self._play_t0 = time.monotonic()
             self._ffplay = None
+            self._start_aux_audio(piece, start, self._play_end)
             self._set_play_icon(True)
             self._play_progress()
             return
@@ -1590,6 +1591,8 @@ class VideoEditor(tk.Toplevel):
         if not self._fx_broken:
             try:
                 vf, af, _a_ok = self._play_graph(piece, start)
+                if vf and not _a_ok:          # відео без звуку: музику грає окремий програвач
+                    self._start_aux_audio(piece, start, self._play_end)
             except Exception as e:
                 dc_core.dlog("PLAY graph EXCEPTION " + repr(e))
                 vf = af = None
@@ -1724,6 +1727,7 @@ class VideoEditor(tk.Toplevel):
             except Exception: pass
         self._ffplay = None
         self._embedded = None
+        self._stop_aux_audio()
         if self._tick_id:
             try: self.after_cancel(self._tick_id)
             except Exception: pass
@@ -3364,11 +3368,17 @@ class VideoEditor(tk.Toplevel):
         self._popup(m, b.winfo_rootx(), b.winfo_rooty() + b.winfo_height())
 
     def _preview_sound(self, sn):
+        """«Послухати» 10 с. Попереднє прослуховування й відтворення зупиняються; при
+        закритті редактора — теж (раніше музика грала далі після закриття)."""
+        if self.playing:
+            self._pause()
+        self._stop_aux_audio()
         try:
-            subprocess.Popen(["ffplay", "-hide_banner", "-loglevel", "error", "-nodisp",
-                              "-autoexit", "-ss", f"{float(sn.get('s', 0.0)):.3f}",
-                              "-t", f"{min(10.0, sn['dur']):.3f}", "-i", sn["path"]],
-                             creationflags=dc_core.NO_WINDOW)
+            self._previews = [subprocess.Popen(
+                ["ffplay", "-hide_banner", "-loglevel", "error", "-nodisp",
+                 "-autoexit", "-ss", f"{float(sn.get('s', 0.0)):.3f}",
+                 "-t", f"{min(10.0, sn['dur']):.3f}", "-i", sn["path"]],
+                creationflags=dc_core.NO_WINDOW)]
         except Exception:
             pass
 
@@ -3894,7 +3904,17 @@ class VideoEditor(tk.Toplevel):
         ach += fx.audio_chain(piece, vol, fx.fade_win(-off, cdur - off, fx.g(piece, "fin"),
                                                fx.g(piece, "fout"), "a"))
         aparts = ["[in]" + ",".join(ach) + "[a0]"]
-        labs = []
+        sparts, labs = self._snd_play_parts(m0, rem)
+        aparts += sparts
+        if labs:
+            aparts.append(f"[a0]{''.join(labs)}amix=inputs={len(labs) + 1}:duration=first:normalize=0[out]")
+        else:
+            aparts[0] = aparts[0][:-4] + "[out]"
+        return vf, ";".join(aparts), True
+
+    def _snd_play_parts(self, m0, rem):
+        """Додані звуки для відтворення з монтажного часу m0 на rem секунд: (частини графа, мітки)."""
+        parts, labs = [], []
         for j, sn in enumerate(self.snds):
             a, b = sn["at"] - m0, sn["at"] + sn["dur"] - m0
             if b <= 0 or a >= rem or sn["vol"] <= 0.005 or not os.path.isfile(sn["path"]):
@@ -3911,13 +3931,42 @@ class VideoEditor(tk.Toplevel):
                                        sn.get("fout", 0.0), "a"))
             if ms:
                 ach2.append(f"adelay={ms}|{ms}")
-            aparts.append(f"{mv},{','.join(ach2)}[s{j}]")
+            parts.append(f"{mv},{','.join(ach2)}[s{j}]")
             labs.append(f"[s{j}]")
-        if labs:
-            aparts.append(f"[a0]{''.join(labs)}amix=inputs={len(labs) + 1}:duration=first:normalize=0[out]")
-        else:
-            aparts[0] = aparts[0][:-4] + "[out]"
-        return vf, ";".join(aparts), True
+        return parts, labs
+
+    def _start_aux_audio(self, piece, start, end):
+        """Окремий програвач ЗВУКІВ (без картинки) — коли кліп сам звуку не має (фото, відео без
+        звуку, порожній проєкт). Інакше додану музику просто не було чути."""
+        self._stop_aux_audio()
+        if self._rec or not self.snds:
+            return
+        sp = piece["speed"]
+        m0 = self._clip_layout_start(self.sel) + (start - piece["s"]) / sp
+        rem = max(0.1, (end - start) / sp)
+        parts, labs = self._snd_play_parts(m0, rem)
+        if not labs:
+            return
+        graph = ";".join([f"anullsrc=r=44100:cl=stereo,atrim=0:{rem:.3f}[a0]"] + parts
+                         + [f"[a0]{''.join(labs)}amix=inputs={len(labs) + 1}:duration=first:normalize=0[out0]"])
+        try:
+            self._aux_proc = subprocess.Popen(["ffplay", "-hide_banner", "-loglevel", "error", "-nodisp",
+                                               "-autoexit", "-f", "lavfi", "-i", graph],
+                                              creationflags=dc_core.NO_WINDOW)
+        except Exception as e:
+            dc_core.dlog("AUX audio fail " + repr(e))
+            self._aux_proc = None
+
+    def _stop_aux_audio(self):
+        for p in [getattr(self, "_aux_proc", None)] + list(getattr(self, "_previews", [])):
+            if p is not None and p.poll() is None:
+                try:
+                    p.kill()
+                    p.wait(timeout=0.5)       # дочекатись, щоб звук точно замовк
+                except Exception:
+                    pass
+        self._aux_proc = None
+        self._previews = []
 
     # ------------------------------------------- доріжка тексту (титри) ---- #
     def _draw_txt_lane(self, c, W, pps):
@@ -4931,6 +4980,7 @@ class VideoEditor(tk.Toplevel):
             return
         self._closed = True
         self._cancel_flag = True       # експорт, якщо йде, зупиняється (ffmpeg гаситься)
+        self._stop_aux_audio()         # «Послухати» / звуки — не грають після закриття
         if self._rec:                  # запис голосу — зупиняємо ffmpeg мікрофона
             try:
                 self._rec["proc"].kill()
