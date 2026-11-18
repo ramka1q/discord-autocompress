@@ -513,6 +513,12 @@ class VideoEditor(tk.Toplevel):
         self._mpv_resume = None      # пауза посеред програвання -> продовжити миттєво
         self._mpv_warmed = False
         self._mpv_win = None
+        self._scr = None             # другий, легкий mpv: кадр на паузі ЗА повзунком (6–30 мс)
+        self._scr_win = None
+        self._scr_src = None
+        self._scr_key = None
+        self._scr_bad = set()
+        self._scr_on = False
         self._prewarm_after = None
         self._edit_gen = 0           # лічильник змін — підготовлене застаріває
         self._rec_n = 0
@@ -841,6 +847,13 @@ class VideoEditor(tk.Toplevel):
                 _u32.MoveWindow(self._embedded, self.VPAD, self.VPAD, self.VW, self.VH, True)
             except Exception:
                 pass
+        if self._scr_win:
+            try:
+                self.video.itemconfigure(self._scr_win, width=self.VW, height=self.VH)
+                if self._scr_on:
+                    self.video.coords(self._scr_win, self.VPAD, self.VPAD)
+            except tk.TclError:
+                pass
         if self._mpv_win:               # і вікно mpv (розмір; позицію не чіпаємо)
             try:
                 self.video.itemconfigure(self._mpv_win, width=self.VW, height=self.VH)
@@ -1079,12 +1092,14 @@ class VideoEditor(tk.Toplevel):
     # ----------------------------------------------- ПРЕВ'Ю (ffmpeg→PNG) --- #
     def _show_poster(self, t, fast=False):
         self._pending = t
-        if fast:
+        live = self._scr_to(t)              # кадр ЗА повзунком одразу (mpv), постер — під ним
+        if fast and not live:
             self._quick_frame(t)            # миттєво з кешу, точний кадр — слідом
         if self._prev_after:
             try: self.after_cancel(self._prev_after)
             except Exception: pass
-        self._prev_after = self.after(25 if fast else 110, self._run_poster)
+        # коли кадр показує mpv, постер під ним не поспішає (не смикаємо ffmpeg на кожен рух)
+        self._prev_after = self.after(300 if live else (25 if fast else 110), self._run_poster)
         self._mpv_schedule_prewarm()
 
     def _ovl_vf(self, o, cw, ch, alpha=1.0):
@@ -1241,6 +1256,7 @@ class VideoEditor(tk.Toplevel):
         c.delete("tf")
         if not self._tf_on or self.playing:
             return
+        self._scr_hide()                    # рамку малює канвас — вікно mpv не має її закривати
         x1, y1, x2, y2 = self._tf_rect()
         CW = self.VW + 2 * self.VPAD
         CH = self.VH + 2 * self.VPAD
@@ -1587,6 +1603,7 @@ class VideoEditor(tk.Toplevel):
 
     def _launch(self, start, dur):
         self._pause()
+        self._scr_hide()
         piece = self._sel_piece()
         src = self._src(piece)
         self._tf_on = False
@@ -4031,6 +4048,7 @@ class VideoEditor(tk.Toplevel):
                 m.set(k, v)
             self._mpv = m
             dc_core.dlog("MPV ready")
+            self._scr_init(mpvplayer)
             self._mpv_prewarm()
         except Exception as e:
             dc_core.dlog("MPV init fail " + repr(e))
@@ -4038,7 +4056,83 @@ class VideoEditor(tk.Toplevel):
             self._mpv_failed = True
         return self._mpv
 
+    # ---- скраб на паузі: окремий mpv без звуку, точний кадр за 6–30 мс ----
+    def _scr_init(self, mpvplayer):
+        try:
+            self._scr_host = tk.Frame(self.video, bg="black", highlightthickness=0, bd=0)
+            self._scr_win = self.video.create_window(-20000, -20000, anchor="nw", window=self._scr_host,
+                                                     width=self.VW, height=self.VH)
+            self.update_idletasks()
+            # вимкнене вікно не забирає мишу: кліки по відео йдуть у канвас, як і раніше
+            _u32.EnableWindow(ctypes.c_void_p(self._scr_host.winfo_id()), False)
+            m = mpvplayer.Player(self._scr_host.winfo_id())
+            for k, v in (("audio", "no"), ("hr-seek", "yes"), ("hr-seek-framedrop", "yes"),
+                         ("demuxer-max-back-bytes", "150MiB")):
+                m.set(k, v)
+            self._scr = m
+            self.after(60, lambda: self._scr_to(self.cur))   # файл відкрито заздалегідь
+        except Exception as e:
+            dc_core.dlog("SCRUB init fail " + repr(e))
+            self._scr = None
+
+    def _scr_hide(self):
+        if self._scr_on and self._scr_win:
+            self._scr_on = False
+            try:
+                self.video.coords(self._scr_win, -20000, -20000)
+            except tk.TclError:
+                pass
+
+    def _scr_to(self, t):
+        """Миттєвий кадр на паузі через легкий mpv. False — цей випадок малює звичайний постер
+        (накладки/тексти/фейд у цю мить, фото, режим рамки трансформації)."""
+        m = self._scr
+        if m is None or self.playing or self._closed or self.busy or not self.order:
+            return self._scr_hide() or False
+        p = self._sel_piece()
+        src = self._src(p)
+        if src["kind"] != "video" or self._tf_on or fx.g(p, "novideo"):
+            return self._scr_hide() or False
+        mt = self._playhead_montage_t()
+        if self._active_texts(mt) or any(o["at"] - 0.001 <= mt <= o["at"] + o["e"] - o["s"] + 0.001
+                                         for o in self.ovls):
+            return self._scr_hide() or False
+        cd = (p["e"] - p["s"]) / p["speed"]
+        if fx.alpha_factor((t - p["s"]) / p["speed"], cd, fx.g(p, "fin"), fx.g(p, "fout")) < 0.999:
+            return self._scr_hide() or False
+        key = (self.sel, self._edit_gen, self._pcw, self._pch, self._bgmode)
+        if key in self._scr_bad:
+            return self._scr_hide() or False
+        try:
+            fresh = self._scr_src != src["path"]
+            if fresh:
+                m.load(src["path"], start=t, paused=True)
+                self._scr_src = src["path"]
+            if key != self._scr_key:
+                vf = self._transform_vf(p, self._pcw, self._pch)
+                try:
+                    m.set("vf", f"lavfi=[{vf}]")
+                except Exception:
+                    self._scr_bad.add(key)
+                    m.set("vf", "")
+                    self._scr_key = None
+                    return self._scr_hide() or False
+                self._scr_key = key
+            if not fresh:
+                m.command("seek", f"{t:.3f}", "absolute+exact")
+        except Exception as e:
+            dc_core.dlog("SCRUB fail " + repr(e))
+            return self._scr_hide() or False
+        if not self._scr_on and self._scr_win:
+            self._scr_on = True
+            try:
+                self.video.coords(self._scr_win, self.VPAD, self.VPAD)
+            except tk.TclError:
+                pass
+        return True
+
     def _mpv_show(self):
+        self._scr_hide()
         if self._mpv_win:
             try:
                 self.video.coords(self._mpv_win, self.VPAD, self.VPAD)
@@ -5289,6 +5383,12 @@ class VideoEditor(tk.Toplevel):
             except Exception:
                 pass
             self._mpv = None
+        if self._scr is not None:
+            try:
+                self._scr.close()
+            except Exception:
+                pass
+            self._scr = None
         if self._rec:                  # запис голосу — зупиняємо ffmpeg мікрофона
             try:
                 self._rec["proc"].kill()

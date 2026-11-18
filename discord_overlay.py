@@ -1491,6 +1491,7 @@ class Watcher:
         # Позначку ставимо одразу — до відкриття меню, яке має свою копію конфіга.
         import changelog
         show_news = (not first_run) and self.cfg.get("seen_version") != changelog.VERSION
+        self._news_from = self.cfg.get("seen_version")   # з якої версії оновились -> покажемо все після неї
         if self.cfg.get("seen_version") != changelog.VERSION:
             self.cfg["seen_version"] = changelog.VERSION
             save_config(self.cfg)
@@ -1540,7 +1541,8 @@ class Watcher:
         try:
             import whatsnew
             whatsnew.WhatsNew(self.root, LANG, THEME,
-                              on_open_tab=lambda tab: self.open_settings(tab=tab))
+                              on_open_tab=lambda tab: self.open_settings(tab=tab),
+                              since=getattr(self, "_news_from", None))
         except Exception as e:
             import traceback
             dc_core.dlog("whatsnew FAILED: " + repr(e) + "\n" + traceback.format_exc())

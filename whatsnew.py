@@ -27,12 +27,20 @@ class WhatsNew(tk.Toplevel):
     W = 560
     ROW = 64
 
-    def __init__(self, master, lang, theme, on_open_tab=None, entry=None):
+    def __init__(self, master, lang, theme, on_open_tab=None, entry=None, since=None):
+        """since — версія, З ЯКОЇ оновились: показуємо зміни всіх версій після неї."""
         super().__init__(master)
         self.lang, self.P = lang, themes.palette(theme)
         self.on_open_tab = on_open_tab
-        self.entry = entry or changelog.CHANGES[0]
-        self.items = changelog.items(self.entry, lang)
+        self.entries = [entry] if entry else (changelog.since(since) if since else changelog.CHANGES[:1])
+        self.since = since if len(self.entries) > 1 else None
+        self.entry = self.entries[0]
+        self.items = []
+        for e in self.entries:
+            for icon, title, desc, tab in changelog.items(e, lang):
+                if len(self.entries) > 1:
+                    title = f"{title}  · v{e['v']}"
+                self.items.append((icon, title, desc, tab))
         self.H = 236 + len(self.items) * self.ROW + 96
         self._closed = False
         self._t0 = time.monotonic()
@@ -54,6 +62,13 @@ class WhatsNew(tk.Toplevel):
         # висота кожного пункту — під його текст (довгий опис на 3+ рядки не вилазить за картку)
         self._lay = self._measure_rows()
         H = 236 + sum(h for h in self._lay) + (self.ROW - 54) * len(self._lay) + 96
+        full, hidden = list(self.items), 0
+        while H > sh - 60 and len(full) - hidden > 1:   # не влазить в екран -> решта у вкладці
+            hidden += 1
+            self.items = full[:len(full) - hidden] + [("➕", self.T("wn_more", n=hidden),
+                                                      self.T("wn_more_d"), "whatsnew")]
+            self._lay = self._measure_rows()
+            H = 236 + sum(self._lay) + (self.ROW - 54) * len(self._lay) + 96
         self.H = min(H, sh - 60)
         self._y = max(10, (sh - self.H) // 2 - 10)
         self.geometry(f"{self.W}x{self.H}+{self._x}+{self._y + 26}")
@@ -105,9 +120,14 @@ class WhatsNew(tk.Toplevel):
     def _header(self):
         P, c = self.P, self.c
         d, t = changelog.fmt_date(self.entry["date"])
-        self._title = c.create_text(self.W / 2, 160, text=self.T("wn_title", v=self.entry["v"]),
+        if self.since:
+            title = self.T("wn_title_from", a=self.since, v=self.entry["v"])
+            sub = self.T("wn_sub_many", n=len(self.entries))
+        else:
+            title, sub = self.T("wn_title", v=self.entry["v"]), self.T("wn_sub", d=d, t=t)
+        self._title = c.create_text(self.W / 2, 160, text=title,
                                     fill=P["bg"], font=(F, 19, "bold"))
-        self._sub = c.create_text(self.W / 2, 190, text=self.T("wn_sub", d=d, t=t),
+        self._sub = c.create_text(self.W / 2, 190, text=sub,
                                   fill=P["bg"], font=(F, 10))
 
     # --------------------------------------------------------- анімація --- #

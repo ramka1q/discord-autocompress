@@ -10,6 +10,16 @@ changelog.py — версія програми та список змін по �
 REPO_URL = "https://github.com/ramka1q/discord-autocompress"
 
 CHANGES = [
+    {"v": "3.0.1", "date": "2026-11-18 16:40", "items": [
+        {"icon": "🎯", "tab": None,
+         "uk": ("Кадр іде за повзунком", "На паузі картинка миттєво слідує за білим повзунком — без затримки, ще до ▶."),
+         "ru": ("Кадр идёт за ползунком", "На паузе картинка мгновенно следует за белым ползунком — без задержки, ещё до ▶."),
+         "en": ("Frame follows the playhead", "While paused, the picture follows the white playhead instantly, even before ▶.")},
+        {"icon": "✨", "tab": "whatsnew",
+         "uk": ("Усе нове одразу", "Після оновлення «Що нового» показує зміни всіх версій, які ти пропустив, а не тільки останньої. Довгі описи більше не вилазять."),
+         "ru": ("Всё новое сразу", "После обновления «Что нового» показывает изменения всех версий, которые ты пропустил, а не только последней. Длинные описания больше не вылазят."),
+         "en": ("Everything new at once", "After an update, “What's new” shows changes from every version you skipped, not just the last one. Long descriptions no longer overflow.")},
+    ]},
     {"v": "3.0", "date": "2026-11-18 15:30", "items": [
         {"icon": "⚡", "tab": None,
          "uk": ("Миттєвий ▶ у редакторі", "Новий вбудований програвач: старт, пауза і продовження — без затримки, як у CapCut. Зміни ефектів і звуку чути одразу, не зупиняючи відео."),
@@ -216,6 +226,16 @@ RELEASED = CHANGES[0]["date"]
 
 def release_url(v=None):
     return f"{REPO_URL}/releases/tag/v{v or VERSION}"
+
+
+def since(old_v, cap=12):
+    """Усі записи, новіші за old_v (від найновішого). old_v невідома — останні cap."""
+    out = []
+    for e in CHANGES:
+        if e["v"] == old_v:
+            return out or CHANGES[:1]
+        out.append(e)
+    return CHANGES[:min(cap, len(CHANGES))] if not old_v else out[:cap]
 
 
 def items(entry, lang):
