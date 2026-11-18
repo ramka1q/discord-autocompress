@@ -40,7 +40,7 @@ class SettingsApp:
     SIDE_W = 224
 
     def __init__(self, master, cfg, on_save, on_apply=None, on_close=None, on_restart=None,
-                 tab=None):
+                 tab=None, on_editor=None, on_gallery=None):
         """cfg — робоча копія конфіга; on_save(cfg) — зберегти; on_apply(cfg) —
         миттєво застосувати тему/мову (overlay+трей); on_close() — закрити;
         on_restart() — перезапустити всю програму (для кнопки після оновлення)."""
@@ -49,6 +49,7 @@ class SettingsApp:
         self.on_apply = on_apply
         self.on_close_cb = on_close
         self.on_restart = on_restart
+        self.on_editor, self.on_gallery = on_editor, on_gallery   # редактор / «Мої монтажі»
         self.lang = self.cfg.get("lang", "en")
         self.P = themes.palette(self.cfg.get("theme", "discord"))
         self._or_active = True
@@ -423,6 +424,15 @@ class SettingsApp:
         hero.bind("<Configure>", draw_hero)
         tid = self.v_target.trace_add("write", lambda *a: draw_hero())
         hero.bind("<Destroy>", lambda e: self.v_target.trace_remove("write", tid), add="+")
+
+        if self.on_editor or self.on_gallery:   # редактор просто з меню програми
+            ce = self._card(f, self.T("st_editor_title"), self.T("st_editor_sub"))
+            row = tk.Frame(ce, bg=ce.cget("bg"))
+            row.pack(fill="x", pady=(6, 2))
+            if self.on_editor:
+                self._btn(row, self.T("st_editor_open"), self.on_editor).pack(side="left", padx=(0, 8))
+            if self.on_gallery:
+                self._btn(row, self.T("st_editor_gallery"), self.on_gallery, primary=False).pack(side="left")
 
         c = self._card(f, self.T("limit_title"), self.T("st_limit_sub"))
         opts = [(20, "20 " + self.T("unit_mb")), (25, "25 " + self.T("unit_mb")),

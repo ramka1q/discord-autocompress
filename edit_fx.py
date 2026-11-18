@@ -15,7 +15,8 @@ import os
 PIECE_DEFAULTS = {"vol": 1.0, "fin": 0.0, "fout": 0.0, "flt": "none",
                   "br": 0.0, "ct": 1.0, "sat": 1.0, "rot": 0, "flip": False,
                   # ефекти звуку: тон (півтони), бас (дБ), реверб (0..1), ефект
-                  "pitch": 0.0, "bass": 0.0, "rev": 0.0, "aeff": "none"}
+                  "pitch": 0.0, "bass": 0.0, "rev": 0.0, "aeff": "none",
+                  "novideo": False}     # «видалити відео — лишити звук»
 AFX_KEYS = ("pitch", "bass", "rev", "aeff")
 AUDIO_EFFECTS = ["none", "phone", "underwater", "8d", "echo"]
 _AEFF = {

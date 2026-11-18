@@ -1662,14 +1662,24 @@ class Watcher:
                 pass
             self.settings_win = None
 
+        def _editor():
+            import library
+            library.pick_and_edit(self)
+
         kw = dict(on_save=self._on_settings_save, on_apply=self._on_settings_apply,
-                  on_close=_closed, on_restart=self.restart_app)
+                  on_close=_closed, on_restart=self.restart_app,
+                  on_editor=_editor, on_gallery=lambda: self.open_gallery())
         try:
             self.settings_win = settings_app.SettingsApp(self.root, self.cfg, tab=tab, **kw)
         except TypeError:
-            # меню старішої версії (не докачалось) — відкриваємо без вибору вкладки
-            dc_core.dlog("SettingsApp without tab= (older settings_app.py)")
-            self.settings_win = settings_app.SettingsApp(self.root, self.cfg, **kw)
+            # меню старішої версії (не докачалось) — відкриваємо без нових параметрів
+            dc_core.dlog("SettingsApp: older settings_app.py")
+            for k in ("on_editor", "on_gallery"):
+                kw.pop(k, None)
+            try:
+                self.settings_win = settings_app.SettingsApp(self.root, self.cfg, tab=tab, **kw)
+            except TypeError:
+                self.settings_win = settings_app.SettingsApp(self.root, self.cfg, **kw)
 
     def _on_settings_save(self, cfg):
         self.cfg = cfg

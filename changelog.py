@@ -10,6 +10,24 @@ changelog.py — версія програми та список змін по �
 REPO_URL = "https://github.com/ramka1q/discord-autocompress"
 
 CHANGES = [
+    {"v": "2.9", "date": "2026-11-18 12:22", "items": [
+        {"icon": "🗑", "tab": None,
+         "uk": ("Delete видаляє будь-що", "Вибраний кліп, фото, текст, накладку чи звук. На єдиному кліпі Delete прибирає відео і лишає звук."),
+         "ru": ("Delete удаляет что угодно", "Выбранный клип, фото, текст, наложение или звук. На единственном клипе Delete убирает видео и оставляет звук."),
+         "en": ("Delete removes anything", "The selected clip, photo, text, overlay or sound. On the only clip, Delete removes the video and keeps the sound.")},
+        {"icon": "✂", "tab": None,
+         "uk": ("Звук ріжеться і обрізається", "S — розрізати звук по повзунку, тягни краї звуку — обрізати, зайве — Delete. «Тільки звук» на кліпі прибирає картинку."),
+         "ru": ("Звук режется и обрезается", "S — разрезать звук по ползунку, тяни края звука — обрезать, лишнее — Delete. «Только звук» на клипе убирает картинку."),
+         "en": ("Cut and trim sounds", "S splits a sound at the playhead, drag its edges to trim, Delete removes a piece. “Audio only” on a clip removes the picture.")},
+        {"icon": "🎬", "tab": "general",
+         "uk": ("Редактор з меню програми", "Кнопки «Відкрити редактор» і «Мої монтажі» — прямо на першій вкладці меню."),
+         "ru": ("Редактор из меню программы", "Кнопки «Открыть редактор» и «Мои монтажи» — прямо на первой вкладке меню."),
+         "en": ("Editor from the app menu", "“Open editor” and “My edits” buttons right on the first tab of the menu.")},
+        {"icon": "🛠", "tab": None,
+         "uk": ("Назви не вилазять", "Підписи звуків, накладок і тексту на доріжці обрізаються під ширину блока."),
+         "ru": ("Названия не вылезают", "Подписи звуков, наложений и текста на дорожке обрезаются под ширину блока."),
+         "en": ("Labels fit", "Sound, overlay and text labels on the timeline are cut to the block width.")},
+    ]},
     {"v": "2.8", "date": "2026-11-18 12:00", "items": [
         {"icon": "⚡", "tab": "gpu",
          "uk": ("Усе в 2–5 разів швидше", "Відеокарта NVIDIA тепер і декодує, і зменшує кадр, і кодує — кадри не ганяються через процесор. MP3 удвічі швидше."),

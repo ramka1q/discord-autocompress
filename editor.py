@@ -893,7 +893,7 @@ class VideoEditor(tk.Toplevel):
                     if d <= 0:
                         skipped += 1
                         continue
-                    sn = {"path": p, "at": self._playhead_montage_t(), "dur": d,
+                    sn = {"path": p, "at": self._playhead_montage_t(), "dur": d, "s": 0.0, "fdur": d,
                           "vol": 1.0, "name": os.path.basename(p), "env": None,
                           "fin": 0.0, "fout": 0.0}
                     self.snds.append(sn)
@@ -1693,7 +1693,31 @@ class VideoEditor(tk.Toplevel):
     def _cut_here(self):
         if self.playing:
             self._pause()          # ріжемо рівно по кадру, який ВИДНО
+        if self._sel_snd is not None and self._sel_snd < len(self.snds):
+            return self._cut_snd(self._sel_snd, self._playhead_montage_t())
         self._cut_at(self.cur)
+
+    def _snd_cuttable(self, i, lt):
+        sn = self.snds[i]
+        return sn["at"] + 0.05 < lt < sn["at"] + sn["dur"] - 0.05
+
+    def _cut_snd(self, i, lt):
+        """Розрізає звук на два шматки по повзунку (зайвий потім — Delete)."""
+        if not (0 <= i < len(self.snds)) or not self._snd_cuttable(i, lt):
+            return
+        self._push_undo()
+        sn = self.snds[i]
+        off = lt - sn["at"]
+        right = dict(sn)
+        right["s"] = float(sn.get("s", 0.0)) + off
+        right["at"] = lt
+        right["dur"] = sn["dur"] - off
+        right.setdefault("fdur", float(sn.get("s", 0.0)) + sn["dur"])
+        sn["dur"] = off
+        sn.setdefault("fdur", right["fdur"])
+        self.snds.insert(i + 1, right)
+        self._select(("snd", i + 1))
+        self._redraw()
 
     def _cut_at(self, t):
         slot = self.sel
@@ -1757,6 +1781,18 @@ class VideoEditor(tk.Toplevel):
         p["mute"] = not p["mute"]
         self._redraw()
         self._replay_soon()
+
+    def _toggle_novideo(self):
+        """Прибрати картинку кліпа (лишається лише звук — у відео чорний кадр) або повернути."""
+        p = self._sel_piece()
+        if self._src(p)["kind"] != "video":
+            return
+        self._push_undo()
+        p["novideo"] = not fx.g(p, "novideo")
+        self._prop_changed()
+        self._redraw()
+        if self._insp:
+            self._insp.sync(force=True)
 
     def _gap_remove(self):
         self._push_undo()
@@ -1957,7 +1993,7 @@ class VideoEditor(tk.Toplevel):
         src = self._src(p)
         sc = src.get("scrub")
         if (not sc or src["kind"] != "video" or self.playing or self._is_transformed(p)
-                or not fx.look_default(p) or self._bgmode == "blur"):
+                or not fx.look_default(p) or self._bgmode == "blur" or fx.g(p, "novideo")):
             return False
         mt = self._playhead_montage_t()
         if self._active_texts(mt) or any(o["at"] <= mt <= o["at"] + o["e"] - o["s"] for o in self.ovls):
@@ -2415,7 +2451,12 @@ class VideoEditor(tk.Toplevel):
                 continue
             hv = self._hover == ("clip", slot)
             c.create_rectangle(cx1 + 1, y1, cx2 - 1, y2, fill=C_CLIP, outline="")
-            self._draw_clip_strip(c, cx1 + 1, cx2 - 1, p, y1)
+            if fx.g(p, "novideo"):          # «тільки звук»: замість кадрів — темна смуга
+                c.create_rectangle(cx1 + 1, y1, cx2 - 1, y2, fill="#16171b", outline="")
+                if cx2 - cx1 > 60:
+                    self._block_label(c, cx1, cx2, W, (y1 + y2) / 2 - 8, "🎵 " + E("ed_audio_only"), C_MUTED)
+            else:
+                self._draw_clip_strip(c, cx1 + 1, cx2 - 1, p, y1)
             # маска: кадр, що вилазить за кліп, накриваємо (наступний кліп ляже зверху)
             c.create_rectangle(cx2 - 1, y1, cx2 + 230, y2, fill=C_LANE, outline="")
             # хвиля звуку прямо НА вибраному кліпі (внизу, як у CapCut)
@@ -2676,7 +2717,7 @@ class VideoEditor(tk.Toplevel):
             self.info_lbl.config(text=E("ed_mic_fail"), fg=C_RED)
             return
         self._push_undo()
-        sn = {"path": r["path"], "at": r["at"], "dur": d, "vol": 1.0,
+        sn = {"path": r["path"], "at": r["at"], "dur": d, "s": 0.0, "fdur": d, "vol": 1.0,
               "name": f"🎙 {E('ed_voice')} {self._rec_n}", "env": None, "fin": 0.0, "fout": 0.0}
         self.snds.append(sn)
         self._gen_snd_env(sn)
@@ -2798,13 +2839,8 @@ class VideoEditor(tk.Toplevel):
                     h = max(0.5, a * (mid - y1 - 2))
                     c.create_line(xx, mid - h, xx, mid + h, fill="#2a0d45", width=1)
                     xx += 2
-            nm = src["name"]
-            if len(nm) > 22:
-                nm = nm[:20] + "…"
             mut = " 🔇" if o["mute"] else ""
-            if x2 - x1 > 40:
-                c.create_text(max(x1 + 8, LX + 8), (y1 + y2) / 2, anchor="w",
-                              text=f"🎭 {nm}{mut}", fill="#10121a", font=(FONT, 8, "bold"))
+            self._block_label(c, x1, x2, W, (y1 + y2) / 2, f"🎭 {src['name']}{mut}", "#10121a")
             if sel:
                 c.create_polygon(host._rr_pts(x1, y1, x2, y2, 6), smooth=True, fill="",
                                  outline=C_HANDLE, width=2)
@@ -2813,6 +2849,32 @@ class VideoEditor(tk.Toplevel):
         if not self.ovls and not (self._clip_drag and self._clip_drag["active"]):
             c.create_text((LX + W) / 2, (y1 + y2) / 2, text=E("ed_ovl_hint"),
                           fill="#6d717c", font=(FONT, 8))
+
+    def _fit_label(self, text, maxw, size=8):
+        """Текст, що влазить у maxw пікселів (обрізаний з «…»), або "" якщо місця нема."""
+        if maxw < 18:
+            return ""
+        font = (FONT, size, "bold")
+        try:
+            meas = lambda s: int(self.tk.call("font", "measure", font, s))
+            if meas(text) <= maxw:
+                return text
+            lo, hi = 0, len(text)
+            while lo < hi:                      # найдовший префікс, що влазить разом з «…»
+                mid = (lo + hi + 1) // 2
+                if meas(text[:mid] + "…") <= maxw:
+                    lo = mid
+                else:
+                    hi = mid - 1
+            return (text[:lo].rstrip() + "…") if lo > 0 else ""
+        except tk.TclError:
+            return text[:max(0, int(maxw // 7))]
+
+    def _block_label(self, c, x1, x2, W, y, text, color):
+        sx = max(x1 + 8, LX + 8)
+        lab = self._fit_label(text, min(x2, W) - sx - 6)
+        if lab:
+            c.create_text(sx, y, anchor="w", text=lab, fill=color, font=(FONT, 8, "bold"))
 
     def _draw_snd_lane(self, c, W, pps):
         self._snd_rects = []
@@ -2832,20 +2894,19 @@ class VideoEditor(tk.Toplevel):
                 mid = (y1 + y2) / 2.0
                 xx = max(float(LX), x1)
                 while xx < min(float(W), x2):
-                    a = self._env_at(env, (xx - x1) / max(1.0, x2 - x1) * sn["dur"])
+                    a = self._env_at(env, float(sn.get("s", 0.0))
+                                     + (xx - x1) / max(1.0, x2 - x1) * sn["dur"])
                     h = max(0.5, a * (mid - y1 - 2))
                     c.create_line(xx, mid - h, xx, mid + h, fill="#0d3d20", width=1)
                     xx += 2
-            nm = sn["name"]
-            if len(nm) > 20:
-                nm = nm[:18] + "…"
             v = "" if sn["vol"] == 1.0 else f" · {fx.vol_label(sn['vol'])}"
-            if x2 - x1 > 40:
-                c.create_text(max(x1 + 8, LX + 8), (y1 + y2) / 2, anchor="w",
-                              text=f"🎵 {nm}{v}", fill="#071a0e", font=(FONT, 8, "bold"))
+            self._block_label(c, x1, x2, W, (y1 + y2) / 2, f"🎵 {sn['name']}{v}", "#071a0e")
             if sel:
                 c.create_polygon(host._rr_pts(x1, y1, x2, y2, 6), smooth=True, fill="",
                                  outline=C_HANDLE, width=2)
+                if x2 - x1 > 22:            # ручки обрізки країв звуку
+                    c.create_rectangle(x1, y1 + 4, x1 + 5, y2 - 4, fill=C_HANDLE, outline="")
+                    c.create_rectangle(x2 - 5, y1 + 4, x2, y2 - 4, fill=C_HANDLE, outline="")
         if not self.snds:
             c.create_text((LX + W) / 2, (y1 + y2) / 2, text=E("ed_snd_hint"),
                           fill="#6d717c", font=(FONT, 8))
@@ -2908,10 +2969,14 @@ class VideoEditor(tk.Toplevel):
             eps = 0.04
             self.b_undo.set_state("normal" if self._undo and not self.busy else "disabled")
             self.b_redo.set_state("normal" if self._redo and not self.busy else "disabled")
-            self.b_split.set_state("normal" if p["s"] + eps < self.cur < p["e"] - eps
-                                   and not self.busy else "disabled")
+            if self._sel_snd is not None and self._sel_snd < len(self.snds):
+                can_cut = self._snd_cuttable(self._sel_snd, self._playhead_montage_t())
+            else:
+                can_cut = p["s"] + eps < self.cur < p["e"] - eps
+            self.b_split.set_state("normal" if can_cut and not self.busy else "disabled")
             can_del = (self.sel_ovl is not None or self._sel_snd is not None
-                       or self.sel_txt is not None or len(self.order) > 1)
+                       or self.sel_txt is not None or len(self.order) > 1
+                       or (src["kind"] == "video" and src["has_audio"] and not fx.g(p, "novideo")))
             self.b_del.set_state("normal" if can_del and not self.busy else "disabled")
             self.b_dup.set_state("disabled" if self.busy else "normal")
             vid = src["kind"] == "video"
@@ -3157,6 +3222,8 @@ class VideoEditor(tk.Toplevel):
             if src["has_audio"]:
                 m.add_command(label=(E("ed_unmute") if p["mute"] else E("ed_mute")) + "      M",
                               command=self._toggle_mute)
+                m.add_command(label=(E("ed_revideo") if fx.g(p, "novideo") else E("ed_novideo")),
+                              command=self._toggle_novideo)
         if self._is_transformed(p):
             m.add_command(label=E("ed_reset_tf"), command=self._tf_reset)
         if self._gapof(p) > 0.01:
@@ -3208,6 +3275,9 @@ class VideoEditor(tk.Toplevel):
         m = self._menu_new()
         m.add_command(label=f"🎵  {sn['name']}", state="disabled")
         m.add_command(label=E("ed_listen"), command=lambda: self._preview_sound(sn))
+        if self._snd_cuttable(i, self._playhead_montage_t()):
+            m.add_command(label=E("ed_cut_here") + "      S",
+                          command=lambda: self._cut_snd(i, self._playhead_montage_t()))
         vol = self._menu_new()
         for v in (0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 10.0, 100.0, 10 ** (888 / 20.0)):
             vol.add_command(label=(fx.vol_label(v) + ("  💀" if v > 100 else "")
@@ -3232,7 +3302,8 @@ class VideoEditor(tk.Toplevel):
     def _preview_sound(self, sn):
         try:
             subprocess.Popen(["ffplay", "-hide_banner", "-loglevel", "error", "-nodisp",
-                              "-autoexit", "-t", "10", "-i", sn["path"]],
+                              "-autoexit", "-ss", f"{float(sn.get('s', 0.0)):.3f}",
+                              "-t", f"{min(10.0, sn['dur']):.3f}", "-i", sn["path"]],
                              creationflags=dc_core.NO_WINDOW)
         except Exception:
             pass
@@ -3262,8 +3333,17 @@ class VideoEditor(tk.Toplevel):
             self._ovl_del()
         elif self._sel_snd is not None and self._sel_snd < len(self.snds):
             self._del_snd(self._sel_snd)
-        else:
+        elif len(self.order) > 1:
             self._remove()
+        else:
+            # єдиний кліп: видаляємо його КАРТИНКУ — звук лишається (Ctrl+Z поверне)
+            p = self._sel_piece()
+            src = self._src(p)
+            if src["kind"] == "video" and src["has_audio"] and not fx.g(p, "novideo"):
+                self._toggle_novideo()
+                self.info_lbl.config(text=E("ed_del_last_video"), fg=host.C_WARN)
+            else:
+                self.info_lbl.config(text=E("ed_del_last"), fg=C_RED)
 
     # ---------------- мишка на таймлайні: плейхед / ручки / кліпи / блоки ---- #
     def _tl_press(self, ev):
@@ -3563,7 +3643,13 @@ class VideoEditor(tk.Toplevel):
         self.sel_txt = None
         self.sel_ovl = None
         self.sel_txt = None
-        self._snd_drag = {"i": i, "lt0": self._lt_of(ev.x), "at0": self.snds[i]["at"],
+        sn = self.snds[i]
+        x1, x2 = next(((a, b) for k, a, b in self._snd_rects if k == i), (ev.x, ev.x))
+        edge = None
+        if x2 - x1 > 22:
+            edge = "L" if abs(ev.x - x1) <= 7 else ("R" if abs(ev.x - x2) <= 7 else None)
+        self._snd_drag = {"i": i, "lt0": self._lt_of(ev.x), "at0": sn["at"], "edge": edge,
+                          "s0": float(sn.get("s", 0.0)), "dur0": sn["dur"],
                           "pushed": False, "x0": ev.x, "pts": self._snap_targets(("snd", i))}
         self._mode = "snd"
         self._redraw()
@@ -3578,9 +3664,24 @@ class VideoEditor(tk.Toplevel):
             self._push_undo()
             d["pushed"] = True
         sn = self.snds[d["i"]]
-        at = max(0.0, d["at0"] + self._lt_of(x) - d["lt0"])
-        at = self._snap_span(at, sn["dur"], d["pts"])
-        sn["at"] = max(0.0, min(self._layout_total() - 0.1, at))
+        dl = self._lt_of(x) - d["lt0"]
+        fdur = float(sn.get("fdur") or (d["s0"] + d["dur0"]))
+        if d.get("edge") == "L":            # лівий край: зрізаємо початок звуку
+            at = self._snap(d["at0"] + dl, d["pts"])
+            ns = d["s0"] + (at - d["at0"])
+            ns = max(0.0, min(ns, d["s0"] + d["dur0"] - 0.1))
+            at = d["at0"] + (ns - d["s0"])
+            if at < 0:
+                ns -= at
+                at = 0.0
+            sn["s"], sn["at"], sn["dur"] = ns, at, d["dur0"] - (ns - d["s0"])
+        elif d.get("edge") == "R":          # правий край: зрізаємо кінець
+            end = self._snap(d["at0"] + d["dur0"] + dl, d["pts"])
+            sn["dur"] = max(0.1, min(fdur - d["s0"], end - d["at0"]))
+        else:
+            at = max(0.0, d["at0"] + dl)
+            at = self._snap_span(at, sn["dur"], d["pts"])
+            sn["at"] = max(0.0, min(self._layout_total() - 0.1, at))
         self._req_draw()
 
     # ---- горизонтальний скролбар під доріжками ----
@@ -3641,7 +3742,9 @@ class VideoEditor(tk.Toplevel):
         elif lane == "snd":
             i = self._snd_hit(x)
             if i is not None:
-                cur, hv = "fleur", ("snd", i)
+                x1, x2 = next(((a, b) for k, a, b in self._snd_rects if k == i), (x, x))
+                edge = i == self._sel_snd and x2 - x1 > 22 and (abs(x - x1) <= 7 or abs(x - x2) <= 7)
+                cur, hv = ("sb_h_double_arrow" if edge else "fleur"), ("snd", i)
         elif lane == "txt":
             h = self._txt_hit(x)
             if h:
@@ -3731,11 +3834,13 @@ class VideoEditor(tk.Toplevel):
             if b <= 0 or a >= rem or sn["vol"] <= 0.005 or not os.path.isfile(sn["path"]):
                 continue
             seek = max(0.0, -a)
+            sk = seek + float(sn.get("s", 0.0))         # точка початку шматка у файлі
             mv = f"amovie={fx.esc(sn['path'])}"
-            if seek > 0.01:
-                mv += f":seek_point={seek:.3f}"
+            if sk > 0.01:
+                mv += f":seek_point={sk:.3f}"
             ms = int(max(0.0, a) * 1000)
-            ach2 = ["asetpts=PTS-STARTPTS", "aresample=44100"] + fx.audio_chain(sn,
+            ach2 = ["asetpts=PTS-STARTPTS", f"atrim=0:{max(0.05, sn['dur'] - seek):.3f}",
+                    "asetpts=PTS-STARTPTS", "aresample=44100"] + fx.audio_chain(sn,
                 sn["vol"], fx.fade_win(-seek, sn["dur"] - seek, sn.get("fin", 0.0),
                                        sn.get("fout", 0.0), "a"))
             if ms:
@@ -3762,12 +3867,8 @@ class VideoEditor(tk.Toplevel):
             hv = self._hover == ("txt", i)
             c.create_polygon(host._rr_pts(x1, y1, x2, y2, 6), smooth=True,
                              fill=(ui.lighten(C_TXT, 0.12) if hv else C_TXT), outline="")
-            if x2 - x1 > 30:
-                first = (t["text"].split("\n")[0] or "…")
-                if len(first) > 28:
-                    first = first[:26] + "…"
-                c.create_text(max(x1 + 8, LX + 8), (y1 + y2) / 2, anchor="w",
-                              text=f"T  {first}", fill="#2a1a00", font=(FONT, 8, "bold"))
+            first = (t["text"].split("\n")[0] or "…")
+            self._block_label(c, x1, x2, W, (y1 + y2) / 2, f"T  {first}", "#2a1a00")
             if sel:
                 c.create_polygon(host._rr_pts(x1, y1, x2, y2, 6), smooth=True, fill="",
                                  outline=C_HANDLE, width=2)
@@ -3956,6 +4057,8 @@ class VideoEditor(tk.Toplevel):
 
     def _transform_vf(self, p, cw, ch):
         """Фільтр композиції кліпа на канвас cw×ch: поворот/колір + вписати + zoom/nx/ny."""
+        if fx.g(p, "novideo"):            # «тільки звук»: чорний кадр потрібного розміру
+            return f"scale={cw}:{ch},setsar=1,drawbox=c=black:t=fill"
         src = self.sources[p["src"]]
         iw, ih = fx.eff_dims(src["w"] or cw, src["h"] or ch, p)
         f0 = min(cw / float(iw), ch / float(ih))
@@ -4173,7 +4276,7 @@ class VideoEditor(tk.Toplevel):
             fc.append(f"{vin}{fx.drawtext(t, cw, ch, self._font, tf, a, b)}[vt{k}]")
             vin = f"[vt{k}]"
         for k, (sn, at) in enumerate(snds):
-            cmd += ["-i", sn["path"]]
+            cmd += ["-ss", f"{float(sn.get('s', 0.0)):.3f}", "-t", f"{sn['dur']:.3f}", "-i", sn["path"]]
             ms = int(at * 1000)
             af = ["aresample=44100"] + fx.audio_chain(sn,
                 sn["vol"], fx.fade_win(0.0, sn["dur"], sn.get("fin", 0.0), sn.get("fout", 0.0), "a"))
@@ -4570,7 +4673,7 @@ class VideoEditor(tk.Toplevel):
             if at >= total - 0.05 or sn["vol"] <= 0.005 or not os.path.isfile(sn["path"]):
                 continue
             any_audio = True
-            cmd += ["-i", sn["path"]]
+            cmd += ["-ss", f"{float(sn.get('s', 0.0)):.3f}", "-t", f"{sn['dur']:.3f}", "-i", sn["path"]]
             ms = int(at * 1000)
             af = ["aresample=44100"] + fx.audio_chain(sn,
                 sn["vol"], fx.fade_win(0.0, sn["dur"], sn.get("fin", 0.0), sn.get("fout", 0.0), "a"))

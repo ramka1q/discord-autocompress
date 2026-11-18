@@ -383,6 +383,9 @@ class Inspector(tk.Frame):
         if src["kind"] == "video" and src["has_audio"]:
             self._vol_slider(p, True, src)
         self._fades(p, dur)
+        if src["kind"] == "video":
+            self._row([("🎞 " + (E("ins_revideo") if fx.g(p, "novideo") else E("ins_novideo")),
+                        ed._toggle_novideo)])
         if src["kind"] == "video" and src["has_audio"]:
             self._afx(p, can_speed=True)
         if ed.sel > 0:

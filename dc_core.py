@@ -237,7 +237,7 @@ def have_ffmpeg() -> bool:
         return False
 
 
-BUILD = "2026-11-18-v2.8-gpu-voice-library"   # маркер версії коду — щоб у логах бачити, чи юзер на новому коді
+BUILD = "2026-11-18-v2.9-delete-anything"   # маркер версії коду — щоб у логах бачити, чи юзер на новому коді
 
 
 def probe_diag(path: str) -> str:
