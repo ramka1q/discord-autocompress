@@ -21,3 +21,6 @@ appicon.ico
 
 # author-only tooling — kept locally in dev-tools/, not published to GitHub
 dev-tools/
+
+# libmpv (докачується окремо, не в репозиторії)
+libmpv-2.dll

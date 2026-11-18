@@ -69,7 +69,7 @@ def _fetch(rel: str, base: str = None) -> bytes:
         return r.read()
 
 
-def _sync(quiet: bool = True, apply: bool = True):
+def _sync(quiet: bool = True, apply: bool = True, progress=None):
     """Ядро оновлення. Повертає (ok: bool, changed: int).
     ok=False -> збій (мережа/репо); changed = скільки файлів відрізняється/замінено.
     apply=False -> лише РАХУЄ різницю, нічого не пише (для питання «є оновлення?»)."""
@@ -87,7 +87,12 @@ def _sync(quiet: bool = True, apply: bool = True):
 
     files = manifest.get("files", [])
     fresh = {}
-    for rel in files:
+    for i, rel in enumerate(files):
+        if progress:
+            try:
+                progress(i * 100 // max(1, len(files)), rel)
+            except Exception:
+                pass
         try:
             fresh[rel] = _fetch(rel, base)
         except Exception as e:
@@ -125,9 +130,10 @@ def run(quiet: bool = True) -> bool:
     return ok
 
 
-def check(quiet: bool = True):
-    """Примусова перевірка з меню (ігнорує маркер .autoupdate). Повертає (ok, changed)."""
-    return _sync(quiet)
+def check(quiet: bool = True, progress=None):
+    """Примусова перевірка з меню (ігнорує маркер .autoupdate). Повертає (ok, changed).
+    progress(pct, name) — для смужки (0..100 по файлах)."""
+    return _sync(quiet, progress=progress)
 
 
 def available(quiet: bool = True):

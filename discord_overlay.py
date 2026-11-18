@@ -1496,6 +1496,13 @@ class Watcher:
             save_config(self.cfg)
         # енкодер відеокарти визначаємо у фоні, щоб перше стиснення не чекало
         threading.Thread(target=dc_core.hw_encoder, daemon=True).start()
+        # швидкий програвач редактора (libmpv): докачуємо одразу при запуску програми,
+        # щоб до відкриття редактора він уже був; не вийде — пробує далі сам, без кінця
+        try:
+            import mpvplayer
+            mpvplayer.ensure_downloaded()
+        except Exception as e:
+            dc_core.dlog(f"mpv preload: {e!r}")
         # самолікування: якщо при запуску частина файлів прийшла іншої версії —
         # докачуємо їх з ОДНОГО коміту (діє лише у встановленій копії з маркером .autoupdate)
         threading.Thread(target=self._self_heal, daemon=True).start()

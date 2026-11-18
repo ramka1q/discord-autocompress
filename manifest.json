@@ -17,6 +17,7 @@
     "edit_fx.py",
     "edit_inspector.py",
     "library.py",
+    "mpvplayer.py",
     "editor.py",
     "jokes.py",
     "stats.py",

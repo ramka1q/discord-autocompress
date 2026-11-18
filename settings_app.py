@@ -712,17 +712,78 @@ class SettingsApp:
             self._upd_done(*self._upd_state)
 
     def _check_updates(self):
+        """Оновити: смужка з відсотками (файли програми + швидкий програвач редактора),
+        потім програма сама перезапускається."""
         self.upd_btn.config(state="disabled")
         self.upd_status.config(text=self.T("checking"), fg=self.P["muted"])
+        try:
+            if getattr(self, "upd_bar", None):
+                self.upd_bar.destroy()
+        except tk.TclError:
+            pass
+        self._upd_barw = 440
+        self.upd_bar = tk.Canvas(self.upd_row.master, width=self._upd_barw, height=10,
+                                 bg=self.upd_row.master.cget("bg"), highlightthickness=0)
+        self.upd_bar.pack(anchor="w", pady=(12, 0), before=self.upd_row)
+        self._upd_bar_set(0)
+        try:
+            import mpvplayer
+            need_mpv = not mpvplayer.dll_path()
+        except Exception:
+            mpvplayer, need_mpv = None, False
+        files_part = 10 if need_mpv else 100     # програвач важить ~120 МБ — основна частина смужки
+
+        def ui_(fn):
+            try:
+                self.win.after(0, fn)
+            except (tk.TclError, RuntimeError):
+                pass
 
         def work():
             try:
                 import update
-                ok, changed = update.check()
+                ok, changed = update.check(progress=lambda p, rel: ui_(
+                    lambda: self._upd_show(self.T("upd_files"), p * files_part // 100)))
             except Exception:
                 ok, changed = False, 0
-            self.win.after(0, lambda: self._upd_done(ok, changed))
+            if not ok or not need_mpv:
+                return ui_(lambda: self._upd_done(ok, changed))
+            ui_(lambda: self._upd_show(self.T("upd_files"), files_part))
+
+            def st(state, pct, src):
+                if state == "running":
+                    ui_(lambda: self._upd_show(self.T("upd_player"), files_part + pct * (100 - files_part) // 100))
+                elif state == "retry":
+                    ui_(lambda: self._upd_show(self.T("upd_player_retry", src=src), None))
+                elif state == "wait":
+                    ui_(lambda: self._upd_show(self.T("upd_player_wait", s=pct), None))
+
+            mpvplayer.ensure_downloaded(on_status=st,
+                                        on_done=lambda _ok: ui_(lambda: self._upd_done(True, max(1, changed))))
         threading.Thread(target=work, daemon=True).start()
+
+    def _upd_bar_set(self, pct):
+        try:
+            b = self.upd_bar
+            b.delete("all")
+            ui.round_rect(b, 0, 0, self._upd_barw, 10, 5, fill=self.P["dark"], outline="")
+            xe = self._upd_barw * max(0, min(100, pct)) / 100
+            if xe > 6:
+                ui.grad_round_rect(b, 0, 0, xe, 10, 5, self.P["accent"], ui.accent2(self.P), step=1)
+        except (tk.TclError, AttributeError):
+            pass
+
+    def _upd_show(self, txt, pct):
+        """pct=None — лише текст (смужка лишається, де була)."""
+        try:
+            if pct is None:
+                self.upd_status.config(text=txt, fg=self.P["warn"])
+            else:
+                self._upd_pct = pct
+                self.upd_status.config(text=f"{txt}  {int(pct)}%", fg=self.P["text"])
+                self._upd_bar_set(pct)
+        except (tk.TclError, AttributeError):
+            pass
 
     def _upd_done(self, ok, changed):
         self._upd_state = (ok, changed)
@@ -731,13 +792,17 @@ class SettingsApp:
             if not ok:
                 self.upd_status.config(text=self.T("update_fail"), fg=self.P["red"])
             elif changed > 0:
-                self.upd_status.config(text=self.T("updated_n", n=changed), fg=self.P["green"])
-                # знайшли оновлення -> пропонуємо перезапуск (щоб застосувати свіжий код)
-                if self.on_restart and not getattr(self, "_restart_btn", None):
-                    self._restart_btn = self._btn(self.upd_row, self.T("restart_now"),
-                                                  self._do_restart, kind="success")
-                    self._restart_btn.pack(side="left", padx=10)
+                self._upd_bar_set(100)
+                if self.on_restart:
+                    # усе скачано (смужка 100%) -> сам перезапускаю, щоб запрацювала нова версія
+                    self.upd_status.config(text=self.T("upd_restarting"), fg=self.P["green"])
+                    self.upd_btn.config(state="disabled")
+                    self._upd_state = None
+                    self.win.after(900, self._do_restart)
+                else:
+                    self.upd_status.config(text=self.T("updated_n", n=changed), fg=self.P["green"])
             else:
+                self._upd_bar_set(100)
                 self.upd_status.config(text=self.T("up_to_date"), fg=self.P["green"])
         except tk.TclError:
             pass

@@ -502,6 +502,19 @@ class VideoEditor(tk.Toplevel):
         self._playhead_x = 0
         self._hwdec_try = []         # які апаратні декодери пробувати (ставить _single_pass)
         self._rec = None             # запис голосу: {"proc","path","at","t0"} або None
+        # вбудований програвач mpv: файл тримається відкритим -> ▶/пауза миттєві
+        self._mpv = None
+        self._mpv_failed = False     # не вдалося створити — працюємо через ffplay
+        self._mpv_bad = False        # mpv не прийняв граф у цій сесії — теж ffplay
+        self._mpv_mode = False       # зараз грає саме mpv
+        self._mpv_audio_only = False
+        self._mpv_started = False
+        self._mpv_key = None         # що підготовлено (на паузі) для миттєвого ▶
+        self._mpv_resume = None      # пауза посеред програвання -> продовжити миттєво
+        self._mpv_warmed = False
+        self._mpv_win = None
+        self._prewarm_after = None
+        self._edit_gen = 0           # лічильник змін — підготовлене застаріває
         self._rec_n = 0
         self._ffplay_pos = None      # РЕАЛЬНА позиція ffplay (парситься з його -stats)
         self._stat_offset = None
@@ -560,6 +573,7 @@ class VideoEditor(tk.Toplevel):
         self._gen_visuals(si)        # кіно-стрічка + хвиля для першого джерела
         self.after(400, self._enable_dnd)   # перетягування файлів (після мапінгу вікна)
         self.after(50, self._draw_empty_hint)
+        self.after(300, self._mpv_boot)       # швидкий програвач (або фонове докачування)
         self._arm_resize()                  # велике вікно одразу + адаптивний розмір
 
     # ------------------------------------------------------------ джерела -- #
@@ -827,6 +841,13 @@ class VideoEditor(tk.Toplevel):
                 _u32.MoveWindow(self._embedded, self.VPAD, self.VPAD, self.VW, self.VH, True)
             except Exception:
                 pass
+        if self._mpv_win:               # і вікно mpv (розмір; позицію не чіпаємо)
+            try:
+                self.video.itemconfigure(self._mpv_win, width=self.VW, height=self.VH)
+                if self._mpv_mode and not self._mpv_audio_only:
+                    self.video.coords(self._mpv_win, self.VPAD, self.VPAD)
+            except tk.TclError:
+                pass
         self.video.delete("frame")
         self._qcache.clear()
         self._show_poster(self.cur, fast=True)
@@ -1064,6 +1085,7 @@ class VideoEditor(tk.Toplevel):
             try: self.after_cancel(self._prev_after)
             except Exception: pass
         self._prev_after = self.after(25 if fast else 110, self._run_poster)
+        self._mpv_schedule_prewarm()
 
     def _ovl_vf(self, o, cw, ch, alpha=1.0):
         """Ланцюжок накладки: поворот/колір -> масштаб -> прозорість. Повертає (vf, x, y)."""
@@ -1417,6 +1439,7 @@ class VideoEditor(tk.Toplevel):
 
     def _prop_changed(self):
         """Змінили властивість у правій панелі -> прев'ю + доріжка (+ відтворення наживо)."""
+        self._edit_gen += 1
         self._show_poster(self.cur)
         self._req_draw()
         self._replay_soon()
@@ -1545,6 +1568,8 @@ class VideoEditor(tk.Toplevel):
     def _toggle_play(self):
         if self.playing:
             self._pause()
+        elif self._mpv_try_resume():
+            return
         else:
             p = self._sel_piece()
             if self.sel == len(self.order) - 1 and self.cur >= p["e"] - 0.06:
@@ -1571,6 +1596,12 @@ class VideoEditor(tk.Toplevel):
         start = max(0.0, min(self._play_src_dur, start))
         self._play_start = start
         self._play_end = min(piece["e"], start + dur) if dur else piece["e"]
+        if self._mpv is not None and not self._mpv_bad and self._mpv_start(piece, start):
+            self.playing = True
+            self._play_t0 = self._play_launch_t = time.monotonic()
+            self._set_play_icon(True)
+            self._play_progress()
+            return
         if src["kind"] == "image":
             # картинка: «граємо» по годиннику, без ffplay; додані звуки — окремим програвачем
             self.playing = True
@@ -1686,6 +1717,27 @@ class VideoEditor(tk.Toplevel):
             return
         if self._play_kind == "image":
             pos = self._play_start + (time.monotonic() - self._play_t0)
+        elif self._mpv_mode:
+            t = self._mpv.position() if self._mpv else None
+            since = time.monotonic() - self._play_launch_t
+            if t is None or t < 0:
+                if since > 2.0:                  # mpv не запустив (граф не прийнято) -> ffplay
+                    dc_core.dlog("MPV: no playback -> ffplay for this session")
+                    self._mpv_bad = True
+                    self._mpv_mode = False
+                    self._mpv_hide()
+                    return self._launch(self._play_start, self._play_end - self._play_start)
+                pos = self._play_start
+            else:   # mpv: time-pos = старт + час на виході -> переводимо в час файла (швидкість)
+                pos = self._play_start + (t - self._play_start) * self._play_sp
+                if pos < self._play_start - 0.05 or pos > self._play_end + 1.0:
+                    pos = self._play_start           # ще не встиг перейти на нове місце
+                elif pos > self._play_start + 0.05:
+                    self._mpv_started = True         # реально поїхало — тепер «кінець файла» правдивий
+            if (self._mpv_started and since > 0.3 and self._mpv
+                    and self._mpv.get_flag("eof-reached")):
+                dc_core.dlog(f"MPV eof at pos={pos:.2f}")
+                return self._advance_or_stop()
         else:
             p = getattr(self, "_ffplay", None)
             if p is not None and p.poll() is not None and self._play_fx \
@@ -1700,6 +1752,8 @@ class VideoEditor(tk.Toplevel):
             else:
                 pos = self._play_start + (time.monotonic() - self._play_t0) * self._play_sp
         if pos >= self._play_end - 0.02:
+            if self._mpv_mode:
+                dc_core.dlog(f"MPV end of clip pos={pos:.2f} end={self._play_end:.2f}")
             return self._advance_or_stop()
         self.cur = min(self._play_src_dur, pos)
         self._follow_playhead()
@@ -1720,6 +1774,18 @@ class VideoEditor(tk.Toplevel):
     def _pause(self):
         if self.playing:
             dc_core.dlog(f"PAUSE cur={self.cur:.3f} ffplay_pos={self._ffplay_pos}")
+        if self._mpv_mode and self._mpv is not None:
+            try:
+                self._mpv.pause()
+                t = self._mpv.position()
+            except Exception:
+                t = None
+            if self.playing and self._play_kind != "image" and t is not None:
+                self.cur = min(self._play_end, self._play_start + (t - self._play_start) * self._play_sp)
+                self._mpv_resume = (self.sel, self.cur, self._edit_gen, self._play_start, self._play_end,
+                                    self._play_kind, bool(self._rec), self._play_sp)
+            self._mpv_mode = False
+            self._mpv_hide()
         self.playing = False
         p = getattr(self, "_ffplay", None)
         if p is not None and p.poll() is None:
@@ -1875,6 +1941,7 @@ class VideoEditor(tk.Toplevel):
                 [dict(t) for t in self.texts], (self._ratio, self._bgmode))
 
     def _push_undo(self):
+        self._edit_gen += 1
         self._undo.append(self._snapshot())
         if len(self._undo) > 80:
             self._undo.pop(0)
@@ -2832,6 +2899,7 @@ class VideoEditor(tk.Toplevel):
 
     def _apply_canvas(self):
         """Розмір кадру експорту з формату: коротка сторона = коротка сторона оригіналу (≤1080)."""
+        self._edit_gen += 1
         w0, h0 = self._w0, self._h0
         if self._ratio == "orig":
             cw, ch = w0, h0
@@ -3912,6 +3980,240 @@ class VideoEditor(tk.Toplevel):
             aparts[0] = aparts[0][:-4] + "[out]"
         return vf, ";".join(aparts), True
 
+    # ------------------ вбудований програвач mpv: миттєві ▶ / пауза ------------ #
+    def _mpv_boot(self):
+        if self._closed:
+            return
+        try:
+            import mpvplayer
+        except Exception:
+            return
+        if mpvplayer.available():
+            self._mpv_init()
+            return
+
+        def status(state, pct, src):
+            self._ui(lambda: self._mpv_status(state, pct, src))
+
+        def done(ok):
+            self._ui(lambda: (self._mpv_status("done" if ok else "failed", 100, ""),
+                              self._mpv_init() if ok else None))
+        mpvplayer.ensure_downloaded(on_done=done, on_status=status)
+
+    def _mpv_status(self, state, pct, src):
+        if self.busy:
+            return
+        txt = {"running": E("mpv_dl", p=pct, src=src), "retry": E("mpv_retry", src=src),
+               "wait": E("mpv_wait", s=pct), "done": E("mpv_ready")}.get(state, "")
+        try:
+            self.joke_lbl.config(text=txt)
+            if state == "done":
+                self.after(5000, lambda: None if self.busy else self.joke_lbl.config(text=E("ed_status_hint")))
+        except tk.TclError:
+            pass
+
+    def _mpv_init(self):
+        if self._mpv is not None or self._mpv_failed or self._closed:
+            return self._mpv
+        try:
+            import mpvplayer
+            if not mpvplayer.available():
+                return None
+            self._mpv_host = tk.Frame(self.video, bg="black", highlightthickness=0, bd=0)
+            # вікно mpv НЕ ховаємо (сховане -> mpv заново готує відеовихід, ~0.3 с), а відсуваємо
+            # за межі канваса — воно лишається «живим», і показ миттєвий
+            self._mpv_win = self.video.create_window(-20000, -20000, anchor="nw", window=self._mpv_host,
+                                                     width=self.VW, height=self.VH)
+            self.update_idletasks()
+            m = mpvplayer.Player(self._mpv_host.winfo_id())
+            # звук тримаємо відкритим і на паузі -> старт без «прокидання» звукової карти
+            for k, v in (("audio-stream-silence", "yes"), ("audio-buffer", "0.05"), ("audio-wait-open", "0")):
+                m.set(k, v)
+            self._mpv = m
+            dc_core.dlog("MPV ready")
+            self._mpv_prewarm()
+        except Exception as e:
+            dc_core.dlog("MPV init fail " + repr(e))
+            self._mpv = None
+            self._mpv_failed = True
+        return self._mpv
+
+    def _mpv_show(self):
+        if self._mpv_win:
+            try:
+                self.video.coords(self._mpv_win, self.VPAD, self.VPAD)
+            except tk.TclError:
+                pass
+
+    def _mpv_hide(self):
+        if self._mpv_win:
+            try:
+                self.video.coords(self._mpv_win, -20000, -20000)
+            except tk.TclError:
+                pass
+
+    def _mpv_spec(self, piece, start):
+        """(файл, граф для mpv, лише_звук) або None, якщо грати mpv нічого не треба."""
+        src = self._src(piece)
+        sp = piece["speed"]
+        m0 = self._clip_layout_start(self.sel) + (start - piece["s"]) / sp
+        rem = max(0.1, (piece["e"] - start) / sp)
+
+        def sounds(base):
+            parts, labs = self._snd_play_parts(m0, rem)
+            if not labs:
+                return None
+            return ";".join([base] + parts + [f"[a0]{''.join(labs)}amix=inputs={len(labs) + 1}:"
+                                              f"duration=first:normalize=0[ao]"])
+        if src["kind"] == "image":         # картинку показує постер; mpv грає лише додані звуки
+            a = sounds(f"[aid1]atrim=0:{rem:.3f},asetpts=PTS-STARTPTS[a0]")
+            return ("av://lavfi:anullsrc=r=44100:cl=stereo", a, True) if a else None
+        vf, af, a_ok = self._play_graph(piece, start)
+        lav = vf.replace("[in]", "[vid1]", 1).replace("[out]", "[vo]")
+        if a_ok and af:
+            lav += ";" + af.replace("[in]", "[aid1]", 1).replace("[out]", "[ao]")
+        else:                               # відео без звуку: додані звуки з тиші
+            a = sounds(f"anullsrc=r=44100:cl=stereo,atrim=0:{rem:.3f}[a0]")
+            if a:
+                lav += ";" + a
+        # mpv перемотує до ключового кадру ПЕРЕД start і сам відкидає кадри до start (точне
+        # перемотування) — тож: обрізаємо точно по start на вході (за справжніми мітками часу),
+        # а на виході повертаємо мітки «start + скільки зіграно». Без цього граф нумерував кадри
+        # з 0, mpv вважав їх «раніше start», викидав усі — і зупинявся (кінець файлу).
+        S = f"{start:.6f}"
+        lav = lav.replace("[vid1]", f"[vid1]trim=start={S},", 1).replace("[aid1]", f"[aid1]atrim=start={S},", 1)
+        lav = lav.replace("[vo]", f",setpts=PTS+{S}/TB[vo]", 1).replace("[ao]", f",asetpts=PTS+{S}/TB[ao]", 1)
+        return (src["path"], lav, False)
+
+    def _mpv_start(self, piece, start):
+        m = self._mpv
+        try:
+            spec = self._mpv_spec(piece, start)
+        except Exception as e:
+            dc_core.dlog("MPV spec fail " + repr(e))
+            return False
+        if spec is None:
+            return False
+        path, lav, audio_only = spec
+        key = (self.sel, round(start, 3), self._edit_gen, bool(self._rec), lav)
+        try:
+            if self._mpv_key == key:         # уже підготовлено на паузі -> миттєво
+                m.set("mute", bool(self._rec))
+                m.play()
+                dc_core.dlog(f"MPV start: prepared (instant) at {start:.2f}")
+            else:
+                dc_core.dlog(f"MPV start: load at {start:.2f} (prepared={self._mpv_key and self._mpv_key[:3]})")
+                m.load(path, start=0.0 if audio_only else start, lavfi=lav, paused=False,
+                       mute=bool(self._rec))
+        except Exception as e:
+            dc_core.dlog("MPV start fail " + repr(e))
+            return False
+        self._mpv_key = None
+        self._mpv_resume = None
+        self._mpv_mode = True
+        self._mpv_started = False
+        self._mpv_audio_only = audio_only
+        self._ffplay = None
+        self._play_fx = True
+        self._play_sp = piece["speed"]
+        if not audio_only:
+            self._mpv_show()
+        return True
+
+    def _mpv_try_resume(self):
+        """▶ після паузи без змін: просто знімаємо паузу — 0 мс."""
+        r = self._mpv_resume
+        if (not r or self._mpv is None or self._mpv_bad or r[0] != self.sel or abs(r[1] - self.cur) > 1e-3
+                or r[2] != self._edit_gen or r[6] != bool(self._rec)):
+            return False
+        self._mpv_resume = None
+        self._play_start, self._play_end, self._play_kind, self._play_sp = r[3], r[4], r[5], r[7]
+        self._tf_on = False
+        self.video.delete("tf")
+        try:
+            self._mpv.set("mute", bool(self._rec))
+            self._mpv.play()
+        except Exception:
+            return False
+        self._mpv_mode = True
+        self._mpv_started = True
+        self._mpv_audio_only = False
+        self._mpv_show()
+        self.playing = True
+        self._play_fx = True
+        self._play_t0 = self._play_launch_t = time.monotonic()
+        self._set_play_icon(True)
+        self._play_progress()
+        return True
+
+    def _mpv_schedule_prewarm(self):
+        if self._mpv is None or self.playing or self._closed:
+            return
+        if self._prewarm_after:
+            try:
+                self.after_cancel(self._prewarm_after)
+            except Exception:
+                pass
+        self._prewarm_after = self.after(220, self._mpv_prewarm)
+
+    def _mpv_prewarm(self):
+        """На паузі заздалегідь відкриваємо поточне місце -> наступний ▶ миттєвий."""
+        self._prewarm_after = None
+        m = self._mpv
+        if m is None or self.playing or self.busy or self._closed or self._mpv_bad or not self.order:
+            return
+        r = self._mpv_resume
+        if r and r[0] == self.sel and abs(r[1] - self.cur) < 1e-3 and r[2] == self._edit_gen:
+            return                           # і так стоїть тут на паузі
+        p = self._sel_piece()
+        start = min(max(p["s"], self.cur), p["e"] - 0.05)
+        try:
+            spec = self._mpv_spec(p, start)
+        except Exception:
+            return
+        if spec is None:
+            return
+        path, lav, audio_only = spec
+        key = (self.sel, round(start, 3), self._edit_gen, bool(self._rec), lav)
+        if key == self._mpv_key:
+            return
+        try:
+            m.load(path, start=0.0 if audio_only else start, lavfi=lav, paused=True, mute=bool(self._rec))
+        except Exception:
+            return
+        dc_core.dlog(f"MPV prepare at {start:.2f} gen={self._edit_gen}")
+        self._mpv_key = key
+        self._mpv_resume = None
+        if not self._mpv_warmed:
+            self.after(400, self._mpv_warm)
+
+    def _mpv_warm(self):
+        """Один раз «будимо» звукову карту беззвучно — інакше найперший ▶ ~0.3 с."""
+        if self._mpv_warmed or self._mpv is None or self.playing or self._closed:
+            return
+        self._mpv_warmed = True
+        m = self._mpv
+        try:
+            m.set("mute", True)
+            m.play()
+        except Exception:
+            return
+
+        def back():
+            if self._closed or self._mpv is None:
+                return
+            try:
+                if self.playing:              # юзер уже натиснув ▶ — просто вмикаємо звук
+                    m.set("mute", bool(self._rec))
+                    return
+                m.pause()
+                m.set("mute", False)
+            except Exception:
+                pass
+            self._mpv_key = None
+            self._mpv_prewarm()
+        self.after(250, back)
+
     def _snd_play_parts(self, m0, rem):
         """Додані звуки для відтворення з монтажного часу m0 на rem секунд: (частини графа, мітки)."""
         parts, labs = [], []
@@ -4981,6 +5283,12 @@ class VideoEditor(tk.Toplevel):
         self._closed = True
         self._cancel_flag = True       # експорт, якщо йде, зупиняється (ffmpeg гаситься)
         self._stop_aux_audio()         # «Послухати» / звуки — не грають після закриття
+        if self._mpv is not None:      # вбудований програвач — закриваємо
+            try:
+                self._mpv.close()
+            except Exception:
+                pass
+            self._mpv = None
         if self._rec:                  # запис голосу — зупиняємо ffmpeg мікрофона
             try:
                 self._rec["proc"].kill()
