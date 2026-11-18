@@ -97,6 +97,7 @@ CF_HDROP, GHND = 15, 0x0042
 WH_KEYBOARD_LL = 13
 WM_KEYDOWN, WM_SYSKEYDOWN = 0x0100, 0x0104
 VK_CONTROL, VK_V = 0x11, 0x56
+VK_MENU, VK_E = 0x12, 0x45          # Alt, E — Ctrl+Alt+E відкриває «Мої монтажі»
 KEYEVENTF_KEYUP = 0x0002
 LLKHF_INJECTED = 0x10
 
@@ -1549,6 +1550,21 @@ class Watcher:
     def _tray_texts(self):
         return (i18n.tr(LANG, "tray_open"), i18n.tr(LANG, "tray_quit"), i18n.tr(LANG, "tray_tip"))
 
+    def open_gallery(self, hwnd=None):
+        """«Мої монтажі» (Ctrl+Alt+E / трей). Якщо гарячу клавішу натиснули в Discord —
+        клік по відео одразу вставить його туди."""
+        try:
+            title = ""
+            if hwnd:
+                n = user32.GetWindowTextLengthW(hwnd)
+                buf = ctypes.create_unicode_buffer(n + 1)
+                user32.GetWindowTextW(hwnd, buf, n + 1)
+                title = buf.value
+            import library
+            library.open_gallery(self, hwnd if "Discord" in title else None)
+        except Exception as e:
+            dc_core.dlog("gallery EXCEPTION " + repr(e))
+
     def _start_tray(self):
         try:
             import tray
@@ -1556,7 +1572,9 @@ class Watcher:
                 on_open=lambda: self.root.after(0, self.open_settings),
                 on_balloon=lambda: self.root.after(0, lambda: self.open_settings(tab="stats")),
                 on_quit=lambda: self.root.after(0, self.quit_app),
-                texts=self._tray_texts())
+                texts=self._tray_texts(),
+                extra=[(lambda: i18n.tr(LANG, "tray_gallery"),
+                        lambda: self.root.after(0, self.open_gallery))])
             self.tray.start()
         except Exception:
             self.tray = None
@@ -1719,6 +1737,11 @@ class Watcher:
         try:
             if nCode == 0 and wParam in (WM_KEYDOWN, WM_SYSKEYDOWN):
                 kb = ctypes.cast(lParam, ctypes.POINTER(KBDLLHOOKSTRUCT)).contents
+                if (kb.vkCode == VK_E and not (kb.flags & LLKHF_INJECTED)
+                        and (user32.GetAsyncKeyState(VK_CONTROL) & 0x8000)
+                        and (user32.GetAsyncKeyState(VK_MENU) & 0x8000)):
+                    self.q.put((user32.GetForegroundWindow(), "", 0, "gallery", "gallery"))
+                    return 1          # Ctrl+Alt+E -> «Мої монтажі», далі клавішу не пускаємо
                 if (kb.vkCode == VK_V and not (kb.flags & LLKHF_INJECTED)
                         and (user32.GetAsyncKeyState(VK_CONTROL) & 0x8000)):
                     now = kernel32.GetTickCount()
@@ -1751,7 +1774,9 @@ class Watcher:
                 hwnd, path, size, kind, mode = self.q.get_nowait()
             except queue.Empty:
                 break
-            if mode == "small":
+            if mode == "gallery":
+                self.open_gallery(hwnd)
+            elif mode == "small":
                 self._show_pill(hwnd, path, size)           # ненав'язливий значок-пропозиція
             elif not self.overlay_open:
                 self.overlay_open = True

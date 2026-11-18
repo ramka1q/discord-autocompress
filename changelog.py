@@ -10,6 +10,20 @@ changelog.py — версія програми та список змін по �
 REPO_URL = "https://github.com/ramka1q/discord-autocompress"
 
 CHANGES = [
+    {"v": "2.8", "date": "2026-11-18 12:00", "items": [
+        {"icon": "⚡", "tab": "gpu",
+         "uk": ("Усе в 2–5 разів швидше", "Відеокарта NVIDIA тепер і декодує, і зменшує кадр, і кодує — кадри не ганяються через процесор. MP3 удвічі швидше."),
+         "ru": ("Всё в 2–5 раз быстрее", "Видеокарта NVIDIA теперь и декодирует, и уменьшает кадр, и кодирует — кадры не гоняются через процессор. MP3 вдвое быстрее."),
+         "en": ("Everything 2–5× faster", "The NVIDIA card now decodes, scales and encodes — frames never go through the CPU. MP3 is 2× faster.")},
+        {"icon": "🎙", "tab": None,
+         "uk": ("Запис голосу", "Кнопка 🎙 (або R) у редакторі: відео грає, ти говориш — запис лягає на доріжку з того ж місця. ПКМ — вибрати мікрофон."),
+         "ru": ("Запись голоса", "Кнопка 🎙 (или R) в редакторе: видео играет, ты говоришь — запись ложится на дорожку с того же места. ПКМ — выбрать микрофон."),
+         "en": ("Voice recording", "The 🎙 button (or R) in the editor: the video plays while you talk, the recording lands on the track. Right-click to pick a mic.")},
+        {"icon": "🎬", "tab": None,
+         "uk": ("Мої монтажі — Ctrl+Alt+E", "Усе збережене з редактора лежить у «Відео\Discord Auto-Compress». Ctrl+Alt+E — галерея: клік вставляє в Discord, ✂ — змонтувати знову, «Новий монтаж» — редактор для будь-якого відео."),
+         "ru": ("Мои монтажи — Ctrl+Alt+E", "Всё сохранённое из редактора лежит в «Видео\Discord Auto-Compress». Ctrl+Alt+E — галерея: клик вставляет в Discord, ✂ — смонтировать снова, «Новый монтаж» — редактор для любого видео."),
+         "en": ("My edits — Ctrl+Alt+E", "Everything you save from the editor goes to “Videos\Discord Auto-Compress”. Ctrl+Alt+E opens the gallery: click to paste into Discord, ✂ to edit again, “New edit” for any video.")},
+    ]},
     {"v": "2.7.2", "date": "2026-11-17 11:19", "items": [
         {"icon": "🛠", "tab": None,
          "uk": ("Довгі відео в малий розмір", "Серія на 30 хв тепер влазить і в 16 МБ: звук сам стає легшим (моно), кадр — менше. «Готово» лише тоді, коли файл справді під лімітом."),

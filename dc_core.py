@@ -140,6 +140,30 @@ def benchmark(progress_cb=None, should_cancel=None):
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+# ---- ДЕКОД + МАСШТАБ НА ВІДЕОКАРТІ (NVIDIA): кадри не копіюються в оперативну пам'ять ----
+# Заміри (GTX 1060, HEVC 720p, 60 с): як було ~20 с, усе на відеокарті — 2.9 с.
+GPU_IN = ["-hwaccel", "cuda", "-hwaccel_output_format", "cuda"]
+BG = NO_WINDOW | 0x00004000          # фонові ffmpeg — низький пріоритет (BELOW_NORMAL)
+_GPUDEC = {}
+
+
+def gpu_decode_ok(path) -> bool:
+    """Чи цей файл декодується і масштабується прямо на відеокарті NVIDIA (тест 0.5 с, кеш)."""
+    if path in _GPUDEC:
+        return _GPUDEC[path]
+    ok = False
+    try:
+        r = subprocess.run(["ffmpeg", "-v", "error", *GPU_IN, "-t", "0.5", "-i", path, "-an",
+                            "-vf", "scale_cuda=64:-2:format=nv12", "-f", "null", "-"],
+                           capture_output=True, creationflags=NO_WINDOW, timeout=25)
+        ok = r.returncode == 0 and not r.stderr.strip()
+    except Exception:
+        ok = False
+    _GPUDEC[path] = ok
+    dlog(f"GPU decode {os.path.basename(path)}: {'yes' if ok else 'no'}")
+    return ok
+
+
 def _probe_hw(enc) -> bool:
     try:
         return subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi",
@@ -213,7 +237,7 @@ def have_ffmpeg() -> bool:
         return False
 
 
-BUILD = "2026-11-17-v2.7.2-low-bitrate"   # маркер версії коду — щоб у логах бачити, чи юзер на новому коді
+BUILD = "2026-11-18-v2.8-gpu-voice-library"   # маркер версії коду — щоб у логах бачити, чи юзер на новому коді
 
 
 def probe_diag(path: str) -> str:
@@ -402,13 +426,31 @@ def compress(path, out_path, target_mb, scale, audio_kbps, info,
     if hw:
         kb = v_kbps
         final_mb = 0.0
+        # NVIDIA: декод + масштаб теж на відеокарті (у 5–7 разів швидше, процесор вільний)
+        gpu = hw == "h264_nvenc" and gpu_decode_ok(path)
         for attempt in range(4):
-            rc = _run_pass(["ffmpeg", "-y", *inss, "-i", path, *outdur, *cfr, *vf,
-                            *_hw_args(hw, kb), "-pix_fmt", "yuv420p", *audio_args,
-                            "-movflags", "+faststart", out_path],
-                           duration, 0.0, 100.0, progress_cb, should_cancel)
+            if gpu:
+                gvf = ((f"scale_cuda={scale}:-2:format=nv12" if portrait
+                        else f"scale_cuda=-2:{scale}:format=nv12") if scale else "scale_cuda=format=nv12")
+                cmd = ["ffmpeg", "-y", *GPU_IN, *inss, "-i", path, *outdur, *cfr, "-vf", gvf,
+                       *_hw_args(hw, kb), *audio_args, "-movflags", "+faststart", out_path]
+            else:
+                cmd = ["ffmpeg", "-y", *inss, "-i", path, *outdur, *cfr, *vf,
+                       *_hw_args(hw, kb), "-pix_fmt", "yuv420p", *audio_args,
+                       "-movflags", "+faststart", out_path]
+            rc = _run_pass(cmd, duration, 0.0, 100.0, progress_cb, should_cancel)
             if should_cancel and should_cancel():
                 return False, cancelled_msg(), 0.0
+            if (rc != 0 or not os.path.exists(out_path)) and gpu:
+                dlog(f"GPU pipeline failed rc={rc} -> CPU decode + {hw}")
+                gpu = False
+                _GPUDEC[path] = False
+                rc = _run_pass(["ffmpeg", "-y", *inss, "-i", path, *outdur, *cfr, *vf,
+                                *_hw_args(hw, kb), "-pix_fmt", "yuv420p", *audio_args,
+                                "-movflags", "+faststart", out_path],
+                               duration, 0.0, 100.0, progress_cb, should_cancel)
+                if should_cancel and should_cancel():
+                    return False, cancelled_msg(), 0.0
             if rc != 0 or not os.path.exists(out_path):
                 # драйвер/ліміт сесій/непідтримуваний формат -> тихо падаємо на процесор
                 dlog(f"HW encode {hw} failed rc={rc} -> fallback to x264")
@@ -640,7 +682,7 @@ def audio_envelope(path, hz: int = 100, ar: int = 8000) -> list:
         out = subprocess.run(
             ["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", path,
              "-ac", "1", "-ar", str(ar), "-f", "s16le", "-"],
-            capture_output=True, creationflags=NO_WINDOW).stdout
+            capture_output=True, creationflags=BG).stdout
     except Exception:
         return []
     if not out:

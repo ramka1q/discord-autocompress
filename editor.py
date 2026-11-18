@@ -499,6 +499,8 @@ class VideoEditor(tk.Toplevel):
         self._nudge_active = False   # щоб серія стрілок була ОДНИМ кроком undo
         self._playhead_x = 0
         self._hwdec_try = []         # які апаратні декодери пробувати (ставить _single_pass)
+        self._rec = None             # запис голосу: {"proc","path","at","t0"} або None
+        self._rec_n = 0
         self._ffplay_pos = None      # РЕАЛЬНА позиція ffplay (парситься з його -stats)
         self._stat_offset = None
         self._stat_log_t = 0.0
@@ -670,6 +672,8 @@ class VideoEditor(tk.Toplevel):
         self.b_ovl = ib(lb, "🎭", lambda: self._to_overlay(), E("ed_tt_ovl"))
         sep(lb)
         self.b_txt = ib(lb, "T", self._add_text, E("ed_tt_text"), fs=14)
+        self.b_mic = ib(lb, "🎙", self._toggle_rec, E("ed_tt_mic"), fs=13)
+        self.b_mic.bind("<Button-3>", lambda e: self._mic_menu())
         self.b_add = ib(lb, "➕", self._add_dialog, E("ed_tt_add"))
         sep(lb)
         self.b_insp = ib(lb, "⚙", self._toggle_insp, E("ed_tt_insp"), fs=13)
@@ -1534,9 +1538,9 @@ class VideoEditor(tk.Toplevel):
         self._play_sp = piece["speed"] if vf else 1.0
         if vf:
             cmd += ["-vf", vf]
-            if af:
+            if af and not self._rec:
                 cmd += ["-af", af]
-        elif piece["mute"]:
+        if self._rec or (not vf and piece["mute"]):
             cmd += ["-an"]
         cmd += ["-window_title", self._embed_title, "-i", src["path"]]
         self._ffplay_pos = None
@@ -1855,7 +1859,7 @@ class VideoEditor(tk.Toplevel):
                         ["ffmpeg", "-y", "-i", src["path"], "-frames:v", "1", "-vf",
                          f"scale={tw}:{THUMB_H}:force_original_aspect_ratio=increase,"
                          f"crop={tw}:{THUMB_H}", p],
-                        capture_output=True, creationflags=dc_core.NO_WINDOW)
+                        capture_output=True, creationflags=dc_core.BG)
                 except Exception:
                     pass
                 self._ui(lambda: self._load_strip(si, [p], [0.0]))
@@ -1875,7 +1879,7 @@ class VideoEditor(tk.Toplevel):
                         subprocess.run(
                             ["ffmpeg", "-y", "-ss", f"{t:.3f}", "-i", src["path"],
                              "-frames:v", "1", "-vf", f"scale=-2:{THUMB_H}", pth],
-                            capture_output=True, creationflags=dc_core.NO_WINDOW)
+                            capture_output=True, creationflags=dc_core.BG)
                     except Exception:
                         continue
                     if os.path.exists(pth):
@@ -1908,9 +1912,12 @@ class VideoEditor(tk.Toplevel):
         rate = max(0.25, min(4.0, 160.0 / d))
         pat = os.path.join(self._tmp, f"s{si}_sc_%04d.png")
         try:
-            subprocess.run(["ffmpeg", "-y", "-threads", "2", "-i", src["path"], "-an", "-sn",
-                            "-vf", f"fps={rate:g},scale=-2:{SCRUB_H}", "-start_number", "0", pat],
-                           capture_output=True, creationflags=dc_core.NO_WINDOW)
+            # лише КЛЮЧОВІ кадри (-skip_frame nokey): для перемотування вистачає, а декодувати
+            # треба в десятки разів менше; фоновий пріоритет — не гальмує решту програми
+            subprocess.run(["ffmpeg", "-y", "-threads", "2", "-skip_frame", "nokey", "-i", src["path"],
+                            "-an", "-sn", "-vf", f"fps={rate:g},scale=-2:{SCRUB_H}",
+                            "-start_number", "0", pat],
+                           capture_output=True, creationflags=dc_core.BG)
         except Exception:
             return
         paths = []
@@ -2546,7 +2553,7 @@ class VideoEditor(tk.Toplevel):
             try:
                 r = subprocess.run(["ffmpeg", "-hide_banner", "-vn", "-i", path, "-af", "volumedetect",
                                     "-f", "null", "-"], capture_output=True, text=True,
-                                   encoding="utf-8", errors="replace", creationflags=dc_core.NO_WINDOW)
+                                   encoding="utf-8", errors="replace", creationflags=dc_core.BG)
                 for ln in r.stderr.splitlines():
                     if "max_volume:" in ln:
                         peak = float(ln.split("max_volume:")[1].split("dB")[0].strip())
@@ -2560,6 +2567,121 @@ class VideoEditor(tk.Toplevel):
                     self._insp.sync(force=True)
             self._ui(apply)
         threading.Thread(target=work, daemon=True).start()
+
+    # --------------------------------------------- запис голосу (озвучка) ---- #
+    @staticmethod
+    def _mic_list():
+        """Мікрофони Windows (DirectShow) — так, як їх бачить ffmpeg."""
+        try:
+            r = subprocess.run(["ffmpeg", "-hide_banner", "-list_devices", "true", "-f", "dshow",
+                                "-i", "dummy"], capture_output=True, text=True, encoding="utf-8",
+                               errors="replace", creationflags=dc_core.NO_WINDOW, timeout=10)
+        except Exception:
+            return []
+        out = []
+        for ln in r.stderr.splitlines():
+            if ln.rstrip().endswith("(audio)") and '"' in ln:
+                out.append(ln.split('"')[1])
+        return out
+
+    def _mic_menu(self):
+        if self.busy or self._rec:
+            return
+        mics = self._mic_list()
+        m = self._menu_new()
+        if not mics:
+            m.add_command(label=E("ed_mic_none"), state="disabled")
+        cur = self.cfg.get("mic_device")
+        for name in mics:
+            m.add_command(label=("🎙  " + name + ("   ✓" if name == cur else "")),
+                          command=lambda n=name: self._set_mic(n))
+        b = self.b_mic
+        self._popup(m, b.winfo_rootx(), b.winfo_rooty() + b.winfo_height())
+
+    def _set_mic(self, name):
+        self.cfg["mic_device"] = name
+        try:
+            host.save_config(self.cfg)
+        except Exception:
+            pass
+
+    def _toggle_rec(self):
+        if self._rec:
+            return self._stop_rec()
+        if self.busy:
+            return
+        mics = self._mic_list()
+        if not mics:
+            self.info_lbl.config(text=E("ed_mic_none"), fg=C_RED)
+            return
+        dev = self.cfg.get("mic_device") if self.cfg.get("mic_device") in mics else mics[0]
+        self._rec_n += 1
+        path = os.path.join(self._tmp, f"voice_{self._rec_n}.wav")
+        try:
+            proc = subprocess.Popen(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "dshow",
+                                     "-audio_buffer_size", "50", "-i", "audio=" + dev,
+                                     "-ac", "1", "-ar", "48000", "-c:a", "pcm_s16le", path],
+                                    stdin=subprocess.PIPE, stderr=subprocess.PIPE,
+                                    creationflags=dc_core.NO_WINDOW)
+        except Exception as e:
+            dc_core.dlog("MIC start fail " + repr(e))
+            self.info_lbl.config(text=E("ed_mic_fail"), fg=C_RED)
+            return
+        self._rec = {"proc": proc, "path": path, "at": self._playhead_montage_t(),
+                     "t0": time.monotonic(), "dev": dev}
+        dc_core.dlog(f"MIC start dev={dev!r} at={self._rec['at']:.2f}")
+        self.b_mic.set_on(True)
+        self.b_mic.set_icon("⏺")
+        if not self.playing:                 # озвучка під відео, як у CapCut
+            self._toggle_play()
+        self._rec_tick()
+
+    def _rec_tick(self):
+        r = self._rec
+        if not r or self._closed:
+            return
+        if r["proc"].poll() is not None:      # ffmpeg мікрофона впав (зайнятий / від'єднали)
+            err = (r["proc"].stderr.read() or b"").decode("utf-8", "ignore")[-200:]
+            dc_core.dlog("MIC died: " + err)
+            self._rec = None
+            self.b_mic.set_on(False)
+            self.b_mic.set_icon("🎙")
+            self.info_lbl.config(text=E("ed_mic_fail"), fg=C_RED)
+            return
+        t = time.monotonic() - r["t0"]
+        self.info_lbl.config(text=E("ed_rec", t=f"{int(t // 60)}:{int(t % 60):02d}"), fg=C_RED)
+        self._rec_after = self.after(250, self._rec_tick)
+
+    def _stop_rec(self):
+        r, self._rec = self._rec, None
+        if not r:
+            return
+        try:
+            r["proc"].communicate(b"q", timeout=5)   # «q» — ffmpeg коректно дописує WAV
+        except Exception:
+            try:
+                r["proc"].kill()
+            except Exception:
+                pass
+        self.b_mic.set_on(False)
+        self.b_mic.set_icon("🎙")
+        if self.playing:
+            self._pause()
+        try:
+            d = media.audio_info(r["path"])["duration"] if os.path.exists(r["path"]) else 0
+        except Exception:
+            d = 0
+        dc_core.dlog(f"MIC stop dur={d:.2f}")
+        if d < 0.2:
+            self.info_lbl.config(text=E("ed_mic_fail"), fg=C_RED)
+            return
+        self._push_undo()
+        sn = {"path": r["path"], "at": r["at"], "dur": d, "vol": 1.0,
+              "name": f"🎙 {E('ed_voice')} {self._rec_n}", "env": None, "fin": 0.0, "fout": 0.0}
+        self.snds.append(sn)
+        self._gen_snd_env(sn)
+        self._select(("snd", len(self.snds) - 1))
+        self._redraw()
 
     def _ratio_label(self, r):
         return {"orig": E("ratio_orig"), "16:9": "16:9  YouTube", "9:16": "9:16  TikTok · Shorts · Reels",
@@ -3783,6 +3905,8 @@ class VideoEditor(tk.Toplevel):
             self._add_text()
         elif not ctrl and kc == 80:
             self._toggle_insp()
+        elif not ctrl and kc == 82:
+            self._toggle_rec()
         else:
             return None
         return "break"
@@ -4087,6 +4211,17 @@ class VideoEditor(tk.Toplevel):
         return out
 
     # ---------------- ШВИДКИЙ експорт: один прохід на відеокарті ------------- #
+    def _gpu_prescale(self, src, p, cw, ch):
+        """scale_cuda до розміру, в якому кліп ляже в кадр (з урахуванням зуму) + копія в RAM."""
+        iw, ih = int(src.get("w") or 0), int(src.get("h") or 0)
+        if iw and ih:
+            ew, eh = fx.eff_dims(iw, ih, p)
+            f = min(1.0, min(cw / float(ew), ch / float(eh)) * float(p.get("zoom", 1.0)))
+            sc = f"scale_cuda={max(2, int(iw * f / 2) * 2)}:{max(2, int(ih * f / 2) * 2)}:format=nv12"
+        else:
+            sc = "scale_cuda=format=nv12"
+        return sc + ",hwdownload,format=nv12"
+
     def _hwdec_args(self, src):
         """Декодування відео ВІДЕОКАРТОЮ (NVDEC / D3D11VA) — якщо цей файл так декодується.
         Перевіряємо на 0.5 с самого файлу один раз; інакше [] (декодує процесор)."""
@@ -4128,7 +4263,9 @@ class VideoEditor(tk.Toplevel):
         if scale and scale < min(cw, ch):
             k = scale / float(min(cw, ch))
             cw, ch = max(2, int(cw * k / 2) * 2), max(2, int(ch * k / 2) * 2)
-        self._hwdec_try = ["cuda", "d3d11va"] if hw == "h264_nvenc" else ["d3d11va"]
+        # копіювати повнорозмірні кадри з відеокарти повільніше, ніж декод процесором,
+        # тому накладки декодує процесор, а кліпи — відеокарта з масштабом (див. нижче)
+        self._hwdec_try = []
         tmpd = tempfile.mkdtemp(prefix="d1p_")
         try:
             cmd = ["ffmpeg", "-y"]
@@ -4147,9 +4284,12 @@ class VideoEditor(tk.Toplevel):
                     chain = [vf]
                     use_a = False
                 else:
-                    cmd += [*self._hwdec_args(src), "-ss", f"{p['s']:.3f}",
+                    gpu = hw == "h264_nvenc" and dc_core.gpu_decode_ok(src["path"])
+                    cmd += [*(dc_core.GPU_IN if gpu else []), "-ss", f"{p['s']:.3f}",
                             "-t", f"{p['e'] - p['s']:.3f}", "-i", src["path"]]
                     chain = [f"setpts=(PTS-STARTPTS)/{sp:g}", vf]
+                    if gpu:   # зменшуємо НА ВІДЕОКАРТІ до потрібного розміру і лише тоді копіюємо
+                        chain.insert(0, self._gpu_prescale(src, p, cw, ch))
                     vol = fx.g(p, "vol")
                     use_a = src["has_audio"] and not p["mute"] and vol > 0.005
                 chain += [f"fps={fps:g}", f"trim=duration={dd:.3f}", "setpts=PTS-STARTPTS",
@@ -4443,7 +4583,7 @@ class VideoEditor(tk.Toplevel):
             fc.append(f"{al}{''.join(labs)}amix=inputs={len(labs) + 1}:duration=first:normalize=0[mx]")
             al = "[mx]"
         fc.append(f"{al}aresample=44100,{afmt}[aout]")
-        full = cmd + ["-filter_complex", ";".join(fc), "-map", "[aout]", "-c:a", "libmp3lame",
+        full = cmd + ["-filter_complex", ";".join(fc), "-map", "[aout]", "-c:a", "libmp3lame", "-compression_level", "9",
                       "-b:a", f"{kb}k", "-ar", "44100", "-ac", "2", out_path]
         rc = dc_core._run_pass(full, total, 0.0, 100.0, prog, cancel)
         if cancel and cancel():
@@ -4550,6 +4690,11 @@ class VideoEditor(tk.Toplevel):
             self.info_lbl.config(text=msg or E("ed_save_fail"), fg=C_RED)
             return
         host.play_done_sound(self.cfg)          # звук «готово»
+        try:                                    # копія в «Мої монтажі» (Ctrl+Alt+E)
+            import library
+            library.add(out_path)
+        except Exception:
+            pass
         try:                                    # статистика: обрізка/монтаж/gif = теж стиснення
             import stats
             orig_mb = os.path.getsize(self.file_path) / (1024 * 1024)
@@ -4613,6 +4758,11 @@ class VideoEditor(tk.Toplevel):
             return
         self._closed = True
         self._cancel_flag = True       # експорт, якщо йде, зупиняється (ffmpeg гаситься)
+        if self._rec:                  # запис голосу — зупиняємо ffmpeg мікрофона
+            try:
+                self._rec["proc"].kill()
+            except Exception:
+                pass
         self._pause()                  # зупиняємо ffplay і його опитування
         self._disable_dnd()            # повертаємо оригінальний WndProc (інакше краш після destroy)
         shutil.rmtree(self._tmp, ignore_errors=True)

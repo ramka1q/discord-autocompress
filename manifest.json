@@ -16,6 +16,7 @@
     "deps.py",
     "edit_fx.py",
     "edit_inspector.py",
+    "library.py",
     "editor.py",
     "jokes.py",
     "stats.py",

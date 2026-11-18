@@ -123,8 +123,10 @@ def signal_open():
 
 
 class Tray:
-    def __init__(self, on_open, on_quit, texts, on_balloon=None):
-        """texts = (open_label, quit_label, tooltip); on_balloon — клік по сповіщенню."""
+    def __init__(self, on_open, on_quit, texts, on_balloon=None, extra=None):
+        """texts = (open_label, quit_label, tooltip); on_balloon — клік по сповіщенню.
+        extra = [(label або функція-label, callback)] — додаткові пункти меню."""
+        self.extra = list(extra or [])
         self.on_open, self.on_quit = on_open, on_quit
         self.on_balloon = on_balloon or on_open
         self.open_text, self.quit_text, self.tip = texts
@@ -230,6 +232,8 @@ class Tray:
         try:
             hmenu = user32.CreatePopupMenu()
             user32.AppendMenuW(hmenu, MF_STRING, ID_OPEN, self.open_text or "Open")
+            for i, (lab, _cb) in enumerate(self.extra):
+                user32.AppendMenuW(hmenu, MF_STRING, 2000 + i, lab() if callable(lab) else lab)
             user32.AppendMenuW(hmenu, MF_SEPARATOR, 0, None)
             user32.AppendMenuW(hmenu, MF_STRING, ID_QUIT, self.quit_text or "Quit")
             pt = POINT()
@@ -243,6 +247,8 @@ class Tray:
             return
         if cmd == ID_OPEN:
             self._safe(self.on_open)
+        elif 2000 <= cmd < 2000 + len(self.extra):
+            self._safe(self.extra[cmd - 2000][1])
         elif cmd == ID_QUIT:
             self._safe(self.on_quit)
 
