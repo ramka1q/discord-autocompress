@@ -51,6 +51,13 @@ class WhatsNew(tk.Toplevel):
         self.geometry(f"{self.W}x{self.H}+{self._x}+{self._y + 26}")
         self.c = tk.Canvas(self, width=self.W, height=self.H, bg=KEY, highlightthickness=0)
         self.c.pack()
+        # висота кожного пункту — під його текст (довгий опис на 3+ рядки не вилазить за картку)
+        self._lay = self._measure_rows()
+        H = 236 + sum(h for h in self._lay) + (self.ROW - 54) * len(self._lay) + 96
+        self.H = min(H, sh - 60)
+        self._y = max(10, (sh - self.H) // 2 - 10)
+        self.geometry(f"{self.W}x{self.H}+{self._x}+{self._y + 26}")
+        self.c.config(height=self.H)
         self.bind("<Escape>", lambda e: self.close())
 
         self._card()
@@ -197,22 +204,44 @@ class WhatsNew(tk.Toplevel):
                 self._confetti.remove(p)
 
     # ---------------------------------------------------------- пункти --- #
+    def _text_w(self, tab):
+        return self.W - 98 - (178 if tab else 54)
+
+    def _measure_rows(self):
+        """Висота картки кожного пункту за реальним розміром тексту (мін. 54)."""
+        out = []
+        for icon, title, desc, tab in self.items:
+            w = self._text_w(tab)
+            a = self.c.create_text(0, 0, text=title, anchor="nw", font=(F, 11, "bold"), width=w)
+            b = self.c.create_text(0, 0, text=desc, anchor="nw", font=(F, 9), width=w)
+            ha = self.c.bbox(a)[3] - self.c.bbox(a)[1]
+            hb = self.c.bbox(b)[3] - self.c.bbox(b)[1]
+            self.c.delete(a, b)
+            out.append(max(54, ha + hb + 20))
+        return out
+
+    def _row_top(self, i):
+        return 236 + sum(self._lay[:i]) + (self.ROW - 54) * i + 6 - 27
+
     def _make_row(self, i, it):
         P, c = self.P, self.c
         icon, title, desc, tab = it
-        y = 236 + i * self.ROW + 6
+        top = self._row_top(i)
+        h = self._lay[i]
+        y = top + h / 2
         tag = f"row{i}"
         bg = ui.mix(P["bg"], P["text"], 0.045)
         row = {"y": y, "tag": tag, "bg": bg, "tab": tab, "btn": None,
-               "bgid": ui.round_rect(c, 30, y - 27, self.W - 32, y + 27, 16, fill=P["bg"],
+               "bgid": ui.round_rect(c, 30, top, self.W - 32, top + h, 16, fill=P["bg"],
                                      outline="", tags=tag)}
         row["ring"] = c.create_oval(48, y - 18, 84, y + 18, fill=P["bg"], outline=P["bg"], width=2,
                                     tags=tag)
         row["icon"] = c.create_text(66, y, text=icon, font=(F, 14), fill=P["bg"], tags=tag)
-        wtxt = self.W - 98 - (178 if tab else 54)
-        row["title"] = c.create_text(98, y - 10, text=title, anchor="w", fill=P["bg"],
+        wtxt = self._text_w(tab)
+        row["title"] = c.create_text(98, top + 9, text=title, anchor="nw", fill=P["bg"],
                                      font=(F, 11, "bold"), width=wtxt, tags=tag)
-        row["desc"] = c.create_text(98, y + 11, text=desc, anchor="w", fill=P["bg"],
+        tb = c.bbox(row["title"])
+        row["desc"] = c.create_text(98, tb[3] + 1, text=desc, anchor="nw", fill=P["bg"],
                                     font=(F, 9), width=wtxt, tags=tag)
         row["x"] = 0.0
         return row
@@ -226,7 +255,7 @@ class WhatsNew(tk.Toplevel):
                 c.move(row["btn"], dx - row["x"], 0)
             row["x"] = dx
         c.itemconfig(row["bgid"], fill=ui.mix(P["bg"], row["bg"], k))
-        acc = ui.mix(P["accent"], ui.accent2(P), (row["y"] - 236) / max(1, len(self.items) * self.ROW))
+        acc = ui.mix(P["accent"], ui.accent2(P), (row["y"] - 236) / max(1, self.H - 330))
         c.itemconfig(row["ring"], outline=ui.mix(P["bg"], acc, k),
                      fill=ui.mix(P["bg"], ui.mix(P["panel"], acc, 0.18), k))
         c.itemconfig(row["icon"], fill=ui.mix(P["bg"], P["text"], k))
