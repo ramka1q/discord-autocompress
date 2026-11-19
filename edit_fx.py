@@ -154,16 +154,23 @@ def vol_db(v):
     return 20.0 * math.log10(v) if v > 0 else -math.inf
 
 
+_DB_KNEE = 60.0             # до +60 dB гучність реально РОСТЕ (далі звук — суцільний «квадрат»)
+_P300, _PKNEE = 0.6, 0.9   # 0.6..0.9 повзунка: +9.5..+60 dB рівномірно; 0.9..1: +60..+888 dB
+
+
 def pos_vol(pos):
     """Позиція повзунка 0..1 -> множник гучності.
-    0..0.5 -> 0..100%;  0.5..0.6 -> 100..300%;  0.6..1 -> +9.5 dB .. +888 dB (квадратично)."""
+    0..0.5 -> 0..100%;  0.5..0.6 -> 100..300%;  0.6..0.9 -> +9.5..+60 dB (рівномірно, кожен
+    рух чути);  0.9..1 -> +60..+888 dB (там уже лише «рве» — квадратично)."""
     pos = max(0.0, min(1.0, float(pos)))
     if pos <= 0.5:
         return pos * 2.0
-    if pos <= 0.6:
-        db = (pos - 0.5) / 0.1 * _DB300
+    if pos <= _P300:
+        db = (pos - 0.5) / (_P300 - 0.5) * _DB300
+    elif pos <= _PKNEE:
+        db = _DB300 + (_DB_KNEE - _DB300) * (pos - _P300) / (_PKNEE - _P300)
     else:
-        db = _DB300 + (VOL_MAX_DB - _DB300) * ((pos - 0.6) / 0.4) ** 2
+        db = _DB_KNEE + (VOL_MAX_DB - _DB_KNEE) * ((pos - _PKNEE) / (1.0 - _PKNEE)) ** 2
     return 10.0 ** (db / 20.0)
 
 
@@ -173,8 +180,10 @@ def vol_pos(v):
         return v / 2.0
     db = min(VOL_MAX_DB, vol_db(v))
     if db <= _DB300:
-        return 0.5 + db / _DB300 * 0.1
-    return 0.6 + 0.4 * math.sqrt((db - _DB300) / (VOL_MAX_DB - _DB300))
+        return 0.5 + db / _DB300 * (_P300 - 0.5)
+    if db <= _DB_KNEE:
+        return _P300 + (_PKNEE - _P300) * (db - _DB300) / (_DB_KNEE - _DB300)
+    return _PKNEE + (1.0 - _PKNEE) * math.sqrt((db - _DB_KNEE) / (VOL_MAX_DB - _DB_KNEE))
 
 
 def vol_label(v):
@@ -196,9 +205,10 @@ def gain_chain(vol):
     if v <= 0:
         return ["volume=0"]
     db = vol_db(v)
-    if db <= 40.0:
+    if db <= 0.0:
         return [f"volume={db:.4f}dB"]
-    n = int(math.ceil(db / 40.0))
+    # без лімітера: x * gain, потім жорстке обрізання x = min(1, max(-1, x)) — як на SlowWave
+    n = max(1, int(math.ceil(db / 40.0)))
     out = []
     for _ in range(n):
         out += [f"volume={db / n:.4f}dB", "asoftclip=type=hard"]

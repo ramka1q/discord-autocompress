@@ -10,6 +10,12 @@ changelog.py — версія програми та список змін по �
 REPO_URL = "https://github.com/ramka1q/discord-autocompress"
 
 CHANGES = [
+    {"v": "3.0.2", "date": "2026-11-19 16:40", "items": [
+        {"icon": "🔊", "tab": None,
+         "uk": ("Гучність, яку чути", "Права частина повзунка тепер плавно йде +10…+60 dB — кожен рух робить голосніше. Лише останній кусок — до +888 dB, де звук уже «рве». Підсилення — чисте множення з жорстким обрізанням, без лімітера."),
+         "ru": ("Громкость, которую слышно", "Правая часть ползунка теперь плавно идёт +10…+60 dB — каждое движение делает громче. Только последний кусок — до +888 dB, где звук уже «рвёт». Усиление — чистое умножение с жёстким обрезанием, без лимитера."),
+         "en": ("Volume you can hear", "The right side of the slider now goes smoothly through +10…+60 dB, so every move is louder. Only the last bit goes to +888 dB, where the sound just tears. Boost is a plain multiply with hard clipping, no limiter.")},
+    ]},
     {"v": "3.0.1", "date": "2026-11-18 16:40", "items": [
         {"icon": "🎯", "tab": None,
          "uk": ("Кадр іде за повзунком", "На паузі картинка миттєво слідує за білим повзунком — без затримки, ще до ▶."),
