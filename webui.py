@@ -237,6 +237,18 @@ class Bridge:
         def apply():
             self.w._on_settings_save(cfg)
         self.on_tk(apply, wait=True, timeout=10)
+        import themes
+        if "theme" in changes and not themes.palette(cfg.get("theme")).get("mono"):
+            # інша тема — це звичайне (Tk) меню: відкриваємо його, а веб-вікно закриється
+            self.on_tk(lambda: self.w.open_settings(tab="appearance"))
+
+            def shut():                      # про всяк випадок закриваємо веб-вікно й самі
+                h = _find_window(TITLES["menu"])
+                if h:
+                    import ctypes
+                    ctypes.windll.user32.PostMessageW(ctypes.c_void_p(h), 0x0010, 0, 0)   # WM_CLOSE
+            threading.Timer(1.2, shut).start()
+            return {"ok": True, "close": True}
         return {"ok": True, "reload": reload_page}
 
     # ---------- дії ----------

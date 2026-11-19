@@ -34,6 +34,7 @@ function card(label, sub, inner) { return `<section class="glass card rise">${la
 async function setCfg(k, v) {
   ST.cfg[k] = v;
   const r = await api("/api/set", { [k]: v });
+  if (r.close) return setTimeout(() => window.close(), 400);
   if (r.reload) return location.reload();
   toast(T("saved"));
 }

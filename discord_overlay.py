@@ -1756,6 +1756,8 @@ class Watcher:
         if self.cfg.get("web_ui", True) is False:
             dc_core.dlog(f"web {page}: disabled in config")
             return False
+        if not themes.palette(self.cfg.get("theme", "mono")).get("mono"):
+            return False                 # веб = лише дизайн Moon; інші теми — у звичайних вікнах
         try:
             import webui
             ok = webui.open_page(self, page, **kw)
@@ -1819,12 +1821,26 @@ class Watcher:
         LANG = cfg.get("lang", "en")
         dc_core.LANG = LANG
         dc_core.configure(cfg)
+        was_mono = themes.palette(THEME).get("mono")
         apply_theme(cfg.get("theme", "mono"))
         try:
             if self.tray:
                 self.tray.update_texts(self._tray_texts())
         except Exception:
             pass
+        # у звичайному меню вибрали Moon -> закриваємо його й відкриваємо веб-меню
+        if not was_mono and themes.palette(THEME).get("mono") and self.settings_win is not None:
+            self.root.after(150, self._switch_to_web_menu)
+
+    def _switch_to_web_menu(self):
+        sw = self.settings_win
+        self.settings_win = None
+        try:
+            sw.win.destroy()
+        except Exception:
+            pass
+        if not self._web("menu", tab="appearance"):
+            self.open_settings(tab="appearance")
 
     def mark_self_clipboard(self):
         # ми самі поклали файл — стартуємо коротку «паузу», щоб не зреагувати на свою ж вставку

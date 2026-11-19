@@ -10,6 +10,12 @@ changelog.py — версія програми та список змін по �
 REPO_URL = "https://github.com/ramka1q/discord-autocompress"
 
 CHANGES = [
+    {"v": "3.2.2", "date": "2026-11-19 23:40", "items": [
+        {"icon": "🎨", "tab": "appearance",
+         "uk": ("Інші теми знову працюють", "Вибери Discord, Midnight, Doki Doki чи Aero — меню відкриється в цій темі. Вибери Moon — повернеться веб-дизайн."),
+         "ru": ("Другие темы снова работают", "Выбери Discord, Midnight, Doki Doki или Aero — меню откроется в этой теме. Выбери Moon — вернётся веб-дизайн."),
+         "en": ("Other themes work again", "Pick Discord, Midnight, Doki Doki or Aero and the menu opens in that theme. Pick Moon to get the web design back.")},
+    ]},
     {"v": "3.2.1", "date": "2026-11-19 23:10", "items": [
         {"icon": "🛠", "tab": None,
          "uk": ("Меню завжди у веб-дизайні", "Веб-вікна мають свої заголовки, тож програма більше не плутає їх зі старим меню."),
