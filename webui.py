@@ -972,8 +972,12 @@ def _show_main(hwnd, page):
     x, y = max(0, (sw - w) // 2), max(0, (sh - h) // 2 - 20)
     hv = ctypes.c_void_p(hwnd)
     u32.SetWindowTextW(hv, TITLES.get(page, ""))
-    if not u32.IsWindowVisible(hv) or u32.IsIconic(hv):
+    # інша сторінка (меню / галерея / «Що нового») — свій розмір; та сама — лишаємо як юзер поставив
+    if not u32.IsWindowVisible(hv) or u32.IsIconic(hv) or _MAIN.get("page") != page:
+        if u32.IsZoomed(hv):
+            u32.ShowWindow(hv, 9)                                            # з розгорнутого — звичайне
         u32.SetWindowPos(hv, None, x, y, w, h, 0x0004 | 0x0010)        # NOZORDER | NOACTIVATE
+    _MAIN["page"] = page
     u32.ShowWindow(hv, 9 if u32.IsIconic(hv) else 5)                     # SW_RESTORE / SW_SHOW
     fg = u32.GetForegroundWindow()
     t1 = u32.GetWindowThreadProcessId(fg, None)
