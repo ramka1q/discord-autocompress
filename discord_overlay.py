@@ -1754,10 +1754,13 @@ class Watcher:
     def _web(self, page, **kw):
         """Веб-вікно (дизайн Moon у Edge). False — Edge немає або вимкнено -> Tk."""
         if self.cfg.get("web_ui", True) is False:
+            dc_core.dlog(f"web {page}: disabled in config")
             return False
         try:
             import webui
-            return webui.open_page(self, page, **kw)
+            ok = webui.open_page(self, page, **kw)
+            dc_core.dlog(f"web {page}: {'opened' if ok else 'NOT opened -> Tk'}")
+            return ok
         except Exception as e:
             dc_core.dlog("webui EXCEPTION " + repr(e))
             return False

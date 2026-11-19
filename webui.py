@@ -27,8 +27,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 WEB = os.path.join(HERE, "webui")
 PROFILE = os.path.join(os.environ.get("LOCALAPPDATA") or os.path.expanduser("~"),
                        "DiscordAutoCompress", "webview")
-TITLES = {"menu": "Discord Auto-Compress", "gallery": "My edits — Discord Auto-Compress",
-          "news": "What's new — Discord Auto-Compress"}
+# окремі заголовки веб-вікон (у Tk-меню заголовок «Discord Auto-Compress» — не плутати)
+TITLES = {"menu": "Discord Auto-Compress · Moon", "gallery": "My edits · Moon",
+          "news": "What's new · Moon"}
 TYPES = {".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8",
          ".js": "application/javascript; charset=utf-8", ".png": "image/png",
          ".ttf": "font/ttf", ".svg": "image/svg+xml", ".json": "application/json"}
@@ -737,6 +738,7 @@ def open_page(watcher, page="menu", tab=None, gallery_hwnd=None):
     False — Edge немає (тоді викликач показує Tk-вікно)."""
     exe = edge_path()
     if not exe or not os.path.isfile(os.path.join(WEB, "index.html")):
+        dc_core.dlog(f"webui open {page}: no Edge ({exe}) or no index.html")
         return False
     try:
         bridge, port = start(watcher)
@@ -747,6 +749,7 @@ def open_page(watcher, page="menu", tab=None, gallery_hwnd=None):
         bridge.gallery_hwnd = gallery_hwnd
     existing = _find_window(TITLES.get(page, ""))
     if existing:
+        dc_core.dlog(f"webui open {page}: focus existing {existing}")
         if tab:
             bridge.emit("nav", page=page, tab=tab)
         if page == "gallery":

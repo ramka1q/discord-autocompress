@@ -174,7 +174,7 @@ function benchHTML(res, at, enc) {
 
 // ---------- каркас меню ----------
 function renderMenu() {
-  document.title = "Discord Auto-Compress";
+  document.title = "Discord Auto-Compress · Moon";
   const [tk, sk] = HEADS[TAB] || HEADS.general;
   $("#app").innerHTML = `<header class="top"><div class="brand"><div class="logo">${LOGO}</div><h1>Discord Auto-Compress</h1><span class="vchip">v${esc(ST.version)}</span></div>
     <span class="label dim" style="margin-left:6px">${esc(released())}</span><div class="spacer"></div>
@@ -188,7 +188,7 @@ function renderMenu() {
 
 // ---------- галерея ----------
 function renderGallery() {
-  document.title = "My edits — Discord Auto-Compress";
+  document.title = "My edits · Moon";
   const items = ST.lib;
   $("#app").innerHTML = `<header class="top"><div class="brand"><div class="logo">${LOGO}</div><h1>${esc(T("lib_title"))}</h1><span class="vchip">${esc(ST.hotkey)}</span></div>
     <div class="spacer"></div><button class="btn" data-do="lib_folder">${esc(T("lib_folder"))}</button><button class="btn primary" data-do="open_editor" data-then="close">${esc(T("lib_new"))}</button></header>
@@ -202,7 +202,7 @@ function renderGallery() {
 
 // ---------- «Що нового» (вікно після оновлення) ----------
 function renderNews() {
-  document.title = "What's new — Discord Auto-Compress";
+  document.title = "What's new · Moon";
   let entries = ST.news.slice(0, 1), since = ST.news_since;
   if (since) { const i = ST.news.findIndex(e => e.v === since); if (i > 0) entries = ST.news.slice(0, i); else since = null; }
   const many = entries.length > 1, [d, t] = fmtDate(entries[0].date);
@@ -417,6 +417,7 @@ async function pollLoop() {
 async function boot() {
   const [p, t] = (location.hash.slice(1) || "menu").split("/");
   if (p === "overlay") { document.title = "DAC Overlay"; document.body.classList.add("ov"); }
+  else document.title = { gallery: "My edits · Moon", news: "What's new · Moon" }[p] || "Discord Auto-Compress · Moon";
   PAGE = ["menu", "gallery", "news", "overlay"].includes(p) ? p : "menu";
   if (t) TAB = t;
   ST = await api("/api/state?page=" + PAGE); S = ST.S;
