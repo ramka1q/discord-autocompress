@@ -117,6 +117,8 @@ def place(x, y, w, h, show=True, activate=False):
     hw = _st.get("hwnd") or _find()
     if not hw:
         return
+    if show:
+        _style(hw)          # Edge міг повернути свій стиль — знову без рамки й без кнопки на панелі задач
     if show and user32.IsIconic(ctypes.c_void_p(hw)):
         user32.ShowWindow(ctypes.c_void_p(hw), 4)      # SW_SHOWNOACTIVATE — із згорнутого
     fl = SWP_FRAMECHANGED | (SWP_SHOWWINDOW if show else SWP_HIDEWINDOW)

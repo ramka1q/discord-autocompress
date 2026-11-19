@@ -639,6 +639,12 @@ class _Req:
         authed = self.headers.get("x-token") == b.token or q.get("t", [""])[0] == b.token
         path = u.path
         if self.method == "GET":
+            if path in ("/icon.png", "/favicon.ico"):      # значок програми (вкладка/панель задач)
+                try:
+                    import appicon
+                    return self.send(200, appicon._png_bytes(256), "image/png", cache=True)
+                except Exception:
+                    return self.send(404, {"err": "icon"})
             if path in ("/", "/index.html"):
                 if q.get("t", [""])[0] != b.token:
                     return self.send(403, "forbidden", "text/plain")
