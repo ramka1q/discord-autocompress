@@ -33,6 +33,7 @@
     "deps.py",
     "edit_fx.py",
     "edit_inspector.py",
+    "edit_media.py",
     "library.py",
     "mpvplayer.py",
     "editor.py",

@@ -148,9 +148,206 @@ class Swatches(tk.Canvas):
                              outline=_mix(self.P["bg2"], self.P["text"], 0.35))
 
 
+class NumField(tk.Frame):
+    """Підпис + числове поле (як X / Y / Rotate у відеоредакторах). Enter / вихід із поля —
+    застосувати; коліщатко або стрілки вгору/вниз — крок (Shift — x10)."""
+
+    def __init__(self, parent, P, label, get, set_, step=1.0, fmt="{:.0f}", lo=-1e9, hi=1e9, width=7):
+        super().__init__(parent, bg=P["bg2"])
+        self.P, self._get, self._setf, self._step, self._fmt = P, get, set_, step, fmt
+        self._lo, self._hi = lo, hi
+        if label:
+            tk.Label(self, text=label, bg=P["bg2"], fg=P["muted"], font=(P["font"], 8)).pack(side="left", padx=(0, 4))
+        self.var = tk.StringVar()
+        self.ent = tk.Entry(self, textvariable=self.var, width=width, justify="center", relief="flat",
+                            bg=P["dark"], fg=P["text"], insertbackground=P["text"], font=(P["font"], 9),
+                            highlightthickness=1, highlightbackground=P["dark"], highlightcolor=P["accent"])
+        self.ent.pack(side="left", ipady=3)
+        self.ent.bind("<Return>", self._commit)
+        self.ent.bind("<FocusOut>", self._commit)
+        self.ent.bind("<MouseWheel>", lambda e: self._bump(1 if e.delta > 0 else -1, e) or "break")
+        self.ent.bind("<Up>", lambda e: self._bump(1, e) or "break")
+        self.ent.bind("<Down>", lambda e: self._bump(-1, e) or "break")
+        self.redraw()
+
+    def redraw(self):
+        try:
+            if self.focus_get() is not self.ent:
+                self.var.set(self._fmt.format(float(self._get())))
+        except (tk.TclError, KeyError):
+            pass
+
+    def _apply(self, v):
+        v = max(self._lo, min(self._hi, v))
+        self._setf(v)
+        try:
+            self.var.set(self._fmt.format(float(self._get())))
+        except tk.TclError:
+            pass
+
+    def _commit(self, _e=None):
+        try:
+            v = float(self.var.get().replace(",", ".").replace("%", "").replace("\u00b0", ""))
+        except ValueError:
+            self.redraw()
+            return
+        if abs(v - float(self._get())) > 1e-6:
+            self._apply(v)
+
+    def _bump(self, d, ev):
+        k = 10.0 if (ev.state & 0x1) else 1.0
+        self._apply(float(self._get()) + d * self._step * k)
+
+
+class Tabs(tk.Canvas):
+    """Рядок вкладок з підкресленням активної (Video / Audio / Speed / Animation / Adjust)
+    або сегменти на всю ширину (In / Out / Combo)."""
+
+    def __init__(self, parent, P, items, get, set_, height=30, seg=False):
+        super().__init__(parent, height=height, bg=P["bg2"], highlightthickness=0, cursor="hand2")
+        self.P, self._items, self._get, self._setf, self._seg = P, items, get, set_, seg
+        self._hits = []
+        self.bind("<Configure>", lambda e: self.redraw())
+        self.bind("<Button-1>", self._click)
+
+    def _click(self, ev):
+        for x1, x2, k in self._hits:
+            if x1 <= ev.x <= x2:
+                if k != self._get():
+                    self._setf(k)
+                return
+
+    def redraw(self):
+        P = self.P
+        try:
+            self.delete("all")
+            W, H = self.winfo_width(), int(self.cget("height"))
+        except tk.TclError:
+            return
+        if W < 20:
+            return
+        self._hits = []
+        cur = self._get()
+        if self._seg:
+            n = max(1, len(self._items))
+            self.create_rectangle(2, 2, W - 2, H - 2, fill=P["dark"], outline="")
+            for i, (k, lab) in enumerate(self._items):
+                x1, x2 = 2 + (W - 4) * i / n, 2 + (W - 4) * (i + 1) / n
+                if k == cur:
+                    self.create_rectangle(x1 + 2, 4, x2 - 2, H - 4, fill=_mix(P["dark"], P["text"], 0.16),
+                                          outline="")
+                self.create_text((x1 + x2) / 2, H / 2, text=lab, fill=P["text"] if k == cur else P["muted"],
+                                 font=(P["font"], 9, "bold" if k == cur else "normal"))
+                self._hits.append((x1, x2, k))
+            return
+        # вміщаємо всі вкладки в ширину панелі: якщо не влазять — менший шрифт і проміжки
+        fs, gap = 9, 16
+        for fs, gap in ((9, 16), (9, 10), (8, 8), (7, 6)):
+            tot = 0
+            for _k, lab in self._items:
+                t = self.create_text(0, -50, text=lab, anchor="w", font=(P["font"], fs, "bold"))
+                b = self.bbox(t)
+                tot += (b[2] - b[0]) + gap
+                self.delete(t)
+            if tot + 12 <= W:
+                break
+        x = max(6, (W - tot) / 2 + gap / 2) if tot + 12 <= W else 6
+        for k, lab in self._items:
+            tid = self.create_text(x, H / 2 - 2, text=lab, anchor="w", font=(P["font"], fs, "bold"),
+                                   fill=P["accent"] if k == cur else P["text"])
+            x1, _y1, x2, _y2 = self.bbox(tid)
+            if k == cur:
+                self.create_line(x1, H - 3, x2, H - 3, fill=P["accent"], width=2)
+            self._hits.append((x1 - gap / 2, x2 + gap / 2, k))
+            x = x2 + gap
+        self.create_line(0, H - 1, W, H - 1, fill=_mix(P["bg2"], P["text"], 0.1))
+
+
+class AnimTile(tk.Canvas):
+    """Плитка анімації з живим прев'ю: під мишкою картинка рухається так само, як рухатиметься
+    кліп (ті самі формули, що й у ffmpeg). Без мишки — нерухома (не вантажить процесор)."""
+    SZ = 60
+
+    def __init__(self, parent, P, kind, key, label, on_pick, selected):
+        super().__init__(parent, width=self.SZ, height=self.SZ + 16, bg=P["bg2"], highlightthickness=0,
+                         cursor="hand2")
+        self.P, self.kind, self.key, self.sel, self.label = P, kind, key, selected, label
+        self._t, self._after, self._hot = 0.0, None, False
+        self.bind("<Enter>", lambda e: self._hover(True))
+        self.bind("<Leave>", lambda e: self._hover(False))
+        self.bind("<Button-1>", lambda e: on_pick(key))
+        self.draw(self._rest())
+
+    def _rest(self):
+        return {"in": 0.55, "out": 0.45}.get(self.kind, 0.4)
+
+    def _hover(self, on):
+        self._hot = on
+        if on and self._after is None:
+            self._t = 0.0
+            self._tick()
+        elif not on:
+            self.draw(self._rest())
+
+    def _tick(self):
+        self._after = None
+        if not self._hot:
+            return
+        self._t += 1 / 30.0
+        if self.kind == "combo":
+            x = self._t % 3.0
+        else:
+            x = min(1.0, (self._t % 1.6) / 0.8)      # 0.8 с руху + пауза
+        self.draw(x)
+        try:
+            self._after = self.after(33, self._tick)
+        except tk.TclError:
+            pass
+
+    def draw(self, x):
+        import math
+        P, s = self.P, self.SZ
+        try:
+            self.delete("all")
+        except tk.TclError:
+            return
+        bd = P["accent"] if self.sel else (_mix(P["bg2"], P["text"], 0.3) if self._hot else P["dark"])
+        if not self.key:
+            self.create_rectangle(1, 1, s - 1, s - 1, fill="#0b0b0b", outline=bd, width=2 if self.sel else 1)
+            self.create_oval(s / 2 - 13, s / 2 - 13, s / 2 + 13, s / 2 + 13, outline=P["muted"], width=2)
+            self.create_line(s / 2 - 9, s / 2 + 9, s / 2 + 9, s / 2 - 9, fill=P["muted"], width=2)
+        else:
+            self.create_rectangle(1, 1, s - 1, s - 1, fill="#0b0b0b", outline="")
+            S, X, Y, A, B, F = fx.anim_sample(self.kind, self.key, x)
+            B, F = max(0.0, min(1.0, B)), max(0.0, min(1.0, F))
+            w, h = 40 * S, 26 * S
+            cx, cy = s / 2 + X * 40, s / 2 + Y * 26
+            ca, sa = math.cos(A), math.sin(A)
+            pts = []
+            for dx, dy in ((-w / 2, -h / 2), (w / 2, -h / 2), (w / 2, h / 2), (-w / 2, h / 2)):
+                pts += [cx + dx * ca - dy * sa, cy + dx * sa + dy * ca]
+            base = _mix("#000000", _mix(P["accent"], "#ffffff", B), F)
+            sun = _mix("#000000", _mix("#ffd166", "#ffffff", B), F)
+            self.create_polygon(pts, fill=base, outline="")
+            r = 5 * S
+            ox, oy = 8 * S, -4 * S
+            sx, sy = cx + ox * ca - oy * sa, cy + ox * sa + oy * ca
+            self.create_oval(sx - r, sy - r, sx + r, sy + r, fill=sun, outline="")
+            # все, що вилізло за плитку, ховаємо рамкою кольору панелі
+            pad = 40
+            self.create_rectangle(-pad, -pad, s + pad, 0, fill=P["bg2"], outline="")
+            self.create_rectangle(-pad, s, s + pad, s + pad, fill=P["bg2"], outline="")
+            self.create_rectangle(-pad, 0, 0, s, fill=P["bg2"], outline="")
+            self.create_rectangle(s, 0, s + pad, s, fill=P["bg2"], outline="")
+            self.create_rectangle(1, 1, s - 1, s - 1, outline=bd, width=2 if self.sel else 1)
+        lab = self.label if len(self.label) <= 11 else self.label[:10] + "\u2026"
+        self.create_text(s / 2, s + 8, text=lab, fill=P["accent"] if self.sel else P["text"],
+                         font=(P["font"], 8))
+
+
 class Inspector(tk.Frame):
     """Права панель. sync() перебудовує вміст, коли змінився вибраний об'єкт."""
-    W = 290
+    W = 312
 
     def __init__(self, parent, ed, P, E):
         super().__init__(parent, bg=P["bg2"], width=self.W)
@@ -164,6 +361,12 @@ class Inspector(tk.Frame):
         self.sub = tk.Label(self, text="", bg=P["bg2"], fg=P["muted"], anchor="w",
                             font=(P["font"], 8))
         self.sub.pack(fill="x", padx=14, pady=(0, 6))
+        self._tab = {}                   # активна вкладка для кожного типу об'єкта
+        self._akind = "in"               # Animation: In / Out / Combo
+        self._acat = "all"
+        self._nums = []
+        self.tabbar = tk.Frame(self, bg=P["bg2"])
+        self.tabbar.pack(fill="x")
         self.cv = tk.Canvas(self, bg=P["bg2"], highlightthickness=0)
         self.cv.pack(fill="both", expand=True)
         self.body = tk.Frame(self.cv, bg=P["bg2"])
@@ -313,7 +516,7 @@ class Inspector(tk.Frame):
         return lambda v: obj.__setitem__(key, cast(v))
 
     def refresh_values(self):
-        for s in self._sliders:
+        for s in self._sliders + self._nums:
             try:
                 s.redraw()
             except tk.TclError:
@@ -325,26 +528,38 @@ class Inspector(tk.Frame):
         if key == self._key and not force:
             return
         self._key = key
-        for w in self.body.winfo_children():
+        self._rebuild(keep_scroll=False)
+
+    def _rebuild(self, keep_scroll=True):
+        key = self._key
+        try:
+            y0 = self.cv.yview()[0] if keep_scroll else 0.0
+        except tk.TclError:
+            y0 = 0.0
+        for w in self.body.winfo_children() + self.tabbar.winfo_children():
             w.destroy()
-        self._sliders = []
-        self.cv.yview_moveto(0)
+        self._sliders, self._nums = [], []
         kind = key[0] if key else None
         try:
             if kind == "txt":
                 self._build_text(self.ed.texts[key[1]])
             elif kind == "ovl":
-                self._build_ovl(self.ed.ovls[key[1]])
+                self._tabs_for("ovl", self.ed.ovls[key[1]])
             elif kind == "snd":
                 self._build_snd(self.ed.snds[key[1]])
             elif kind == "clip":
-                self._build_clip(self.ed._sel_piece())
+                self._tabs_for("clip", self.ed._sel_piece())
             else:
                 self.head.config(text="")
                 self.sub.config(text="")
         except (IndexError, tk.TclError):
             pass
         self._bind_wheel(self.body)
+        try:
+            self.update_idletasks()
+            self.cv.yview_moveto(y0)
+        except tk.TclError:
+            pass
 
     def _src_name(self, src):
         n = src["name"]
@@ -371,26 +586,46 @@ class Inspector(tk.Frame):
         self._slider(E("ins_fade_out"), 0.0, hi, lambda: float(obj.get("fout", 0.0)),
                      self._setp(obj, "fout"), self._sec, 0.0)
 
-    def _build_clip(self, p):
+    # ------------------------------------------------- вкладки кліпа / накладки -- #
+    def _tabs_for(self, kind, p):
         E, ed = self.E, self.ed
-        src = ed._src(p)
-        self.head.config(text=("🖼  " if src["kind"] == "image" else "🎬  ") + E("ins_clip"))
+        src = ed.sources[p["src"]]
+        video = src["kind"] == "video"
+        icon = "\U0001f3ad  " if kind == "ovl" else ("\U0001f5bc  " if not video else "\U0001f3ac  ")
+        self.head.config(text=icon + (E("ins_overlay") if kind == "ovl" else E("ins_clip")))
         self.sub.config(text=self._src_name(src))
-        dur = (p["e"] - p["s"]) / p["speed"]
-        if src["kind"] == "video":
-            self._section(E("ins_speed"))
-            self._chips([(v, f"{v:g}×") for v in (0.25, 0.5, 1.0, 1.5, 2.0, 3.0)],
-                        lambda: p["speed"], lambda v: ed._set_speed(v, undo=False), per_row=6)
-        self._section(E("ins_sound_fade"))
-        if src["kind"] == "video" and src["has_audio"]:
-            self._vol_slider(p, True, src)
-        self._fades(p, dur)
-        if src["kind"] == "video":
-            self._row([("🎞 " + (E("ins_revideo") if fx.g(p, "novideo") else E("ins_novideo")),
+        tabs = [("video", E("tab_ed_video"))]
+        if video and src["has_audio"]:
+            tabs.append(("audio", E("tab_ed_audio")))
+        if video and kind == "clip":
+            tabs.append(("speed", E("tab_ed_speed")))
+        if kind == "clip":
+            tabs.append(("anim", E("tab_ed_anim")))
+        tabs.append(("adjust", E("tab_ed_adjust")))
+        keys = [k for k, _ in tabs]
+        cur = self._tab.get(kind, "video")
+        if cur not in keys:
+            cur = "video"
+
+        def pick(k):
+            self._tab[kind] = k
+            self._rebuild(keep_scroll=False)
+        Tabs(self.tabbar, self.P, tabs, lambda: cur, pick, height=32).pack(fill="x", padx=2)
+        getattr(self, "_tab_" + cur)(kind, p, src)
+
+    def _tab_video(self, kind, p, src):
+        E, ed = self.E, self.ed
+        self._transform(kind, p)
+        if kind == "ovl":
+            self._section(E("ins_overlay"))
+            self._slider(E("ins_opacity"), 0.0, 1.0, lambda: float(p.get("op", 1.0)),
+                         self._setp(p, "op"), self._pct, 1.0)
+        self._section(E("ins_fades"))
+        self._fades(p, (p["e"] - p["s"]) / p.get("speed", 1.0))
+        if kind == "clip" and src["kind"] == "video":
+            self._row([("\U0001f39e " + (E("ins_revideo") if fx.g(p, "novideo") else E("ins_novideo")),
                         ed._toggle_novideo)])
-        if src["kind"] == "video" and src["has_audio"]:
-            self._afx(p, can_speed=True)
-        if ed.sel > 0:
+        if kind == "clip" and ed.sel > 0:
             self._section(E("ins_trans"))
             self._chips([(None, E("tr_none"))] + [(t, E("tr_" + t)) for t in fx.TRANSITIONS],
                         lambda: (p.get("tr") or {}).get("type"),
@@ -401,29 +636,147 @@ class Inspector(tk.Frame):
                     p["tr"] = dict(p["tr"], d=float(v))
             self._slider(E("ins_trans_d"), 0.2, 1.5, lambda: float((p.get("tr") or {}).get("d", 0.5)),
                          set_d, self._sec, 0.5)
-        self._look(p)
-        self._section(E("ins_transform"))
-        self._row([("⟳ 90°", ed._rotate), ("⇋ " + E("ins_flip"), ed._flip),
-                   ("⟲ " + E("ins_reset"), ed._reset_look)])
+        if kind == "ovl":
+            self._row([("\u2b07 " + E("ins_to_track"), ed._ovl_to_track), ("\U0001f5d1", ed._ovl_del)])
 
-    def _build_ovl(self, o):
+    def _transform(self, kind, p):
+        """Transform: Scale (повзунок + число), Position X / Y, Rotate."""
+        E, ed, P = self.E, self.ed, self.P
+        self._section(E("ins_transform2"))
+        cw, ch = getattr(ed, "_ccw", 1920), getattr(ed, "_cch", 1080)
+
+        def changed():
+            ed._prop_changed()
+            try:
+                ed._draw_tfbox()
+            except Exception:
+                pass
+
+        def setter(key):
+            def f(v):
+                ed._push_undo()
+                p[key] = float(v)
+                changed()
+                self.refresh_values()
+            return f
+
+        def set_zoom(v):
+            p["zoom"] = round(float(v), 3)
+            for n in self._nums:
+                n.redraw()
+            try:
+                ed._draw_tfbox()
+            except Exception:
+                pass
+        self._slider(E("ins_scale"), 0.1, 4.0, lambda: float(p.get("zoom", 1.0)), set_zoom, self._pct, 1.0)
+        row = tk.Frame(self.body, bg=P["bg2"])
+        row.pack(fill="x", padx=14, pady=(4, 2))
+        tk.Label(row, text=E("ins_position"), bg=P["bg2"], fg=P["text"], font=(P["font"], 9)).pack(side="left")
+        ny = NumField(row, P, "Y", lambda: float(p.get("ny", 0.0)) * ch,
+                      lambda v: setter("ny")(float(v) / ch), step=1)
+        ny.pack(side="right")
+        nx = NumField(row, P, "X", lambda: float(p.get("nx", 0.0)) * cw,
+                      lambda v: setter("nx")(float(v) / cw), step=1)
+        nx.pack(side="right", padx=(0, 8))
+        self._nums += [nx, ny]
+        if kind == "clip":
+            row2 = tk.Frame(self.body, bg=P["bg2"])
+            row2.pack(fill="x", padx=14, pady=(6, 2))
+            tk.Label(row2, text=E("ins_rotate"), bg=P["bg2"], fg=P["text"], font=(P["font"], 9)).pack(side="left")
+            rt = NumField(row2, P, "", lambda: float(p.get("ang", 0.0)),
+                          lambda v: setter("ang")(((float(v) + 180.0) % 360.0) - 180.0), step=1,
+                          fmt="{:.1f}\u00b0", lo=-360, hi=360)
+            rt.pack(side="right")
+            self._nums.append(rt)
+        self._row([("\u27f3 90\u00b0", ed._rotate), ("\u21cb " + E("ins_flip"), ed._flip),
+                   ("\u27f2 " + E("ins_reset"), ed._reset_look)])
+
+    def _tab_audio(self, kind, p, src):
+        E = self.E
+        self._section(E("ins_volume_x"))
+        self._vol_slider(p, True, src)
+        self._afx(p, can_speed=kind == "clip")
+
+    def _tab_speed(self, kind, p, src):
         E, ed = self.E, self.ed
-        src = ed.sources[o["src"]]
-        self.head.config(text="🎭  " + E("ins_overlay"))
-        self.sub.config(text=self._src_name(src))
-        self._section(E("ins_overlay"))
-        self._slider(E("ins_opacity"), 0.0, 1.0, lambda: float(o.get("op", 1.0)),
-                     self._setp(o, "op"), self._pct, 1.0)
-        if src["kind"] == "video" and src["has_audio"]:
-            self._vol_slider(o, True, src)
-        self._fades(o, o["e"] - o["s"])
-        if src["kind"] == "video" and src["has_audio"]:
-            self._afx(o, can_speed=False)
-        self._look(o)
-        self._section(E("ins_transform"))
-        self._row([("⟳ 90°", ed._rotate), ("⇋ " + E("ins_flip"), ed._flip),
-                   ("⟲ " + E("ins_reset"), ed._reset_look)])
-        self._row([("⬇ " + E("ins_to_track"), ed._ovl_to_track), ("🗑", ed._ovl_del)])
+        self._section(E("ins_speed"))
+        self._chips([(v, f"{v:g}\u00d7") for v in (0.25, 0.5, 1.0, 1.5, 2.0, 3.0)],
+                    lambda: p["speed"], lambda v: ed._set_speed(v, undo=False), per_row=6)
+
+        def set_sp(v):
+            v = max(0.1, round(float(v) * 20) / 20.0)
+            if abs(v - p["speed"]) > 1e-6:
+                ed._set_speed(v, undo=False)
+        self._slider(E("ins_speed_x"), 0.1, 5.0, lambda: float(p["speed"]), set_sp,
+                     lambda v: f"{v:.2f}\u00d7", 1.0)
+        dur = (p["e"] - p["s"]) / p["speed"]
+        tk.Label(self.body, text=E("ins_speed_dur", d=f"{dur:.1f}"), bg=self.P["bg2"], fg=self.P["muted"],
+                 anchor="w", font=(self.P["font"], 8)).pack(fill="x", padx=14, pady=(0, 4))
+
+    def _tab_adjust(self, kind, p, src):
+        self._look(p)
+
+    def _tab_anim(self, kind, p, src):
+        """Animation: In / Out / Combo, категорії і сітка плиток з живим прев'ю."""
+        E, ed, P = self.E, self.ed, self.P
+        slot = {"in": "ain", "out": "aout", "combo": "acombo"}
+
+        def set_kind(k):
+            self._akind = k
+            self._rebuild()
+        Tabs(self.body, P, [("in", E("anim_in")), ("out", E("anim_out")), ("combo", E("anim_combo"))],
+             lambda: self._akind, set_kind, height=30, seg=True).pack(fill="x", padx=12, pady=(10, 6))
+        cats = tk.Frame(self.body, bg=P["bg2"])
+        cats.pack(fill="x", padx=12, pady=(0, 6))
+        for i, c in enumerate(fx.ANIM_CATS):
+            on = c == self._acat
+            lab = tk.Label(cats, text=E("acat_" + c), bg=P["accent"] if on else P["dark"],
+                           fg="#ffffff" if on else P["text"], font=(P["font"], 8), padx=6, pady=2,
+                           cursor="hand2")
+            lab.grid(row=i // 3, column=i % 3, padx=2, pady=2, sticky="ew")
+            lab.bind("<Button-1>", lambda e, c=c: (setattr(self, "_acat", c), self._rebuild()))
+        for col in range(3):
+            cats.columnconfigure(col, weight=1, uniform="acat")
+        kind_ = self._akind
+        cur = (p.get(slot[kind_]) or {}).get("type")
+        table = fx.anim_table(kind_)
+        items = [(None, E("anim_none"))] + [(k, E("an_" + k)) for k, (cat, _e) in table.items()
+                                              if self._acat in ("all", cat)]
+
+        def pick(k):
+            ed._push_undo()
+            if k is None:
+                p[slot[kind_]] = None
+            else:
+                d = float((p.get(slot[kind_]) or {}).get("d", fx.ANIM_DEF_D))
+                p[slot[kind_]] = {"type": k, "d": d}      # новий словник (undo ділить старий)
+                if kind_ == "combo":                      # Combo замінює In/Out і навпаки
+                    p["ain"] = p["aout"] = None
+                else:
+                    p["acombo"] = None
+            ed._prop_changed()
+            self._rebuild()
+            try:
+                ed._anim_preview(p, kind_)
+            except Exception:
+                pass
+        grid = tk.Frame(self.body, bg=P["bg2"])
+        grid.pack(fill="x", padx=8, pady=(2, 4))
+        per = 4
+        for i, (k, lab) in enumerate(items):
+            AnimTile(grid, P, kind_, k, lab, pick, k == cur).grid(row=i // per, column=i % per, padx=3, pady=3)
+        if kind_ != "combo" and cur:
+            dur = (p["e"] - p["s"]) / p.get("speed", 1.0)
+
+            def set_d(v):
+                a = p.get(slot[kind_])
+                if a:
+                    p[slot[kind_]] = dict(a, d=round(float(v), 2))
+            self._slider(E("anim_dur"), 0.1, max(0.2, min(3.0, dur)),
+                         lambda: float((p.get(slot[kind_]) or {}).get("d", fx.ANIM_DEF_D)),
+                         set_d, self._sec, fx.ANIM_DEF_D)
+        tk.Label(self.body, text=E("anim_hint"), bg=P["bg2"], fg=P["muted"], anchor="w", justify="left",
+                 wraplength=self.W - 30, font=(P["font"], 8)).pack(fill="x", padx=14, pady=(4, 8))
 
     def _build_text(self, t):
         E, ed, P = self.E, self.ed, self.P

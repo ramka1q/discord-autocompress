@@ -34,6 +34,7 @@ import i18n
 import jokes
 import edit_fx as fx
 import edit_inspector
+import edit_media
 import media
 import ui
 
@@ -115,6 +116,14 @@ IMG_DUR = 4.0                # скільки секунд показувати 
 IMG_MAX = 3600.0             # стеля розтягування картинки
 
 
+EDITOR_PAL = {
+    "bg": "#181818", "panel": "#222222", "dark": "#141414",
+    "accent": "#1fb8c1", "accent_h": "#18a0a8", "accent2": "#5fd8de",
+    "text": "#e9e9e9", "muted": "#8f8f8f",
+    "green": "#2fbf7a", "red": "#ef5350", "warn": "#f0a742",
+}
+
+
 def E(key, **kw):
     """Переклад рядка редактора поточною мовою програми (раніше редактор був лише українською)."""
     return i18n.tr(host.LANG, key, **kw)
@@ -125,9 +134,9 @@ def _sync_theme():
     тож після зміни теми в меню редактор лишався у старих кольорах."""
     global C_BG, C_BG2, C_DARK, C_BLURPLE, C_BLURPLE_H, C_TEXT, C_MUTED, C_GREEN, C_RED
     global C_CLIP_SEL, C_ACC2
-    pal = themes.palette(host.THEME)
-    if pal.get("mono"):        # дизайн Moon редактор НЕ чіпає — лишається як був (кольори Discord)
-        pal = themes.palette("discord")
+    # редактор має СВІЙ вигляд (темно-сірі панелі + бірюзовий акцент, як у відеоредакторах),
+    # незалежно від теми меню
+    pal = EDITOR_PAL
     C_BG, C_BG2, C_DARK = pal["bg"], pal["panel"], pal["dark"]
     C_BLURPLE, C_BLURPLE_H = pal["accent"], pal["accent_h"]
     C_TEXT, C_MUTED, C_GREEN, C_RED = pal["text"], pal["muted"], pal["green"], pal["red"]
@@ -142,9 +151,9 @@ def _sync_theme():
         C_SND, C_OVL, C_TXT = "#3b3b39", "#2a2a28", "#55554f"
         C_WAVE_IN, C_SNAP, C_DROP = "#f5f5f2", "#ffffff", "#bdbdb8"
     else:
-        C_TRACK, C_LANE, C_RULER, C_CLIP = "#121317", "#1a1b20", "#0e0f12", "#2c2f37"
-        C_SND, C_OVL, C_TXT = "#33c27f", "#a77cf0", "#f0a742"
-        C_WAVE_IN, C_SNAP, C_DROP = "#dfe6ff", "#ffd23f", "#4cc9ff"
+        C_TRACK, C_LANE, C_RULER, C_CLIP = "#1c1c1c", "#232323", "#1c1c1c", "#18575c"
+        C_SND, C_OVL, C_TXT = "#2c8a78", "#6a58c4", "#b9822f"
+        C_WAVE_IN, C_SNAP, C_DROP = "#bff6f8", "#ffd23f", "#22c3cc"
 
 
 MONO = False
@@ -793,7 +802,10 @@ class VideoEditor(tk.Toplevel):
         P = {"bg2": C_BG2, "dark": C_DARK, "text": C_TEXT, "muted": C_MUTED,
              "accent": C_BLURPLE, "font": FONT, "mono": MONO}
         self._insp = edit_inspector.Inspector(self.mid, self, P, E)
-        self._insp_on = False        # права панель відкривається кнопкою ⚙ на панелі інструментів
+        self._insp_on = False        # права панель (кнопка ⚙ ховає / показує); відкрита одразу
+        # ліва панель: Медіа · Аудіо · Текст · Переходи · Фільтри
+        self._media = edit_media.MediaPanel(self.mid, self, P, E)
+        self._media.pack(side="left", fill="y", padx=(10, 0), pady=8)
         self.video = tk.Canvas(self.mid, width=self.VW + 2 * self.VPAD,
                                height=self.VH + 2 * self.VPAD, bg=C_BG, highlightthickness=0)
         self.video.pack(side="left", expand=True)
@@ -802,6 +814,7 @@ class VideoEditor(tk.Toplevel):
         self.video.bind("<B1-Motion>", self._video_motion)
         self.video.bind("<ButtonRelease-1>", self._video_release)
         self.video.bind("<Double-Button-1>", lambda e: self._tf_reset())
+        self.after(60, lambda: self._toggle_insp(True))
 
         # гарячі клавіші — по КОДУ клавіші (працюють і на укр/рус розкладці)
         self.bind("<KeyPress>", self._on_key)
@@ -860,9 +873,9 @@ class VideoEditor(tk.Toplevel):
     def _arm_resize(self):
         try:
             sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
-            W = max(760, min(sw - 60, 1440))
-            H = max(560, min(sh - 90, 940))
-            self.minsize(min(W, 980), min(H, 660))
+            W = max(760, min(sw - 60, 1600))
+            H = max(560, min(sh - 90, 960))
+            self.minsize(min(W, 1120), min(H, 660))
             self.geometry(f"{W}x{H}+{max(0, (sw - W) // 2)}+{max(0, (sh - H) // 2 - 30)}")
             self.mid.bind("<Configure>", self._on_resize)
         except tk.TclError:
@@ -925,7 +938,8 @@ class VideoEditor(tk.Toplevel):
             return
         if mw < 100 or mh < 100:
             return
-        avail_w = mw - (edit_inspector.Inspector.W + 12 if self._insp_on else 0) - 2 * self.VPAD - 28
+        avail_w = (mw - (edit_inspector.Inspector.W + 12 if self._insp_on else 0)
+                   - (edit_media.MediaPanel.W + 10 if getattr(self, "_media", None) else 0) - 2 * self.VPAD - 28)
         avail_h = mh - 2 * self.VPAD - 4
         vw = max(240, min(avail_w, int(avail_h * 16 / 9)))
         vh = max(135, int(vw * 9 / 16))
@@ -1483,6 +1497,8 @@ class VideoEditor(tk.Toplevel):
             cx = self._screen_origin()[0] + self._pcw / 2.0
             self.video.create_line(cx, self.VPAD, cx, self.VPAD + self.VH, fill=C_SNAP,
                                    dash=(4, 3), tags="tf")
+        if self._insp and self._insp_on:
+            self._insp.refresh_values()
         self._show_poster(self.cur)        # кадр підтягнеться (дебаунс 110мс)
 
     def _video_release(self, ev):
@@ -1510,7 +1526,8 @@ class VideoEditor(tk.Toplevel):
             self._redraw()
 
     def _is_transformed(self, p):
-        return p["zoom"] != 1.0 or p["nx"] != 0.0 or p["ny"] != 0.0
+        return (p["zoom"] != 1.0 or p["nx"] != 0.0 or p["ny"] != 0.0
+                or abs(float(p.get("ang", 0.0) or 0.0)) >= 0.05 or fx.has_anim(p))
 
     # ---- вибір об'єкта (кліп / накладка / текст / звук) ----
     def _sel_kind(self):
@@ -1609,12 +1626,108 @@ class VideoEditor(tk.Toplevel):
         self._push_undo()
         for k in ("flt", "br", "ct", "sat", "rot", "flip"):
             p[k] = fx.PIECE_DEFAULTS[k]
+        p["ang"] = 0.0
         if self.sel_ovl is None:
             p["zoom"], p["nx"], p["ny"] = 1.0, 0.0, 0.0
         self._prop_changed()
         self._draw_tfbox()
         if self._insp:
             self._insp.sync(force=True)
+
+    # ---- ліва панель (Медіа / Аудіо / Текст / Переходи / Фільтри) ----
+    def _media_pick(self, si):
+        """Клік по плитці медіа: вибрати перший кліп цього джерела (або накладку)."""
+        if self.busy:
+            return
+        for slot, ix in enumerate(self.order):
+            if self.pieces[ix]["src"] == si:
+                if self.playing:
+                    self._pause()
+                self._select(None)
+                self.sel = slot
+                p = self.pieces[ix]
+                self.cur = p["s"]
+                self._show_poster(self.cur)
+                self._redraw()
+                return
+        for i, o in enumerate(self.ovls):
+            if o["src"] == si:
+                self._select(("ovl", i))
+                self._redraw()
+                return
+        self._media_append(si)
+
+    def _media_append(self, si):
+        """Подвійний клік по плитці: це джерело ще раз — у кінець монтажу."""
+        if self.busy or not (0 <= si < len(self.sources)):
+            return
+        if self.playing:
+            self._pause()
+        src = self.sources[si]
+        self._push_undo()
+        e = IMG_DUR if src["kind"] == "image" else src["dur"]
+        self.pieces.append(self._new_piece(si, 0.0, e))
+        self.order.append(len(self.pieces) - 1)
+        self._select(None)
+        self.sel = len(self.order) - 1
+        self.cur = 0.0
+        self._show_poster(self.cur)
+        self._redraw()
+
+    def _media_pick_snd(self, i):
+        if 0 <= i < len(self.snds):
+            self._select(("snd", i))
+            self._redraw()
+
+    def _media_add_text(self, style, color):
+        self._add_text()
+        if self.sel_txt is not None and self.sel_txt < len(self.texts):
+            t = self.texts[self.sel_txt]
+            t["style"], t["color"] = style, color
+            self._show_poster(self.cur)
+            if self._insp:
+                self._insp.sync(force=True)
+            self.after(80, self._focus_text_box)
+
+    def _media_set_tr(self, slot, typ):
+        self._set_tr(slot, typ)
+        if self._insp:
+            self._insp.sync(force=True)
+        if self._media:
+            self._media.refresh(force=True)
+
+    def _media_set_flt(self, f):
+        if not self.order:
+            return
+        p = self._look_target()
+        if fx.g(p, "flt") == f:
+            return
+        self._push_undo()
+        p["flt"] = f
+        self._prop_changed()
+        if self._insp:
+            self._insp.sync(force=True)
+        if self._media:
+            self._media.refresh(force=True)
+
+    def _anim_preview(self, p, kind):
+        """Вибрали анімацію -> одразу показуємо, як вона виглядає (грає потрібний шматок)."""
+        if not self.order or self._sel_piece() is not p or self.busy:
+            return
+        slot = {"in": "ain", "out": "aout", "combo": "acombo"}[kind]
+        a = p.get(slot)
+        if not a:
+            return
+        sp = p["speed"]
+        d = float(a.get("d", fx.ANIM_DEF_D))
+        if kind == "out":
+            start = max(p["s"], p["e"] - (d + 0.6) * sp)
+            dur = p["e"] - start
+        else:
+            start = p["s"]
+            dur = min(p["e"] - p["s"], ((d + 0.9) if kind == "in" else 2.5) * sp)
+        self.cur = start
+        self._launch(start, dur)
 
     # ---- тексти (титри) ----
     def _add_text(self):
@@ -2631,6 +2744,11 @@ class VideoEditor(tk.Toplevel):
         self._update_tools()
         if self._insp:
             self._insp.sync()
+        if getattr(self, "_media", None) is not None:
+            try:
+                self._media.refresh()
+            except tk.TclError:
+                pass
 
     def _draw_ruler(self, c, W, pps):
         c.create_rectangle(LX, 0, W, RUL_H, fill=C_RULER, outline="")
@@ -4052,6 +4170,10 @@ class VideoEditor(tk.Toplevel):
         rem = cdur - off
         m0 = self._clip_layout_start(self.sel) + off     # монтажний час старту відтворення
         chain = [f"setpts=(PTS-STARTPTS)/{sp:g}", self._transform_vf(piece, cw, ch)]
+        self._uidn += 1
+        anim = fx.anim_vf(piece, cw, ch, 30, cdur, off, self._uidn)
+        if anim:
+            chain.append(anim)
         chain += fx.fade_win(-off, cdur - off, fx.g(piece, "fin"), fx.g(piece, "fout"), "v")
         parts = ["[in]" + ",".join(chain) + "[b0]"]
         vin = "[b0]"
@@ -4768,10 +4890,19 @@ class VideoEditor(tk.Toplevel):
             return ((pre + "," if pre else "") +
                     f"split=2[bg{u}][fg{u}];[bg{u}]scale={cw}:{ch}:force_original_aspect_ratio=increase,"
                     f"crop={cw}:{ch},boxblur=20:2,eq=brightness=-0.06[bb{u}];"
-                    f"[fg{u}]scale={sw}:{sh}[ff{u}];[bb{u}][ff{u}]overlay={x}:{y}")
+                    f"[fg{u}]scale={sw}:{sh}[ff{u}];[bb{u}][ff{u}]overlay={x}:{y}") + self._ang_vf(p)
         return ((pre + "," if pre else "") +
                 f"scale={sw}:{sh},pad={pw}:{ph}:{px}:{py}:black,"
-                f"crop={cw}:{ch}:{x0 + px}:{y0 + py}")
+                f"crop={cw}:{ch}:{x0 + px}:{y0 + py}") + self._ang_vf(p)
+
+    @staticmethod
+    def _ang_vf(p):
+        """Довільний поворот кадру (повзунок «Поворот» у правій панелі), градуси."""
+        a = float(p.get("ang", 0.0) or 0.0)
+        if abs(a) < 0.05:
+            return ""
+        return f",rotate={fx.num(a)}*PI/180:c=black"
+
 
     @staticmethod
     def _atempo(sp):
@@ -4806,8 +4937,10 @@ class VideoEditor(tk.Toplevel):
             afade = fx.fade_win(0.0, dd, fx.g(p, "fin"), fx.g(p, "fout"), "a")
             base = acc / total * 88.0
             span = dd / total * 88.0
+            self._uidn += 1
+            anim = fx.anim_vf(p, cw, ch, fps, dd, 0.0, self._uidn)
             if src["kind"] == "image":
-                vfi = ",".join([vf, "setsar=1"] + vfade)
+                vfi = ",".join([vf] + ([anim] if anim else []) + ["setsar=1"] + vfade)
                 cmd = ["ffmpeg", "-y", "-loop", "1", "-framerate", f"{fps:g}",
                        "-t", f"{dd:.3f}", "-i", src["path"],
                        "-f", "lavfi", "-t", f"{dd:.3f}", "-i", "anullsrc=r=44100:cl=stereo",
@@ -4820,7 +4953,7 @@ class VideoEditor(tk.Toplevel):
                 sp = p["speed"]
                 if sp != 1.0:
                     vf += f",setpts=PTS/{sp:g}"
-                vf = ",".join([vf, "setsar=1"] + vfade)
+                vf = ",".join([vf] + ([anim] if anim else []) + ["setsar=1"] + vfade)
                 vol = fx.g(p, "vol")
                 use_a = src["has_audio"] and not p["mute"] and vol > 0.005
                 cmd = ["ffmpeg", "-y", "-ss", f"{p['s']:.3f}", "-i", src["path"]]
@@ -5082,6 +5215,10 @@ class VideoEditor(tk.Toplevel):
                         chain.insert(0, self._gpu_prescale(src, p, cw, ch))
                     vol = fx.g(p, "vol")
                     use_a = src["has_audio"] and not p["mute"] and vol > 0.005
+                self._uidn += 1
+                anim = fx.anim_vf(p, cw, ch, fps, dd, 0.0, self._uidn)
+                if anim:
+                    chain.append(anim)
                 chain += [f"fps={fps:g}", f"trim=duration={dd:.3f}", "setpts=PTS-STARTPTS",
                           "setsar=1", "format=yuv420p", "settb=AVTB"] + vfade
                 fc.append(f"[{idx}:v]" + ",".join(chain) + f"[cv{i}]")

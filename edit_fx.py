@@ -64,7 +64,8 @@ def is_default(p):
 
 def look_default(p):
     """Колір/поворот без змін (кадр із кешу скрабу можна показувати як є)."""
-    return all(g(p, k) == PIECE_DEFAULTS[k] for k in ("flt", "br", "ct", "sat", "rot", "flip"))
+    return (all(g(p, k) == PIECE_DEFAULTS[k] for k in ("flt", "br", "ct", "sat", "rot", "flip"))
+            and abs(float(p.get("ang", 0.0) or 0.0)) < 0.05)
 
 
 # ------------------------------------------------------------ екранування -- #
@@ -339,3 +340,154 @@ def drawtext(t, cw, ch, font, txtfile, t0=None, t1=None, alpha_mul=1.0):
     elif alpha_mul < 0.999:
         parts.append(f"alpha={num(max(0.0, alpha_mul))}")
     return "drawtext=" + ":".join(parts)
+
+
+# ------------------------------------------------------------- анімації -- #
+# Анімація кліпа (як у CapCut: In / Out / Combo). Кожна — набір виразів ffmpeg від
+# u (прогрес 0..1 анімації In/Out) або T (секунди від початку кліпа, для Combo):
+#   S  — масштаб кадру (1 = як є),  X/Y — зсув у частках кадру,  A — поворот (рад),
+#   B  — яскравість (+1 = білий спалах),  F — видимість (0 = чорний, 1 = як є).
+# Ті самі рядки рахує і Python (живі прев'ю-плитки), тому в них лише функції,
+# що є і в ffmpeg, і в Python: sin cos exp pow min max abs clip if lt PI.
+ANIM_DEF_D = 0.6                 # тривалість In/Out за замовчуванням, с
+
+_E3 = "(1-pow(1-u,3))"           # ease-out cubic
+
+ANIMS_IN = {
+    # key: (категорія, {параметр: вираз від u})
+    "fade":        ("basic", {"F": "u"}),
+    "zoom_in":     ("basic", {"S": f"0.25+0.75*{_E3}", "F": "min(1,u*3)"}),
+    "zoom_out":    ("basic", {"S": f"1.7-0.7*{_E3}", "F": "min(1,u*2)"}),
+    "pop":         ("basic", {"S": "1+0.35*sin(u*PI)*(1-u)", "F": "min(1,u*4)"}),
+    "slide_left":  ("slide", {"X": f"-(1-{_E3})"}),
+    "slide_right": ("slide", {"X": f"(1-{_E3})"}),
+    "slide_up":    ("slide", {"Y": f"(1-{_E3})"}),
+    "slide_down":  ("slide", {"Y": f"-(1-{_E3})"}),
+    "drop":        ("slide", {"Y": "-(1-u)*abs(cos(u*PI*1.5))"}),
+    "spin":        ("spin", {"A": f"-PI*(1-{_E3})", "S": f"0.3+0.7*{_E3}", "F": "min(1,u*3)"}),
+    "swing":       ("spin", {"A": "0.6*(1-u)*cos(u*PI*3)"}),
+    "rock":        ("shake", {"A": "0.25*(1-u)*sin(u*PI*8)"}),
+    "shake":       ("shake", {"X": "0.06*(1-u)*sin(u*90)", "Y": "0.04*(1-u)*cos(u*70)"}),
+    "flash":       ("light", {"B": "pow(1-u,2)"}),
+    "blink":       ("light", {"F": "if(lt(u,0.25),0,if(lt(u,0.4),1,if(lt(u,0.55),0,1)))"}),
+}
+# Out — дзеркало In: той самий вираз, але u йде від 1 до 0 (кліп «зникає»)
+ANIMS_OUT = {k: v for k, v in ANIMS_IN.items()}
+ANIMS_COMBO = {
+    "pulse":    ("basic", {"S": "1+0.06*sin(T*PI*2/0.8)"}),
+    "kenburns": ("basic", {"S": "1+0.18*T/D"}),
+    "float":    ("slide", {"Y": "0.03*sin(T*2.4)"}),
+    "sway":     ("spin", {"A": "0.07*sin(T*3)"}),
+    "spin":     ("spin", {"A": "T*PI*2/3", "S": "0.8"}),
+    "shake":    ("shake", {"X": "0.012*sin(T*47)", "Y": "0.010*cos(T*53)"}),
+    "quake":    ("shake", {"X": "0.03*sin(T*61)*abs(sin(T*3))", "A": "0.03*sin(T*37)"}),
+    "flicker":  ("light", {"B": "0.18*abs(sin(T*13))*lt(sin(T*5),0)"}),
+    "strobe":   ("light", {"F": "if(lt(sin(T*PI*4),0),0.35,1)"}),
+}
+ANIM_CATS = ["all", "basic", "slide", "spin", "shake", "light"]
+
+
+def anim_table(kind):
+    return {"in": ANIMS_IN, "out": ANIMS_OUT, "combo": ANIMS_COMBO}[kind]
+
+
+def has_anim(p):
+    return bool(p.get("ain") or p.get("aout") or p.get("acombo"))
+
+
+def _expr_params(p, dur):
+    """Словник {S,X,Y,A,B,F: вираз від t (вихідний час кліпа від 0)} або {}."""
+    out = {}
+
+    def put(key, e, mode):
+        if key not in out:
+            out[key] = e
+        elif key in ("S", "F"):
+            out[key] = f"({out[key]})*({e})"
+        else:
+            out[key] = f"({out[key]})+({e})"
+    dur = max(0.05, float(dur))
+    for slot, table in (("ain", ANIMS_IN), ("aout", ANIMS_OUT)):
+        a = p.get(slot)
+        if not a or a.get("type") not in table:
+            continue
+        d = max(0.05, min(float(a.get("d", ANIM_DEF_D)), dur))
+        u = f"clip(t/{num(d)},0,1)" if slot == "ain" else f"clip(({num(dur)}-t)/{num(d)},0,1)"
+        for key, e in table[a["type"]][1].items():
+            put(key, "(" + e.replace("u", "(" + u + ")") + ")", slot)
+    a = p.get("acombo")
+    if a and a.get("type") in ANIMS_COMBO:
+        for key, e in ANIMS_COMBO[a["type"]][1].items():
+            put(key, "(" + e.replace("T", "(t)").replace("D", num(dur)) + ")", "combo")
+    return out
+
+
+def anim_vf(p, cw, ch, fps, dur, off=0.0, uid=0):
+    """Фільтр анімації для кадру cw×ch (ставиться ПІСЛЯ масштабу/позиції кліпа).
+    off — з якої секунди кліпа почалось відтворення (t у графі тоді рахується від 0).
+    Повертає рядок для вставки в ланцюжок через кому (може містити ; і мітки) або ''."""
+    ex = _expr_params(p, dur)
+    if not ex:
+        return ""
+    if off:
+        ex = {k: v.replace("(t)", f"(t+{num(off)})").replace("clip(t/", f"clip((t+{num(off)})/")
+              .replace(f"clip(({num(dur)}-t)", f"clip(({num(dur)}-(t+{num(off)}))")
+              for k, v in ex.items()}
+    q = lambda e: "'" + e + "'"
+    out = []
+    if "A" in ex:
+        out.append(f"rotate=a={q(ex['A'])}:ow=iw:oh=ih:c=black")
+    if "S" in ex:
+        # масштаб, що змінюється в часі: розмір кадру ПОСТІЙНИЙ (overlay не вміє міняти розмір
+        # на ходу). Збільшення > 1 — масштаб + обрізка по центру; зменшення < 1 — масштаб + поля.
+        s = ex["S"]
+        out.append(f"scale=w={q(f'trunc({cw}*max({s},1)/2)*2')}:h={q(f'trunc({ch}*max({s},1)/2)*2')}:eval=frame,"
+                   f"crop=w={cw}:h={ch}:x='(iw-ow)/2':y='(ih-oh)/2',"
+                   f"scale=w={q(f'max(2,trunc({cw}*min({s},1)/2)*2)')}:h={q(f'max(2,trunc({ch}*min({s},1)/2)*2)')}:eval=frame,"
+                   f"pad=w={cw}:h={ch}:x='(ow-iw)/2':y='(oh-ih)/2':eval=frame")
+    if "X" in ex or "Y" in ex:
+        lab = f"an{uid}"
+        x = f"({ex.get('X', '0')})*W"
+        y = f"({ex.get('Y', '0')})*H"
+        out.append(f"format=yuv420p[{lab}s];color=c=black:s={cw}x{ch}:r={num(fps)}[{lab}b];"
+                   f"[{lab}b][{lab}s]overlay=x={q(x)}:y={q(y)}:eval=frame:shortest=1")
+    if "B" in ex or "F" in ex:
+        b = ex.get("B", "0")
+        f = ex.get("F", "1")
+        # eq: Y' = (Y-0.5)*c + 0.5 + b.  c = F, b = 0.5F-0.5 (+B)  ->  Y' = F*Y (+B у бік білого)
+        out.append(f"eq=brightness={q(f'clip(({b})+0.5*({f})-0.5,-1,1)')}:"
+                   f"contrast={q(f'clip({f},0,2)')}:saturation={q(f'clip({f},0,3)')}:eval=frame")
+    return ",".join(out)
+
+
+# --- той самий вираз у Python (для живих плиток у панелі) ---
+def _clip(v, a, b):
+    return max(a, min(b, v))
+
+
+_PYENV = {"sin": math.sin, "cos": math.cos, "exp": math.exp, "pow": pow, "min": min, "max": max,
+          "abs": abs, "clip": _clip, "PI": math.pi, "trunc": math.trunc,
+          "lt": lambda a, b: 1.0 if a < b else 0.0, "if": None}
+
+
+def _py(expr, **vars_):
+    e = expr.replace("if(", "_if(")
+    env = dict(_PYENV, _if=lambda c, a, b: a if c else b, **vars_)
+    try:
+        return float(eval(e, {"__builtins__": {}}, env))
+    except Exception:
+        return 0.0
+
+
+def anim_sample(kind, key, x, dur=2.0):
+    """Значення (S,X,Y,A,B,F) анімації в момент x (In/Out: x = прогрес 0..1; Combo: секунди)."""
+    table = anim_table(kind)
+    if key not in table:
+        return 1.0, 0.0, 0.0, 0.0, 0.0, 1.0
+    ex = table[key][1]
+    if kind == "combo":
+        v = lambda k, d: _py(ex[k].replace("T", "(T)").replace("D", str(dur)), T=x) if k in ex else d
+    else:
+        u = x if kind == "in" else 1.0 - x
+        v = lambda k, d: _py(ex[k], u=u) if k in ex else d
+    return v("S", 1.0), v("X", 0.0), v("Y", 0.0), v("A", 0.0), v("B", 0.0), v("F", 1.0)

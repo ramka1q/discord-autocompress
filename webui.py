@@ -311,6 +311,11 @@ class Bridge:
 
     def act_nav_ack(self, a):
         self.nav_ack = a.get("id")
+        acks = getattr(self, "nav_acks", None)
+        if acks is None:
+            acks = self.nav_acks = []
+        acks.append(a.get("id"))
+        del acks[:-20]
 
     def act_ov_scene(self, a):
         m = self.overlay
@@ -1040,16 +1045,23 @@ def _show_main(hwnd, page):
         u32.SetForegroundWindow(hv)
 
 
-def _nav_and_show(bridge, hwnd, page, tab):
+def _nav_and_show(bridge, hwnd, page, tab, gen=None):
     """Перемикаємо сторінку і показуємо вікно ЛИШЕ після того, як вона відповіла
-    «готово» (уже намальована, назва й значок наші). Запас — 3 с (повільний ПК)."""
+    «готово» (уже намальована, назва й значок наші). Запас — 3 с (повільний ПК).
+    Якщо тим часом прийшов новіший запит (напр. меню, а за секунду «Що нового») —
+    цей застарів: нічого не робимо, інакше він розтягнув би вікно під чужу сторінку."""
+    if gen is not None and gen != _MAIN.get("gen"):
+        return
     nid = f"{page}-{time.monotonic():.4f}"
     bridge.set_vis("main", True)
-    bridge.nav_ack = None
     bridge.emit("nav", page=page, tab=tab or "", id=nid)
     t0 = time.monotonic()
-    while time.monotonic() - t0 < 3.0 and getattr(bridge, "nav_ack", None) != nid:
+    while time.monotonic() - t0 < 3.0 and nid not in (getattr(bridge, "nav_acks", None) or ()):
+        if gen is not None and gen != _MAIN.get("gen"):
+            return
         time.sleep(0.005)
+    if gen is not None and gen != _MAIN.get("gen"):
+        return
     _show_main(hwnd, page)
 
 
@@ -1068,6 +1080,7 @@ def open_page(watcher, page="menu", tab=None, gallery_hwnd=None):
     _watch_main(watcher)
     if page == "gallery":
         bridge.gallery_hwnd = gallery_hwnd
+    gen = _MAIN["gen"] = _MAIN.get("gen", 0) + 1          # лише останній запит показує вікно
     hwnd = _MAIN.get("hwnd") if _is_window(_MAIN.get("hwnd")) else None
     if hwnd is None:
         if not _MAIN.get("launching"):
@@ -1076,10 +1089,10 @@ def open_page(watcher, page="menu", tab=None, gallery_hwnd=None):
         def later():                     # перший раз: чекаємо, поки сховане вікно готове, і показуємо
             h = _find_main(12.0)
             if h:
-                _nav_and_show(bridge, h, page, tab)
+                _nav_and_show(bridge, h, page, tab, gen)
         threading.Thread(target=later, daemon=True).start()
         dc_core.dlog(f"webui open {page}: launching hidden window first")
         return True
-    threading.Thread(target=_nav_and_show, args=(bridge, hwnd, page, tab), daemon=True).start()
+    threading.Thread(target=_nav_and_show, args=(bridge, hwnd, page, tab, gen), daemon=True).start()
     dc_core.dlog(f"webui open {page}: shown")
     return True
