@@ -175,7 +175,7 @@ function benchHTML(res, at, enc) {
 
 // ---------- каркас меню ----------
 function renderMenu() {
-  document.title = "Discord Auto-Compress · Moon";
+  document.title = "Discord Auto-Compress";
   const [tk, sk] = HEADS[TAB] || HEADS.general;
   $("#app").innerHTML = `<header class="top"><div class="brand"><div class="logo">${LOGO}</div><h1>Discord Auto-Compress</h1><span class="vchip">v${esc(ST.version)}</span></div>
     <span class="label dim" style="margin-left:6px">${esc(released())}</span><div class="spacer"></div>
@@ -189,7 +189,7 @@ function renderMenu() {
 
 // ---------- галерея ----------
 function renderGallery() {
-  document.title = "My edits · Moon";
+  document.title = "Discord Auto-Compress";
   const items = ST.lib;
   $("#app").innerHTML = `<header class="top"><div class="brand"><div class="logo">${LOGO}</div><h1>${esc(T("lib_title"))}</h1><span class="vchip">${esc(ST.hotkey)}</span></div>
     <div class="spacer"></div><button class="btn" data-do="lib_folder">${esc(T("lib_folder"))}</button><button class="btn primary" data-do="open_editor" data-then="close">${esc(T("lib_new"))}</button></header>
@@ -203,7 +203,7 @@ function renderGallery() {
 
 // ---------- «Що нового» (вікно після оновлення) ----------
 function renderNews() {
-  document.title = "What's new · Moon";
+  document.title = "Discord Auto-Compress";
   let entries = ST.news.slice(0, 1), since = ST.news_since;
   if (since) { const i = ST.news.findIndex(e => e.v === since); if (i > 0) entries = ST.news.slice(0, i); else since = null; }
   const many = entries.length > 1, [d, t] = fmtDate(entries[0].date);
@@ -361,13 +361,19 @@ function sizeTxt(b) { return b >= 1048576 ? (b / 1048576).toFixed(1) + " МБ" :
 
 function onEvent(ev) {
   const k = ev.kind;
-  if (k === "ov") { if (PAGE === "overlay") { OVS = ev.scene; renderOverlay(); } return; }
+  if (k === "ov") {
+    if (PAGE === "overlay") { OVS = ev.scene; renderOverlay(); if (ev.scene && ev.scene.seq) setTimeout(() => act("ov_ack", { seq: ev.scene.seq }), 0); }
+    return;
+  }
   if (k === "nav") {                      // показ схованого вікна: інша сторінка / вкладка, свіжі дані
     if (PAGE === "overlay") return;
     PAGE = ev.page || "menu"; if (ev.tab) TAB = ev.tab;
-    document.title = { gallery: "My edits · Moon", news: "What's new · Moon" }[PAGE] || "Discord Auto-Compress · Moon";
+    document.title = { gallery: "Discord Auto-Compress", news: "Discord Auto-Compress" }[PAGE] || "Discord Auto-Compress";
     history.replaceState(null, "", "#" + PAGE + (PAGE === "menu" ? "/" + TAB : ""));
-    api("/api/state?page=" + PAGE).then(st => { ST = st; S = st.S; render(); });
+    api("/api/state?page=" + PAGE).then(st => {
+      ST = st; S = st.S; render();
+      setTimeout(() => act("nav_ack", { id: ev.id }), 0);    // намальовано — можна показувати вікно
+    }).catch(() => act("nav_ack", { id: ev.id }));
     return render();
   }
   if (k === "reload") return boot();
@@ -431,7 +437,7 @@ async function pollLoop() {
 async function boot() {
   const [p, t] = (location.hash.slice(1) || "menu").split("/");
   if (p === "overlay") { document.title = "DAC Overlay"; document.body.classList.add("ov"); }
-  else document.title = { gallery: "My edits · Moon", news: "What's new · Moon" }[p] || "Discord Auto-Compress · Moon";
+  else document.title = { gallery: "Discord Auto-Compress", news: "Discord Auto-Compress" }[p] || "Discord Auto-Compress";
   PAGE = ["menu", "gallery", "news", "overlay"].includes(p) ? p : "menu";
   if (t) TAB = t;
   ST = await api("/api/state?page=" + PAGE); S = ST.S;

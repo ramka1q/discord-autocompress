@@ -237,7 +237,7 @@ def have_ffmpeg() -> bool:
         return False
 
 
-BUILD = "2026-11-20-v3.2.6-hidden-main"   # маркер версії коду — щоб у логах бачити, чи юзер на новому коді
+BUILD = "2026-11-20-v3.2.7-ready-windows"   # маркер версії коду — щоб у логах бачити, чи юзер на новому коді
 
 
 def probe_diag(path: str) -> str:

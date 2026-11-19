@@ -28,8 +28,8 @@ WEB = os.path.join(HERE, "webui")
 PROFILE = os.path.join(os.environ.get("LOCALAPPDATA") or os.path.expanduser("~"),
                        "DiscordAutoCompress", "webview")
 # окремі заголовки веб-вікон (у Tk-меню заголовок «Discord Auto-Compress» — не плутати)
-TITLES = {"menu": "Discord Auto-Compress · Moon", "gallery": "My edits · Moon",
-          "news": "What's new · Moon"}
+TITLES = {"menu": "Discord Auto-Compress", "gallery": "Discord Auto-Compress",
+          "news": "Discord Auto-Compress"}
 TYPES = {".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8",
          ".js": "application/javascript; charset=utf-8", ".png": "image/png",
          ".ttf": "font/ttf", ".svg": "image/svg+xml", ".json": "application/json"}
@@ -282,6 +282,15 @@ class Bridge:
 
     def act_ov_drag(self, a):
         self._ov(lambda m: m.drag(a.get("dx", 0), a.get("dy", 0)))
+
+    def act_ov_ack(self, a):
+        try:
+            self.ov_ack = max(getattr(self, "ov_ack", 0), int(a.get("seq", 0)))
+        except (TypeError, ValueError):
+            pass
+
+    def act_nav_ack(self, a):
+        self.nav_ack = a.get("id")
 
     def act_ov_scene(self, a):
         m = self.overlay
@@ -764,7 +773,7 @@ def close_all():
         if n:
             buf = ctypes.create_unicode_buffer(n + 1)
             u32.GetWindowTextW(hwnd, buf, n + 1)
-            if buf.value in titles:
+            if buf.value in titles and _is_edge(hwnd):
                 found.append(hwnd)
         return True
     u32.EnumWindows(cb, 0)
@@ -835,6 +844,26 @@ _MAIN = {"proc": None, "hwnd": None, "launching": 0.0}
 SIZES = {"menu": (1180, 780), "gallery": (980, 700), "news": (620, 860)}
 
 
+def _is_edge(hwnd):
+    """Чи це вікно Edge (а не наше Tk-меню з тією ж назвою)."""
+    import ctypes
+    try:
+        pid = ctypes.c_ulong()
+        ctypes.windll.user32.GetWindowThreadProcessId(ctypes.c_void_p(hwnd), ctypes.byref(pid))
+        k = ctypes.windll.kernel32
+        k.OpenProcess.restype = ctypes.c_void_p
+        hp = k.OpenProcess(0x1000, False, pid.value)          # PROCESS_QUERY_LIMITED_INFORMATION
+        if not hp:
+            return False
+        buf = ctypes.create_unicode_buffer(520)
+        n = ctypes.c_ulong(520)
+        ok = k.QueryFullProcessImageNameW(ctypes.c_void_p(hp), 0, buf, ctypes.byref(n))
+        k.CloseHandle(ctypes.c_void_p(hp))
+        return bool(ok) and buf.value.lower().endswith("msedge.exe")
+    except Exception:
+        return False
+
+
 def _is_window(h):
     import ctypes
     return bool(h) and bool(ctypes.windll.user32.IsWindow(ctypes.c_void_p(h)))
@@ -855,6 +884,7 @@ def _launch_main(watcher):
     w, h = SIZES["menu"]
     args = [exe, f"--app={url}", f"--user-data-dir={PROFILE}", f"--window-size={w},{h}",
             "--window-position=-32000,-32000", "--no-first-run", "--no-default-browser-check",
+            "--disable-background-timer-throttling", "--disable-renderer-backgrounding", "--disable-backgrounding-occluded-windows",
             "--disable-features=Translate,msEdgeSidebarV2,msUndersideButton,msHubApps",
             "--disable-sync", "--force-dark-mode"]
     si = subprocess.STARTUPINFO()
@@ -886,7 +916,7 @@ def _find_main(wait=12.0):
             if n:
                 buf = ctypes.create_unicode_buffer(n + 1)
                 u32.GetWindowTextW(hwnd, buf, n + 1)
-                if buf.value in titles:
+                if buf.value in titles and _is_edge(hwnd):
                     found.append(hwnd)
             return True
         u32.EnumWindows(cb, 0)
@@ -956,6 +986,18 @@ def _show_main(hwnd, page):
         u32.SetForegroundWindow(hv)
 
 
+def _nav_and_show(bridge, hwnd, page, tab):
+    """Перемикаємо сторінку і показуємо вікно ЛИШЕ після того, як вона відповіла
+    «готово» (уже намальована, назва й значок наші). Запас — 3 с (повільний ПК)."""
+    nid = f"{page}-{time.monotonic():.4f}"
+    bridge.nav_ack = None
+    bridge.emit("nav", page=page, tab=tab or "", id=nid)
+    t0 = time.monotonic()
+    while time.monotonic() - t0 < 3.0 and getattr(bridge, "nav_ack", None) != nid:
+        time.sleep(0.005)
+    _show_main(hwnd, page)
+
+
 def open_page(watcher, page="menu", tab=None, gallery_hwnd=None):
     """Показує меню / галерею / «Що нового» у заздалегідь готовому вікні Edge.
     False — Edge немає (тоді викликач показує Tk-вікно)."""
@@ -979,15 +1021,10 @@ def open_page(watcher, page="menu", tab=None, gallery_hwnd=None):
         def later():                     # перший раз: чекаємо, поки сховане вікно готове, і показуємо
             h = _find_main(12.0)
             if h:
-                time.sleep(0.35)        # сторінка встигає завантажитись і поставити значок
-                bridge.emit("nav", page=page, tab=tab or "")
-                time.sleep(0.05)
-                _show_main(h, page)
+                _nav_and_show(bridge, h, page, tab)
         threading.Thread(target=later, daemon=True).start()
         dc_core.dlog(f"webui open {page}: launching hidden window first")
         return True
-    bridge.emit("nav", page=page, tab=tab or "")
-    time.sleep(0.04)                    # сторінка перемикається до показу — без мигання старого
-    _show_main(hwnd, page)
+    threading.Thread(target=_nav_and_show, args=(bridge, hwnd, page, tab), daemon=True).start()
     dc_core.dlog(f"webui open {page}: shown")
     return True

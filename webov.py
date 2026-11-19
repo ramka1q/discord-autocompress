@@ -52,21 +52,38 @@ def _find():
 
 
 def _style(hwnd):
-    """Без рамки й заголовка, без кнопки на панелі задач, завжди поверх."""
+    """Без кнопки на панелі задач (рамку Edge не чіпаємо — її ховає обрізка вікна в place)."""
     h = ctypes.c_void_p(hwnd)
     user32.GetWindowLongW.restype = ctypes.c_long
-    st = user32.GetWindowLongW(h, GWL_STYLE)
-    st &= ~(WS_CAPTION | WS_THICKFRAME | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX)
-    user32.SetWindowLongW(h, GWL_STYLE, st)
     ex = user32.GetWindowLongW(h, GWL_EXSTYLE)
-    user32.SetWindowLongW(h, GWL_EXSTYLE, (ex | WS_EX_TOOLWINDOW) & ~WS_EX_APPWINDOW)
-    try:      # заокруглені кути Windows 11 + темна рамка
-        dwm = ctypes.windll.dwmapi
-        for attr, val in ((33, 2), (20, 1), (34, 0x1a1a1a)):
-            v = ctypes.c_int(val)
-            dwm.DwmSetWindowAttribute(h, attr, ctypes.byref(v), ctypes.sizeof(v))
+    if not ex & WS_EX_TOOLWINDOW:
+        user32.SetWindowLongW(h, GWL_EXSTYLE, (ex | WS_EX_TOOLWINDOW) & ~WS_EX_APPWINDOW)
+    try:      # свої заокруглення робимо регіоном — системні вимикаємо
+        v = ctypes.c_int(1)
+        ctypes.windll.dwmapi.DwmSetWindowAttribute(h, 33, ctypes.byref(v), ctypes.sizeof(v))
     except Exception:
         pass
+
+
+class _RECT(ctypes.Structure):
+    _fields_ = [("l", ctypes.c_long), ("t", ctypes.c_long), ("r", ctypes.c_long), ("b", ctypes.c_long)]
+
+
+class _PT(ctypes.Structure):
+    _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+
+
+def _frame(hw):
+    """Скільки займає рамка/заголовок Edge: (зліва, зверху, справа, знизу)."""
+    h = ctypes.c_void_p(hw)
+    wr, cr, pt = _RECT(), _RECT(), _PT(0, 0)
+    user32.GetWindowRect(h, ctypes.byref(wr))
+    user32.GetClientRect(h, ctypes.byref(cr))
+    user32.ClientToScreen(h, ctypes.byref(pt))
+    dl, dt = pt.x - wr.l, pt.y - wr.t
+    dr = (wr.r - wr.l) - cr.r - dl
+    db = (wr.b - wr.t) - cr.b - dt
+    return max(0, dl), max(0, dt), max(0, dr), max(0, db)
 
 
 def prelaunch(watcher):
@@ -84,6 +101,7 @@ def prelaunch(watcher):
     os.makedirs(webui.PROFILE + "_ov", exist_ok=True)
     args = [exe, f"--app={url}", f"--user-data-dir={webui.PROFILE}_ov", "--window-size=460,452",
             "--window-position=-32000,-32000", "--no-first-run", "--no-default-browser-check",
+            "--disable-background-timer-throttling", "--disable-renderer-backgrounding", "--disable-backgrounding-occluded-windows",
             "--disable-features=Translate,msEdgeSidebarV2,msUndersideButton,msHubApps",
             "--disable-sync", "--force-dark-mode"]
     si = subprocess.STARTUPINFO()
@@ -114,17 +132,25 @@ def window(wait=6.0):
 
 
 def place(x, y, w, h, show=True, activate=False):
+    """Вміст (без заголовка Edge) рівно w×h у точці x,y; усе зайве обрізане регіоном
+    з заокругленими кутами — тож видно лише нашу картку, всі кнопки влазять."""
     hw = _st.get("hwnd") or _find()
     if not hw:
         return
+    hv = ctypes.c_void_p(hw)
     if show:
-        _style(hw)          # Edge міг повернути свій стиль — знову без рамки й без кнопки на панелі задач
-    if show and user32.IsIconic(ctypes.c_void_p(hw)):
-        user32.ShowWindow(ctypes.c_void_p(hw), 4)      # SW_SHOWNOACTIVATE — із згорнутого
-    fl = SWP_FRAMECHANGED | (SWP_SHOWWINDOW if show else SWP_HIDEWINDOW)
-    if not activate:
-        fl |= SWP_NOACTIVATE
-    user32.SetWindowPos(ctypes.c_void_p(hw), ctypes.c_void_p(HWND_TOPMOST), int(x), int(y), int(w), int(h), fl)
+        _style(hw)
+        if user32.IsIconic(hv):
+            user32.ShowWindow(hv, 4)      # SW_SHOWNOACTIVATE — із згорнутого
+    dl, dt, dr, db = _frame(hw)
+    fl = (SWP_SHOWWINDOW if show else SWP_HIDEWINDOW) | (0 if activate else SWP_NOACTIVATE)
+    W, H = int(w) + dl + dr, int(h) + dt + db
+    user32.SetWindowPos(hv, ctypes.c_void_p(HWND_TOPMOST), int(x) - dl, int(y) - dt, W, H, fl)
+    dl2, dt2, _r, _b = _frame(hw)          # після зміни розміру — точні відступи ще раз
+    gdi = ctypes.windll.gdi32
+    gdi.CreateRoundRectRgn.restype = ctypes.c_void_p
+    rgn = gdi.CreateRoundRectRgn(dl2, dt2, dl2 + int(w) + 1, dt2 + int(h) + 1, 52, 52)
+    user32.SetWindowRgn(hv, ctypes.c_void_p(rgn), True)
 
 
 def hide():
@@ -195,6 +221,9 @@ class Mirror:
         self.ov, self.b = ov, bridge
         self.last = None
         self.shown = False
+        self.seq = getattr(bridge, "ov_seq_base", 0) + 1000
+        bridge.ov_seq_base = self.seq
+        self.first_seq, self.first_t = None, 0.0
         self.bridge_cb()
         self.tick()
 
@@ -210,9 +239,17 @@ class Mirror:
             js = json.dumps(sc, ensure_ascii=False, sort_keys=True)
             if js != self.last:
                 self.last = js
+                self.seq += 1
+                sc["seq"] = self.seq
                 self.b.emit("ov", scene=sc)
+                if not self.shown and self.first_seq is None:
+                    self.first_seq, self.first_t = self.seq, time.monotonic()
+            # показуємо ЛИШЕ коли сторінка вже намалювала цей екран (вона відповідає «готово»),
+            # або через 1.5 с, якщо відповіді чомусь нема
+            ready = self.first_seq is not None and (
+                getattr(self.b, "ov_ack", 0) >= self.first_seq or time.monotonic() - self.first_t > 1.5)
             vis = getattr(ov, "_visible", True)       # Discord згорнули / перейшли в інше вікно
-            if vis and (not self.shown or sc["H"] != getattr(self, "_h", None)):
+            if vis and ready and (not self.shown or sc["H"] != getattr(self, "_h", None)):
                 self._h = sc["H"]
                 self.show()
             elif not vis and self.shown:
@@ -226,7 +263,7 @@ class Mirror:
         ov = self.ov
         if getattr(ov, "_visible", True) is False:
             return
-        place(ov._x, ov._y, ov.W, ov.H + 2, show=True)
+        place(ov._x, ov._y, ov.W, ov.H, show=True)
         self.shown = True
 
     def set_visible(self, on):
@@ -271,4 +308,4 @@ class Mirror:
         ov = self.ov
         ov._x += int(dx)
         ov._y += int(dy)
-        place(ov._x, ov._y, ov.W, ov.H + 2, show=True)
+        place(ov._x, ov._y, ov.W, ov.H, show=True)
