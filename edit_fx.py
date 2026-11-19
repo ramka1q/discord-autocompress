@@ -215,6 +215,23 @@ def gain_chain(vol):
     return out
 
 
+LIVE_STAGES = 23           # 23 × ≤38.6 dB = до +888 dB (кожна сходинка — у межах float)
+
+
+def live_stage(vol):
+    """Множник ОДНІЄЇ сходинки живої гучності: загальне vol = stage ** LIVE_STAGES."""
+    v = float(vol)
+    return 0.0 if v <= 0 else v ** (1.0 / LIVE_STAGES)
+
+
+def live_gain_af(vol):
+    """Гучність кліпа для програвача, яку можна міняти НА ХОДУ (af-command): x·gain, потім
+    жорстке обрізання до [-1, 1] — сходинками; при gain ≥ 1 це рівно один множник + обрізання."""
+    g = f"{live_stage(vol):.9g}"
+    st = ",".join(f"volume@lv{i}={g},asoftclip=type=hard" for i in range(LIVE_STAGES))
+    return f"@lgain:lavfi=[{st}]"
+
+
 # моно -> стерео БЕЗ втрати 3 dB (стандартне перетворення ffmpeg робить тихіше на 3 dB)
 UPMIX = "aformat=channel_layouts=mono|stereo,pan=stereo|FL=FL+FC|FR=FR+FC"
 

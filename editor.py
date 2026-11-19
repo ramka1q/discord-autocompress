@@ -513,6 +513,11 @@ class VideoEditor(tk.Toplevel):
         self._mpv_resume = None      # пауза посеред програвання -> продовжити миттєво
         self._mpv_warmed = False
         self._mpv_win = None
+        self._spec_live = None       # гучність кліпа «наживо» (окремий фільтр mpv) або None
+        self._mpv_live = None        # яка жива гучність зараз стоїть у mpv
+        self._mpv_live_g = None      # множник однієї сходинки, що зараз реально діє
+        self._mpv_play_lav = None    # граф, який зараз грає (щоб зрозуміти «змінилась лише гучність»)
+        self._ramp_gen = 0
         self._scr = None             # другий, легкий mpv: кадр на паузі ЗА повзунком (6–30 мс)
         self._scr_win = None
         self._scr_src = None
@@ -1464,6 +1469,14 @@ class VideoEditor(tk.Toplevel):
         """Якщо зараз грає — перезапускаємо ffplay з ТОГО Ж місця з новими налаштуваннями
         (з затримкою: поки тягнеш повзунок, не перезапускаємо на кожен піксель)."""
         if not self.playing:
+            return
+        if self._mpv_live_volume():        # змінилась лише гучність — плавно, без перезапуску
+            if getattr(self, "_replay_after", None):
+                try:
+                    self.after_cancel(self._replay_after)
+                except Exception:
+                    pass
+                self._replay_after = None
             return
         if getattr(self, "_replay_after", None):
             try:
@@ -3935,7 +3948,7 @@ class VideoEditor(tk.Toplevel):
             acc += self._gapof(q) + (q["e"] - q["s"]) / q["speed"]
         return acc + self._gapof(self.pieces[self.order[slot]])
 
-    def _play_graph(self, piece, start):
+    def _play_graph(self, piece, start, gain=True):
         """(-vf, -af|None, a_ok) для ffplay: швидкість, колір, масштаб, фейди, накладки,
         тексти і додані звуки — на тому ж часі, що й у готовому файлі."""
         sp = piece["speed"]
@@ -3984,7 +3997,7 @@ class VideoEditor(tk.Toplevel):
         a_ok = src["kind"] == "video" and src["has_audio"]
         if not a_ok:
             return vf, None, False
-        vol = 0.0 if piece["mute"] else fx.g(piece, "vol")
+        vol = (0.0 if piece["mute"] else fx.g(piece, "vol")) if gain else 1.0
         ach = ["asetpts=PTS-STARTPTS"] + ([self._atempo(sp)] if sp != 1.0 else [])
         ach += fx.audio_chain(piece, vol, fx.fade_win(-off, cdur - off, fx.g(piece, "fin"),
                                                fx.g(piece, "fout"), "a"))
@@ -4159,10 +4172,15 @@ class VideoEditor(tk.Toplevel):
                 return None
             return ";".join([base] + parts + [f"[a0]{''.join(labs)}amix=inputs={len(labs) + 1}:"
                                               f"duration=first:normalize=0[ao]"])
+        self._spec_live = None
         if src["kind"] == "image":         # картинку показує постер; mpv грає лише додані звуки
             a = sounds(f"[aid1]atrim=0:{rem:.3f},asetpts=PTS-STARTPTS[a0]")
             return ("av://lavfi:anullsrc=r=44100:cl=stereo", a, True) if a else None
-        vf, af, a_ok = self._play_graph(piece, start)
+        # без доданих звуків гучність кліпа — окремим «живим» фільтром mpv: її можна міняти
+        # під час програвання плавно, без перезапуску (як на SlowWave)
+        live = src["kind"] == "video" and src["has_audio"] and not self._snd_play_parts(m0, rem)[1]
+        self._spec_live = (0.0 if piece["mute"] else fx.g(piece, "vol")) if live else None
+        vf, af, a_ok = self._play_graph(piece, start, gain=not live)
         lav = vf.replace("[in]", "[vid1]", 1).replace("[out]", "[vo]")
         if a_ok and af:
             lav += ";" + af.replace("[in]", "[aid1]", 1).replace("[out]", "[ao]")
@@ -4189,8 +4207,11 @@ class VideoEditor(tk.Toplevel):
         if spec is None:
             return False
         path, lav, audio_only = spec
-        key = (self.sel, round(start, 3), self._edit_gen, bool(self._rec), lav)
+        live = self._spec_live
+        key = (self.sel, round(start, 3), self._edit_gen, bool(self._rec), lav, live)
         try:
+            if self._mpv_key != key:
+                self._mpv_set_live(live)
             if self._mpv_key == key:         # уже підготовлено на паузі -> миттєво
                 m.set("mute", bool(self._rec))
                 m.play()
@@ -4207,11 +4228,68 @@ class VideoEditor(tk.Toplevel):
         self._mpv_mode = True
         self._mpv_started = False
         self._mpv_audio_only = audio_only
+        self._mpv_play_lav = lav
         self._ffplay = None
         self._play_fx = True
         self._play_sp = piece["speed"]
         if not audio_only:
             self._mpv_show()
+        return True
+
+    def _mpv_set_live(self, vol):
+        """Ставить (без плавності) живу гучність кліпа у mpv перед завантаженням."""
+        self._ramp_gen += 1
+        m = self._mpv
+        if m is None:
+            return
+        if vol == self._mpv_live and getattr(self, "_mpv_af_set", False):
+            self._mpv_live_g = None if vol is None else fx.live_stage(vol)
+            return                           # те саме — не перебудовуємо звук (це коштує часу)
+        self._mpv_af_set = True
+        try:
+            m.set("af", fx.live_gain_af(vol) if vol is not None else "")
+        except Exception as e:
+            dc_core.dlog("MPV af fail " + repr(e))
+        self._mpv_live = vol
+        self._mpv_live_g = None if vol is None else fx.live_stage(vol)
+
+    def _mpv_live_volume(self):
+        """Змінилась ЛИШЕ гучність кліпа, що грає -> плавно (25 мс) доводимо її до нової,
+        без перезапуску і без клацання. True — зроблено, перезапуск не потрібен."""
+        m = self._mpv
+        if (m is None or not self.playing or not self._mpv_mode or self._mpv_live is None
+                or self._mpv_live_g is None or not self.order):
+            return False
+        p = self._sel_piece()
+        try:
+            spec = self._mpv_spec(p, self._play_start)
+        except Exception:
+            return False
+        if spec is None or self._spec_live is None or spec[1] != self._mpv_play_lav:
+            return False
+        target = fx.live_stage(self._spec_live)
+        self._mpv_live = self._spec_live
+        self._ramp_gen += 1
+        gen = self._ramp_gen
+        g0 = self._mpv_live_g
+
+        def ramp():
+            t0 = time.monotonic()
+            while gen == self._ramp_gen and self._mpv is m:
+                k = math.exp(-(time.monotonic() - t0) / 0.025)   # стала часу 25 мс
+                g = target + (g0 - target) * k
+                if k < 0.01:
+                    g = target
+                try:
+                    m.command("af-command", "lgain", "volume", f"{g:.9g}")
+                except Exception:
+                    return
+                self._mpv_live_g = g
+                if g == target:
+                    return
+                time.sleep(0.004)
+        threading.Thread(target=ramp, daemon=True).start()
+        dc_core.dlog(f"MPV live volume -> {fx.vol_label(self._spec_live)}")
         return True
 
     def _mpv_try_resume(self):
@@ -4268,10 +4346,11 @@ class VideoEditor(tk.Toplevel):
         if spec is None:
             return
         path, lav, audio_only = spec
-        key = (self.sel, round(start, 3), self._edit_gen, bool(self._rec), lav)
+        key = (self.sel, round(start, 3), self._edit_gen, bool(self._rec), lav, self._spec_live)
         if key == self._mpv_key:
             return
         try:
+            self._mpv_set_live(self._spec_live)
             m.load(path, start=0.0 if audio_only else start, lavfi=lav, paused=True, mute=bool(self._rec))
         except Exception:
             return
