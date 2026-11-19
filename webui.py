@@ -35,6 +35,15 @@ TYPES = {".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8",
          ".ttf": "font/ttf", ".svg": "image/svg+xml", ".json": "application/json"}
 
 _srv = {"obj": None}
+_ICON = {"png": None}
+
+
+def _icon_png():
+    """Значок програми PNG (рахується один раз, далі з пам'яті — щоб він був миттєво)."""
+    if _ICON["png"] is None:
+        import appicon
+        _ICON["png"] = appicon._png_bytes(256)
+    return _ICON["png"]
 CRLF = bytes((13, 10))
 CRLF2 = CRLF + CRLF
 
@@ -641,8 +650,7 @@ class _Req:
         if self.method == "GET":
             if path in ("/icon.png", "/favicon.ico"):      # значок програми (вкладка/панель задач)
                 try:
-                    import appicon
-                    return self.send(200, appicon._png_bytes(256), "image/png", cache=True)
+                    return self.send(200, _icon_png(), "image/png", cache=True)
                 except Exception:
                     return self.send(404, {"err": "icon"})
             if path in ("/", "/index.html"):
@@ -721,6 +729,7 @@ def start(watcher):
     sock.listen(32)
     port = sock.getsockname()[1]
     threading.Thread(target=_serve, args=(sock, bridge), daemon=True).start()
+    threading.Thread(target=_icon_png, daemon=True).start()      # значок готуємо заздалегідь
     _srv["obj"] = (bridge, port)
     dc_core.dlog(f"webui server on {port}")
     return _srv["obj"]
@@ -770,6 +779,44 @@ def close_all():
             p.terminate()
     except Exception:
         pass
+
+
+def _dress_window(port, title):
+    """Щойно Edge створить вікно — одразу наша назва й наш значок (а не «планетка» і адреса)."""
+    import ctypes
+    u32 = ctypes.windll.user32
+    mark = f"127.0.0.1:{port}"
+    try:
+        import appicon
+        ico = appicon.ico_path()
+        u32.LoadImageW.restype = ctypes.c_void_p
+        hbig = u32.LoadImageW(None, ico, 1, 32, 32, 0x10)        # IMAGE_ICON, LR_LOADFROMFILE
+        hsmall = u32.LoadImageW(None, ico, 1, 16, 16, 0x10)
+    except Exception:
+        hbig = hsmall = None
+    t0 = time.monotonic()
+    done = False
+    while time.monotonic() - t0 < 6 and not done:
+        found = []
+
+        @ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+        def cb(hwnd, _):
+            n = u32.GetWindowTextLengthW(hwnd)
+            if n:
+                buf = ctypes.create_unicode_buffer(n + 1)
+                u32.GetWindowTextW(hwnd, buf, n + 1)
+                if mark in buf.value or buf.value == title:
+                    found.append(hwnd)
+            return True
+        u32.EnumWindows(cb, 0)
+        for h in found:
+            if title:
+                u32.SetWindowTextW(ctypes.c_void_p(h), title)
+            if hbig:
+                u32.SendMessageW(ctypes.c_void_p(h), 0x0080, 1, ctypes.c_void_p(hbig))     # WM_SETICON big
+                u32.SendMessageW(ctypes.c_void_p(h), 0x0080, 0, ctypes.c_void_p(hsmall))   # small
+            done = True
+        time.sleep(0.005)
 
 
 def _focus(hwnd):
@@ -822,5 +869,6 @@ def open_page(watcher, page="menu", tab=None, gallery_hwnd=None):
     except OSError as e:
         dc_core.dlog("webui edge launch fail " + repr(e))
         return False
+    threading.Thread(target=_dress_window, args=(port, TITLES.get(page, "")), daemon=True).start()
     dc_core.dlog(f"webui open {page} {tab or ''}")
     return True
