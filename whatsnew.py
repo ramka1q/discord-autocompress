@@ -96,15 +96,21 @@ class WhatsNew(tk.Toplevel):
                           fill=ui.darken(P["bg"], t), outline="")
         ui.round_rect(c, 2, 2, W - 4, H - 8, 28, fill=P["bg"],
                       outline=ui.mix(P["bg"], P["text"], 0.10), tags="drag")
+        sky = ui.sky(c, "sky_card_wide.png") if ui.is_mono(P) else None
+        if sky:
+            c.create_image(W - 2, 0, image=sky, anchor="ne", tags=("drag", "skyimg"))
+            ui.animate_sky(c, ui.sky_frames(c, "sky_card_wide.png"),
+                           lambda im: c.itemconfigure("skyimg", image=im))
         # м'яке кольорове сяйво зверху
         glow = ui.mix(P["accent"], ui.accent2(P), 0.5)
-        for i in range(12, 0, -1):
+        for i in range(12 if not sky else 0, 0, -1):
             t = i / 12.0
             rx, ry = 200 * t + 30, 110 * t + 20
             c.create_oval(W / 2 - rx, 70 - ry, W / 2 + rx, 70 + ry, outline="",
                           fill=ui.mix(P["bg"], glow, 0.16 * (1 - t) ** 1.4 + 0.01), tags="drag")
         c.create_rectangle(0, 0, W, 2, fill=KEY, outline="")
-        ui.grad_round_rect(c, 30, 3, W - 32, 7, 2, P["accent"], ui.accent2(P))
+        if not sky:
+            ui.grad_round_rect(c, 30, 3, W - 32, 7, 2, P["accent"], ui.accent2(P))
         # хрестик
         cx, cy = W - 34, 30
         c.create_oval(cx - 14, cy - 14, cx + 14, cy + 14, fill=P["bg"], outline="", tags=("x", "xbg"))
@@ -125,8 +131,8 @@ class WhatsNew(tk.Toplevel):
             sub = self.T("wn_sub_many", n=len(self.entries))
         else:
             title, sub = self.T("wn_title", v=self.entry["v"]), self.T("wn_sub", d=d, t=t)
-        self._title = c.create_text(self.W / 2, 160, text=title,
-                                    fill=P["bg"], font=(F, 19, "bold"))
+        self._title = c.create_text(self.W / 2, 160, text=title, fill=P["bg"],
+                                    font=ui.title_font(title, 19) if ui.is_mono(P) else (F, 19, "bold"))
         self._sub = c.create_text(self.W / 2, 190, text=sub,
                                   fill=P["bg"], font=(F, 10))
 

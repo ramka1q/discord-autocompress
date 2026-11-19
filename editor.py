@@ -130,6 +130,19 @@ def _sync_theme():
     C_TEXT, C_MUTED, C_GREEN, C_RED = host.C_TEXT, host.C_MUTED, host.C_GREEN, host.C_RED
     C_CLIP_SEL = host.C_BLURPLE
     C_ACC2 = ui.accent2(themes.palette(host.THEME))
+    global C_TRACK, C_LANE, C_RULER, C_CLIP, C_SND, C_OVL, C_WAVE_IN, C_SNAP, C_DROP, C_TXT, MONO
+    MONO = bool(themes.palette(host.THEME).get("mono"))
+    if MONO:      # дизайн Moon: доріжка без кольорів — лише чорний, білий і сірий
+        C_TRACK, C_LANE, C_RULER, C_CLIP = "#000000", "#0a0a0a", "#000000", "#161616"
+        C_SND, C_OVL, C_TXT = "#3b3b39", "#2a2a28", "#55554f"
+        C_WAVE_IN, C_SNAP, C_DROP = "#f5f5f2", "#ffffff", "#bdbdb8"
+    else:
+        C_TRACK, C_LANE, C_RULER, C_CLIP = "#121317", "#1a1b20", "#0e0f12", "#2c2f37"
+        C_SND, C_OVL, C_TXT = "#33c27f", "#a77cf0", "#f0a742"
+        C_WAVE_IN, C_SNAP, C_DROP = "#dfe6ff", "#ffd23f", "#4cc9ff"
+
+
+MONO = False
 
 
 C_ACC2 = C_BLURPLE
@@ -193,6 +206,16 @@ class PillBtn(tk.Canvas):
         else:
             fill, fg = self._fill, self._fg
         r = self._h // 2 - 1
+        if MONO and self._fill == C_BLURPLE:       # головна кнопка Moon: чорна, біла рамка + світіння
+            dis = self._state != "normal"
+            if not dis:
+                ui.glow_round(self, 4, 4, w - 4, self._h - 4, r - 4,
+                              ((2, "#141414"), (4, "#0b0b0b")) if self._hover else ((2, "#0f0f0f"), (4, "#070707")))
+            ui.round_rect(self, 4, 4, w - 4, self._h - 4, r - 4, fill="#000000",
+                          outline="#3d3d3d" if dis else "#ffffff")
+            self.create_text(w / 2, self._h / 2, text=self._txt, fill="#5d5d5b" if dis else "#ffffff",
+                             font=(FONT, self._fs, "bold"))
+            return
         if self._state == "normal" and self._fill == C_BLURPLE:
             a1, a2 = (ui.lighten(C_BLURPLE, 0.12), ui.lighten(C_ACC2, 0.12)) if self._hover \
                 else (C_BLURPLE, C_ACC2)
@@ -342,6 +365,17 @@ class IconBtn(tk.Canvas):
             return
         s = self._size
         dis = self._state != "normal"
+        if self._accent and MONO:     # Play у Moon: кругла чорна, біла рамка, обідок і світіння
+            if self._round:
+                for rr, col in ((0, "#060606"), (2, "#0b0b0b"), (4, "#121212")):
+                    self.create_oval(1 + rr, 1 + rr, s - 1 - rr, s - 1 - rr, fill=col, outline="")
+                k = 7
+                self.create_oval(k, k, s - k, s - k, fill="#161616" if self._hover else "#000000",
+                                 outline="#5d5d5b" if dis else "#ffffff", width=1.5)
+            off = 1 if (self._down and not dis) else 0
+            self.create_text(s / 2 + 1, s / 2 + off, text=self._icon, fill="#5d5d5b" if dis else "#ffffff",
+                             font=(FONT, self._fs - 2))
+            return
         if self._accent:
             fill = C_DARK if dis else C_BLURPLE
             if not dis and self._down:
@@ -722,7 +756,7 @@ class VideoEditor(tk.Toplevel):
         tb = tk.Frame(self, bg=C_BG, height=50)
         tb.pack(side="bottom", fill="x")
         tb.pack_propagate(False)
-        self.time_lbl = tk.Label(tb, text="", bg=C_BG, fg=C_TEXT, font=("Consolas", 11, "bold"))
+        self.time_lbl = tk.Label(tb, text="", bg=C_BG, fg=C_TEXT, font=(themes.MONO_FONT, 11, "bold"))
         self.time_lbl.pack(side="left", padx=16)
         IconBtn(tb, "⛶", self._toggle_max, tip=E("ed_tt_max"), fs=13).pack(side="right", padx=14)
         mid = tk.Frame(tb, bg=C_BG)
@@ -738,8 +772,37 @@ class VideoEditor(tk.Toplevel):
         # ---- плеєр: канвас ШИРШИЙ за екран (поля VPAD) -> рамку масштабу видно й за кадром ----
         self.mid = tk.Frame(self, bg=C_BG)
         self.mid.pack(side="top", fill="both", expand=True)
+        if MONO:      # темний заголовок вікна Windows (і чорний колір рамки на Windows 11)
+            def _dark():
+                try:
+                    hwnd = ctypes.windll.user32.GetParent(self.winfo_id()) or self.winfo_id()
+                    dwm = ctypes.windll.dwmapi
+                    for attr, val in ((20, 1), (35, 0x000000), (34, 0x1a1a1a)):
+                        v = ctypes.c_int(val)
+                        dwm.DwmSetWindowAttribute(hwnd, attr, ctypes.byref(v), ctypes.sizeof(v))
+                except Exception:
+                    pass
+            self.after(30, _dark)
+        if MONO:      # Moon: місяць з променями справа вгорі, за плеєром
+            frames = ui.sky_frames(self.mid, "sky_editor.png")
+            sky = frames[0] if frames else None
+            self._sky = sky
+
+            def _set_sky(im):
+                self._sky = im
+                if getattr(self, "_sky_lbl", None):
+                    self._sky_lbl.configure(image=im)
+                try:
+                    self.video.itemconfigure("sky", image=im)
+                except (tk.TclError, AttributeError):
+                    pass
+            ui.animate_sky(self.mid, frames, _set_sky)
+            if sky:
+                self._sky_lbl = tk.Label(self.mid, image=sky, bd=0, bg=C_BG)
+                self._sky_lbl.place(relx=1.0, y=0, anchor="ne")
+                self._sky_lbl.lower()
         P = {"bg2": C_BG2, "dark": C_DARK, "text": C_TEXT, "muted": C_MUTED,
-             "accent": C_BLURPLE, "font": FONT}
+             "accent": C_BLURPLE, "font": FONT, "mono": MONO}
         self._insp = edit_inspector.Inspector(self.mid, self, P, E)
         self._insp_on = False        # права панель відкривається кнопкою ⚙ на панелі інструментів
         self.video = tk.Canvas(self.mid, width=self.VW + 2 * self.VPAD,
@@ -795,8 +858,9 @@ class VideoEditor(tk.Toplevel):
         m = 10
         c.create_polygon(
             host._rr_pts(self.VPAD - m, self.VPAD - m,
-                         self.VPAD + self.VW + m, self.VPAD + self.VH + m, 14),
-            smooth=True, fill=C_BG2, outline="", tags="card")
+                         self.VPAD + self.VW + m, self.VPAD + self.VH + m, 22 if MONO else 14),
+            smooth=True, fill="#050505" if MONO else C_BG2, outline="#1a1a1a" if MONO else "",
+            tags="card")
         c.create_rectangle(self.VPAD, self.VPAD, self.VPAD + self.VW,
                            self.VPAD + self.VH, fill="#000000", outline=C_DARK,
                            tags="screen")
@@ -823,9 +887,25 @@ class VideoEditor(tk.Toplevel):
             except Exception: pass
         self._rs_after = self.after(90, self._apply_resize)
 
+    def _draw_sky(self):
+        """Moon: той самий місяць і на канвасі плеєра — зсунутий так, щоб збігся з тим, що
+        за ним у вікні (без швів)."""
+        sky = getattr(self, "_sky", None)
+        if not sky or self._closed:
+            return
+        try:
+            c = self.video
+            c.delete("sky")
+            c.create_image(self.mid.winfo_width() - c.winfo_x(), -c.winfo_y(), image=sky,
+                           anchor="ne", tags="sky")
+            c.tag_lower("sky")
+        except tk.TclError:
+            pass
+
     def _apply_resize(self):
         """Плеєр займає все вільне місце між верхньою панеллю, правою панеллю і таймлайном."""
         self._rs_after = None
+        self.after(40, self._draw_sky)
         try:
             mw, mh = self.mid.winfo_width(), self.mid.winfo_height()
         except tk.TclError:

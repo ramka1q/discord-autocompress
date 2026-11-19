@@ -1,5 +1,16 @@
 {
   "files": [
+    "assets/sky_head.png",
+    "assets/sky_editor.png",
+    "assets/sky_card_wide.png",
+    "assets/sky_card.png",
+    "fonts/OFL.txt",
+    "fonts/Manrope-Regular.ttf",
+    "fonts/Manrope-Bold.ttf",
+    "fonts/JetBrainsMono-Regular.ttf",
+    "fonts/JetBrainsMono-Bold.ttf",
+    "fonts/InstrumentSerif-Italic.ttf",
+    "fonts/Cormorant-Italic.ttf",
     "dc_core.py",
     "discord_overlay.py",
     "themes.py",

@@ -10,6 +10,16 @@ changelog.py — версія програми та список змін по �
 REPO_URL = "https://github.com/ramka1q/discord-autocompress"
 
 CHANGES = [
+    {"v": "3.1", "date": "2026-11-19 19:40", "items": [
+        {"icon": "🌙", "tab": "appearance",
+         "uk": ("Новий дизайн Moon", "Чорне тло, білий і сірий без кольорів, місяць з променями справа вгорі — він ледь плаває, промені гойдаються. Скляні кнопки, нові перемикачі й повзунки."),
+         "ru": ("Новый дизайн Moon", "Чёрный фон, белый и серый без цветов, луна с лучами справа вверху — она слегка плавает, лучи покачиваются. Стеклянные кнопки, новые переключатели и ползунки."),
+         "en": ("New Moon design", "Black background, only white and grey, a moon with light rays in the top-right that gently drifts and sways. Glass buttons, new toggles and sliders.")},
+        {"icon": "🔤", "tab": "appearance",
+         "uk": ("Нові шрифти", "Заголовки — Instrument Serif курсивом, текст — Manrope, підписи й цифри — JetBrains Mono. Шрифти вбудовані, нічого ставити не треба. Старі теми — у «Вигляді»."),
+         "ru": ("Новые шрифты", "Заголовки — Instrument Serif курсивом, текст — Manrope, подписи и цифры — JetBrains Mono. Шрифты встроены, ничего ставить не нужно. Старые темы — в «Виде»."),
+         "en": ("New fonts", "Titles in Instrument Serif italic, text in Manrope, labels and numbers in JetBrains Mono. Fonts are built in, nothing to install. Old themes are under Appearance.")},
+    ]},
     {"v": "3.0.4", "date": "2026-11-19 18:20", "items": [
         {"icon": "⟳", "tab": "updates",
          "uk": ("Видно, що качається", "«Оновити» одразу пише, скільки оновлених файлів і скільки МБ буде скачано (і програвач, якщо його ще нема), і качає тільки змінені файли."),

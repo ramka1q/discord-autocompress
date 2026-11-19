@@ -61,6 +61,90 @@ def accent2(P):
     return P.get("accent2") or lighten(P["accent"], 0.3)
 
 
+# ------------------------------------------------------- дизайн Moon --- #
+def is_mono(P):
+    return bool(P and P.get("mono"))
+
+
+def _latin(text):
+    return all(ord(ch) < 0x250 or not ch.isalpha() for ch in str(text))
+
+
+def title_font(text, size, P=None):
+    """Великі заголовки: Instrument Serif курсив (кирилиця — Cormorant курсив)."""
+    if P is not None and not is_mono(P):
+        return (FONT, size, "bold")
+    if _latin(text):
+        return (themes.SERIF_LAT, int(size * 1.45), "italic")
+    return (themes.SERIF_CYR, int(size * 1.4), "italic")
+
+
+def tag_font(size=9):
+    """Дрібні підписи секцій ВЕЛИКИМИ ЛІТЕРАМИ: JetBrains Mono, жирність 600."""
+    return (themes.MONO_FONT, size, "bold")
+
+
+def tag_text(text):
+    return str(text).upper()
+
+
+_SKY = {}
+SKY_FRAMES = 12
+
+
+def sky_frames(widget, name="sky_head.png"):
+    """Кадри фону «місяць + промені» (смужка PNG з assets/ -> SKY_FRAMES картинок).
+    Порожній список — картинки немає (тоді просто без місяця)."""
+    key = (name, str(widget.winfo_toplevel().tk))
+    fr = _SKY.get(key)
+    if fr is None:
+        import os
+        p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", name)
+        fr = []
+        try:
+            st = tk.PhotoImage(master=widget, file=p)
+            w, h = st.width() // SKY_FRAMES, st.height()
+            for k in range(SKY_FRAMES):
+                im = tk.PhotoImage(master=widget, width=w, height=h)
+                im.tk.call(im, "copy", st, "-from", k * w, 0, (k + 1) * w, h)
+                fr.append(im)
+            del st
+        except (tk.TclError, OSError, ZeroDivisionError):
+            fr = []
+        _SKY[key] = fr
+    return fr
+
+
+def sky(widget, name="sky_head.png"):
+    fr = sky_frames(widget, name)
+    return fr[0] if fr else None
+
+
+def animate_sky(widget, frames, setter, ms=150):
+    """Місяць ледь плаває, промені гойдаються: по колу міняємо кадри (лише зміна картинки —
+    майже не навантажує). Зупиняється сам, коли віджет закрито."""
+    if not frames:
+        return
+    st = {"k": 0}
+
+    def tick():
+        try:
+            if not widget.winfo_exists():
+                return
+            st["k"] = (st["k"] + 1) % len(frames)
+            setter(frames[st["k"]])
+            widget.after(ms, tick)
+        except tk.TclError:
+            pass
+    widget.after(ms, tick)
+
+
+def glow_round(c, x1, y1, x2, y2, r, steps=((3, "#0f0f0f"), (6, "#0a0a0a"), (9, "#060606")), tags=()):
+    """Імітація світіння навколо кнопки (білий 6–12% на чорному): кільця назовні."""
+    for d, col in reversed(steps):
+        round_rect(c, x1 - d, y1 - d, x2 + d, y2 + d, r + d, fill=col, outline="", tags=tags)
+
+
 # ------------------------------------------------------------- геометрія --- #
 def rr_pts(x1, y1, x2, y2, r):
     """Точки заокругленого прямокутника для create_polygon(..., smooth=True)."""
@@ -283,6 +367,13 @@ class Button(tk.Canvas):
         if self._state != "normal":
             round_rect(self, 1, 1, w - 1, h - 1, r, fill=P["dark"], outline="")
             fg = mix(P["muted"], P["dark"], 0.35)
+        elif self.kind == "primary" and P.get("mono"):
+            # головна: чорна, рамка 1 px чисто біла, обідок 3 px і біле світіння навколо
+            g = ((3, "#141414"), (6, "#0c0c0c"), (9, "#070707")) if self._hover else                 ((3, "#0f0f0f"), (5, "#090909"), (7, "#050505"))
+            m = 7
+            glow_round(self, m, m + off, w - m, h - m + off, r - m, g)
+            round_rect(self, m, m + off, w - m, h - m + off, r - m, fill="#000000", outline="#ffffff")
+            fg = "#ffffff"
         elif self.kind == "primary":
             a1, a2 = P["accent"], accent2(P)
             if self._hover:
@@ -299,6 +390,13 @@ class Button(tk.Canvas):
             c = lighten(P["green"], 0.1) if self._hover else P["green"]
             round_rect(self, 1, 1 + off, w - 1, h - 1, r, fill=c, outline="")
             fg = ink(c)
+        elif P.get("mono"):  # звичайна кнопка Moon: радіус 12, фон білий 6%, рамка білий 24%
+            up = 1 if self._hover and not self._down else 0     # при наведенні «піднімається»
+            round_rect(self, 1, 1 + off - up, w - 1, h - 1 + off - up, min(12, r), 
+                       fill="#151515" if self._hover else P.get("btn_fill", "#0f0f0f"),
+                       outline="#5a5a5a" if self._hover else P.get("btn_line", "#3d3d3d"))
+            fg = P["text"]
+            off -= up
         else:  # ghost
             base = P.get("card", P["panel"])
             c = mix(base, P["accent"], 0.18) if self._hover else base
@@ -402,6 +500,15 @@ class Toggle(tk.Canvas):
         self.delete("all")
         off = mix(P["dark"], P["muted"], 0.35)
         t = self._pos
+        if P.get("mono"):   # біла доріжка з чорною кнопкою (увімкнено) / темна з сірою (вимкнено)
+            tr = mix("#262626", "#f4f4f4", t)
+            round_rect(self, 1, 1, self.W - 1, self.H - 1, self.H / 2 - 1, fill=tr,
+                       outline=mix("#3a3a3a", "#f4f4f4", t))
+            R = self.H / 2 - 4
+            cx = 4 + R + t * (self.W - 8 - 2 * R)
+            cy = self.H / 2
+            self.create_oval(cx - R, cy - R, cx + R, cy + R, fill=mix("#9a9a9a", "#050505", t), outline="")
+            return
         if t > 0.5:
             grad_round_rect(self, 1, 1, self.W - 1, self.H - 1, self.H / 2 - 1,
                             mix(off, P["accent"], t), mix(off, accent2(P), t))
@@ -584,8 +691,18 @@ class Slider(tk.Canvas):
         y = 15
         x1, x2 = 10, self._len - 10
         t = (self._val() - self.lo) / float(max(1, self.hi - self.lo))
-        round_rect(self, x1, y - 3, x2, y + 3, 3, fill=P["dark"], outline="")
         xv = x1 + t * (x2 - x1)
+        if P.get("mono"):   # доріжка 2 px: пройдене біле, решта білий 20%; ручка 15 px з обідком і світінням
+            self.create_line(x1, y, x2, y, fill="#333333", width=2, capstyle="round")
+            if xv > x1 + 1:
+                self.create_line(x1, y, xv, y, fill="#ffffff", width=2, capstyle="round")
+            for rr, col in ((14, "#0b0b0b"), (12, "#1c1c1c"), (10, "#3a3a3a")):
+                self.create_oval(xv - rr, y - rr, xv + rr, y + rr, fill=col, outline="")
+            self.create_oval(xv - 7.5, y - 7.5, xv + 7.5, y + 7.5, fill="#ffffff", outline="")
+            self.create_text(x2 + 18, y, anchor="w", text=self.fmt(int(self._val())),
+                             fill=P["text"], font=(themes.MONO_FONT, 10, "bold"))
+            return
+        round_rect(self, x1, y - 3, x2, y + 3, 3, fill=P["dark"], outline="")
         if xv > x1 + 4:
             grad_round_rect(self, x1, y - 3, xv, y + 3, 3, P["accent"], accent2(P), step=1)
         self.create_oval(xv - 9, y - 9, xv + 9, y + 9, fill="#ffffff",
@@ -603,9 +720,10 @@ class Card(tk.Frame):
         except tk.TclError:
             pbg = P["bg"]
         super().__init__(parent, bg=pbg)
-        self.P, self.pad, self.radius = P, pad, radius
+        self.P, self.pad, self.radius = P, pad, (22 if P.get("mono") else radius)
         self.fill = fill or P.get("card", P["panel"])
-        self.outline = outline if outline is not None else mix(self.fill, P["text"], 0.07)
+        self.outline = outline if outline is not None else (
+            P.get("line") or mix(self.fill, P["text"], 0.07))
         self.cv = tk.Canvas(self, bg=pbg, highlightthickness=0, height=10)
         self.cv.pack(fill="both", expand=True)
         self.body = tk.Frame(self.cv, bg=self.fill)
@@ -700,6 +818,18 @@ def logo(c, x, y, s, P=None, tags=()):
     """Значок програми — ТОЙ САМИЙ, що в треї/на ярлику (appicon: синій заокруглений
     квадрат зі стрілкою в «диск»), просто потрібного розміру. P лишено для сумісності."""
     s = int(s)
+    if is_mono(P):          # Moon: чорний квадрат з білою рамкою і білою стрілкою в «лоток»
+        ids = [round_rect(c, x, y, x + s, y + s, s * 0.28, fill="#000000", outline="#f5f5f2",
+                          width=max(1, s / 28), tags=tags)]
+        lw = max(1.5, s / 13)
+        cx = x + s / 2
+        ids.append(c.create_line(cx, y + s * .22, cx, y + s * .6, fill="#f5f5f2", width=lw,
+                                 capstyle="round", tags=tags))
+        ids.append(c.create_line(cx - s * .17, y + s * .45, cx, y + s * .62, cx + s * .17, y + s * .45,
+                                 fill="#f5f5f2", width=lw, capstyle="round", joinstyle="round", tags=tags))
+        ids.append(c.create_line(x + s * .25, y + s * .74, x + s * .75, y + s * .74, fill="#f5f5f2",
+                                 width=lw, capstyle="round", tags=tags))
+        return ids[0]
     img = _LOGO_CACHE.get(s)
     if img is None:
         try:

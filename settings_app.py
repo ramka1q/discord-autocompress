@@ -51,7 +51,7 @@ class SettingsApp:
         self.on_restart = on_restart
         self.on_editor, self.on_gallery = on_editor, on_gallery   # редактор / «Мої монтажі»
         self.lang = self.cfg.get("lang", "en")
-        self.P = themes.palette(self.cfg.get("theme", "discord"))
+        self.P = themes.palette(self.cfg.get("theme", "mono"))
         self._or_active = True
         # якщо чогось бракує (ffmpeg) — одразу відкриваємо вкладку «Встановлення»
         self._active_tab = tab or ("general" if deps.all_ok() else "setup")
@@ -96,7 +96,7 @@ class SettingsApp:
         self.v_notify = tk.BooleanVar(w, c.get("notify_done", True))
         self.v_encoder = tk.StringVar(w, c.get("encoder", "auto"))
         self._sound_file = c.get("sound_file", "")                # свій .wav звук (пусто = звук Windows)
-        self.v_theme = tk.StringVar(w, c.get("theme", "discord"))
+        self.v_theme = tk.StringVar(w, c.get("theme", "mono"))
         self.v_lang = tk.StringVar(w, c.get("lang", "en"))
         for v in (self.v_target, self.v_auto, self.v_block, self.v_paste, self.v_audio,
                   self.v_cv, self.v_ci, self.v_ca, self.v_keep, self.v_shrink, self.v_sound,
@@ -180,7 +180,10 @@ class SettingsApp:
     def _card(self, parent, title=None, sub=None, pady=(0, 14)):
         card = ui.Card(parent, self.P, pad=18)
         card.pack(fill="x", pady=pady)
-        if title:
+        if title and ui.is_mono(self.P):        # підпис секції: JetBrains Mono ВЕЛИКИМИ
+            tk.Label(card.body, text=ui.tag_text(title), bg=card.fill, fg=self.P["text"],
+                     font=ui.tag_font(9), anchor="w", justify="left").pack(anchor="w")
+        elif title:
             self._lbl(card.body, title, size=12, bold=True).pack(anchor="w")
         if sub:
             self._lbl(card.body, sub, size=9, muted=True, wrap=self._content_w() - 60)\
@@ -237,15 +240,21 @@ class SettingsApp:
         title = tk.Canvas(self.win, bg=P["title_bg"], height=46, highlightthickness=0)
         title.pack(fill="x")
         ui.logo(title, 16, 11, 24, P, tags="drag")
-        title.create_text(50, 23, text=self.T("app_title"), anchor="w", fill=P["text"],
-                          font=(F, 11, "bold"), tags="drag")
-        tw = ui.measure(title, self.T("app_title"), 11)
-        vx = 50 + tw + 10
+        mono = ui.is_mono(P)
+        tf = ui.title_font(self.T("app_title"), 11, P)
+        tid_ = title.create_text(50, 23, text=self.T("app_title"), anchor="w", fill=P["text"],
+                                 font=tf, tags="drag")
+        bb = title.bbox(tid_)
+        vx = bb[2] + 10
         vtxt = f"v{APP_VERSION}"
-        vw = ui.measure(title, vtxt, 8) + 14
-        ui.grad_round_rect(title, vx, 15, vx + vw, 31, 8, P["accent"], ui.accent2(P), tags="drag")
-        title.create_text(vx + vw / 2, 23, text=vtxt, fill=ui.ink(P["accent"]),
-                          font=(F, 8, "bold"), tags="drag")
+        vf = ui.tag_font(8) if mono else (F, 8, "bold")
+        vw = int(title.tk.call("font", "measure", vf, vtxt)) + 14
+        if mono:
+            ui.round_rect(title, vx, 14, vx + vw, 32, 9, fill="#000000", outline=P["btn_line"], tags="drag")
+        else:
+            ui.grad_round_rect(title, vx, 15, vx + vw, 31, 8, P["accent"], ui.accent2(P), tags="drag")
+        title.create_text(vx + vw / 2, 23, text=vtxt, fill=P["text"] if mono else ui.ink(P["accent"]),
+                          font=vf, tags="drag")
         title.create_text(vx + vw + 10, 23, text=self._released(), anchor="w", fill=P["muted"],
                           font=(F, 8), tags="drag")
         title.tag_bind("drag", "<Button-1>", self._drag_start)
@@ -377,18 +386,49 @@ class SettingsApp:
                   "gpu": ("tab_gpu", "st_gpu_sub"),
                   "whatsnew": ("tab_whatsnew", "st_whatsnew_sub")}
         tkey, skey = titles[key]
-        head = tk.Frame(self.content, bg=self.P["bg"])
-        head.pack(fill="x", padx=30, pady=(24, 14))
-        self._lbl(head, self.T(tkey), size=19, bold=True).pack(anchor="w")
-        if skey:
-            self._lbl(head, self.T(skey), size=10, muted=True, wrap=self._content_w())\
-                .pack(anchor="w", pady=(2, 0))
+        if ui.is_mono(self.P):
+            self._moon_head(self.T(tkey), self.T(skey) if skey else "")
+        else:
+            head = tk.Frame(self.content, bg=self.P["bg"])
+            head.pack(fill="x", padx=30, pady=(24, 14))
+            self._lbl(head, self.T(tkey), size=19, bold=True).pack(anchor="w")
+            if skey:
+                self._lbl(head, self.T(skey), size=10, muted=True, wrap=self._content_w())\
+                    .pack(anchor="w", pady=(2, 0))
         self.scroll = ui.ScrollArea(self.content, self.P["bg"])
         self.scroll.pack(fill="both", expand=True, padx=(30, 6), pady=(0, 12))
         f = tk.Frame(self.scroll.inner, bg=self.P["bg"])
         f.pack(fill="both", expand=True, padx=(0, 18))
         getattr(self, "_tab_" + key)(f)
         tk.Misc.tkraise(self._toast_cv)
+
+    def _moon_head(self, title, sub):
+        """Шапка сторінки в дизайні Moon: місяць з променями справа вгорі, заголовок
+        Instrument Serif курсивом, підзаголовок сірим."""
+        P = self.P
+        H = 132
+        cv = tk.Canvas(self.content, height=H, bg=P["bg"], highlightthickness=0)
+        cv.pack(fill="x")
+        frames = ui.sky_frames(cv, "sky_head.png")
+        img = frames[0] if frames else None
+        ui.animate_sky(cv, frames, lambda im: cv.itemconfigure("sky", image=im))
+
+        def draw(_e=None):
+            try:
+                cv.delete("all")
+            except tk.TclError:
+                return
+            w = max(300, cv.winfo_width())
+            if img:
+                cv.create_image(w, 0, image=img, anchor="ne", tags="sky")
+            cv.create_text(30, 26, text=ui.tag_text(self.T("app_title")), anchor="nw",
+                           fill=P["dim"], font=ui.tag_font(8))
+            cv.create_text(28, 42, text=title, anchor="nw", fill=P["text"],
+                           font=ui.title_font(title, 24))
+            if sub:
+                cv.create_text(30, 98, text=sub, anchor="nw", fill=P["muted"], font=(F, 10),
+                               width=max(200, w - 330))
+        cv.bind("<Configure>", draw)
 
     # ===== Загальне =====
     def _tab_general(self, f):
@@ -404,6 +444,24 @@ class SettingsApp:
             except tk.TclError:
                 return
             w = max(200, hero.winfo_width())
+            if ui.is_mono(P):     # Moon: чорна панель з тонкою рамкою, без кольору
+                ui.round_rect(hero, 1, 1, w - 1, 123, 22, fill=P["card"], outline=P["line"])
+                hero.create_line(24, 2, w - 24, 2, fill="#0f0f0f")
+                for i in range(5):
+                    r = 36 + i * 20
+                    hero.create_oval(w - 70 - r, 62 - r, w - 70 + r, 62 + r,
+                                     outline=ui.mix(P["card"], "#ffffff", 0.05 + 0.02 * (4 - i)), width=1)
+                ui.logo(hero, w - 102, 30, 64, P)
+                hero.create_text(24, 18, text=self.T("st_ready"), anchor="nw", fill=P["text"],
+                                 font=ui.title_font(self.T("st_ready"), 15))
+                hero.create_text(24, 68, text=self.T("st_ready_body", mb=f"{self.v_target.get():g}"),
+                                 anchor="w", fill=P["muted"], font=(F, 9), width=w - 170)
+                if d.get("files"):
+                    u, g = self.T("unit_mb"), self.T("unit_gb")
+                    hero.create_text(24, 104, anchor="w", fill=P["text"], font=ui.tag_font(8),
+                                     text=self.T("st_ready_stats", files=d.get("files", 0),
+                                                 saved=stats.fmt_mb(d.get("saved_mb", 0.0), u, g)).upper())
+                return
             ui.grad_round_rect(hero, 0, 0, w, 124, 18, ui.mix(P["card"], P["accent"], 0.55),
                                ui.mix(P["card"], ui.accent2(P), 0.55))
             for i in range(6):   # декоративні кола
@@ -626,7 +684,7 @@ class SettingsApp:
         c = self._card(f, self.T("theme_title"))
         grid = tk.Frame(c, bg=c.cget("bg")); grid.pack(anchor="w")
         for i, name in enumerate(themes.order()):
-            self._theme_tile(grid, name).grid(row=0, column=i, padx=(0, 12))
+            self._theme_tile(grid, name).grid(row=0, column=i, padx=(0, 10))
 
         c = self._card(f, self.T("lang_title"))
         ui.Segmented(c, [(code, i18n.LANG_NAMES[code]) for code in i18n.LANGS], self.v_lang, P,
@@ -636,7 +694,7 @@ class SettingsApp:
         """Мініатюра теми: маленьке вікно-оверлей у кольорах цієї теми."""
         pal = themes.palette(name)
         sel = name == self.v_theme.get()
-        w, h = 128, 120
+        w, h = 104, 112
         cv = tk.Canvas(parent, width=w, height=h + 24, bg=parent.cget("bg"),
                        highlightthickness=0, cursor="hand2")
         cv._hover = False
@@ -1317,7 +1375,7 @@ class SettingsApp:
     def _replay_news(self):
         try:
             import whatsnew
-            whatsnew.WhatsNew(self.win, self.lang, self.cfg.get("theme", "discord"),
+            whatsnew.WhatsNew(self.win, self.lang, self.cfg.get("theme", "mono"),
                               on_open_tab=lambda tab: self._show_tab(tab))
         except Exception as e:
             dc_core.dlog("whatsnew replay FAILED: " + repr(e))
@@ -1353,7 +1411,7 @@ class SettingsApp:
             c["sound_file"] = self._sound_file
         except AttributeError:
             pass
-        c["theme"] = self.cfg.get("theme", "discord")
+        c["theme"] = self.cfg.get("theme", "mono")
         c["lang"] = self.cfg.get("lang", "en")
         return c
 

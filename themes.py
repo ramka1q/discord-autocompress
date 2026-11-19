@@ -7,7 +7,32 @@ Doki Doki (рожева пастель), Frutiger Aero (скляна блаки�
 Тільки стандартна бібліотека — жодних залежностей.
 """
 
-FONT = "Segoe UI"
+import os as _os
+
+
+def _load_fonts():
+    """Шрифти дизайну Mono лежать у fonts/ поруч із програмою — підключаємо їх лише для
+    цього процесу (FR_PRIVATE), нічого в систему не ставимо. True — вийшло."""
+    d = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "fonts")
+    try:
+        import ctypes
+        add = ctypes.windll.gdi32.AddFontResourceExW
+        n = 0
+        for f in ("Manrope-Regular.ttf", "Manrope-Bold.ttf", "JetBrainsMono-Regular.ttf",
+                  "JetBrainsMono-Bold.ttf", "InstrumentSerif-Italic.ttf", "Cormorant-Italic.ttf"):
+            p = _os.path.join(d, f)
+            if _os.path.exists(p) and add(ctypes.c_wchar_p(p), 0x10, 0):
+                n += 1
+        return n >= 4
+    except Exception:
+        return False
+
+
+_HAVE = _load_fonts()
+FONT = "Manrope" if _HAVE else "Segoe UI"                 # звичайний текст, кнопки
+MONO_FONT = "JetBrains Mono" if _HAVE else "Consolas"     # підписи ВЕЛИКИМИ, цифри, час
+SERIF_LAT = "Instrument Serif" if _HAVE else "Georgia"    # великі заголовки (латиниця)
+SERIF_CYR = "Cormorant Italic DAC" if _HAVE else "Georgia"  # ті самі заголовки кирилицею
 
 # ключі палітри:
 #   bg       — головне тло вікна
@@ -25,6 +50,19 @@ FONT = "Segoe UI"
 #   card     — тло карток у меню / оверлеї
 
 THEMES = {
+    "mono": {          # дизайн Moon (3.1): лише чорний, білий і сірий; «колір» = біле світіння
+        "name": "Moon",
+        "mono": True,
+        "bg": "#000000", "panel": "#0a0a0a", "dark": "#000000",
+        "accent": "#f5f5f2", "accent_h": "#ffffff",
+        "text": "#f5f5f2", "muted": "#9b9b98", "dim": "#5d5d5b",
+        "green": "#f5f5f2", "red": "#f5f5f2", "warn": "#d8d8d4",
+        "header": "#f5f5f2", "sidebar": "#000000", "title_bg": "#000000",
+        "accent2": "#8a8a8a", "card": "#050505",
+        "line": "#1a1a1a",        # рамка панелей: білий 10% на чорному
+        "btn_line": "#3d3d3d",    # рамка кнопок: білий 24%
+        "btn_fill": "#0f0f0f",    # фон кнопок: білий 6%
+    },
     "discord": {
         "name": "Discord",
         "bg": "#313338", "panel": "#2b2d31", "dark": "#1e1f22",
@@ -63,7 +101,7 @@ THEMES = {
     },
 }
 
-DEFAULT = "discord"
+DEFAULT = "mono"
 
 
 def palette(name: str) -> dict:
@@ -73,4 +111,4 @@ def palette(name: str) -> dict:
 
 def order() -> list:
     """Порядок тем для меню."""
-    return ["discord", "midnight", "dokidoki", "vrutik_aero"]
+    return ["mono", "discord", "midnight", "dokidoki", "vrutik_aero"]

@@ -44,9 +44,9 @@ C_TEXT, C_MUTED, C_GREEN = "#f2f3f5", "#b5bac1", "#23a55a"
 C_RED = "#ed4245"
 C_WARN = "#faa61a"
 C_KEY = "#010203"
-FONT = "Segoe UI"
+FONT = themes.FONT
 LANG = "en"
-THEME = "discord"
+THEME = "mono"
 
 
 def apply_theme(name: str):
@@ -212,7 +212,7 @@ def load_config() -> dict:
     cfg = {"target_mb": FREE_LIMIT_MB, "free_limit_mb": FREE_LIMIT_MB,
            "audio_kbps": 128, "auto_scale": True,
            "block_paste": True, "auto_paste": True,
-           "lang": "en", "theme": "discord",   # перший запуск (нема конфіга) -> англійська
+           "lang": "en", "theme": "mono",   # перший запуск (нема конфіга) -> англійська
            "compress_video": True, "compress_images": True, "compress_audio": True,
            "keep_local": "ask", "offer_shrink": True, "sound_done": True,
            "sound_file": "", "notify_done": True,
@@ -438,8 +438,15 @@ class Overlay(tk.Toplevel):
                           fill=ui.darken(C_BG, t), outline="", tags="card")
         ui.round_rect(c, 2, 2, W - 4, H - 6, 26, fill=C_BG,
                       outline=ui.mix(C_BG, C_TEXT, 0.10), tags=("card", "drag"))
+        sky = ui.sky(c, "sky_card.png") if ui.is_mono(P) else None
+        if sky:      # Moon: місяць з променями справа вгорі (кут картки вже «прозорий» у самій картинці)
+            c.create_image(W - 2, 0, image=sky, anchor="ne", tags=("card", "drag", "skyimg"))
+            if not getattr(self, "_sky_anim", False):
+                self._sky_anim = True
+                ui.animate_sky(c, ui.sky_frames(c, "sky_card.png"),
+                               lambda im: c.itemconfigure("skyimg", image=im))
         # м'яке сяйво акценту у верхній частині
-        for i in range(10, 0, -1):
+        for i in range(10 if not sky else 0, 0, -1):
             t = i / 10.0
             rx, ry = 176 * t + 20, 64 * t + 14
             c.create_oval(W / 2 - rx, 34 - ry, W / 2 + rx, 34 + ry,
@@ -447,11 +454,12 @@ class Overlay(tk.Toplevel):
                           outline="", tags=("card", "glow", "drag"))
         # верхній край картки малюємо ще раз, щоб сяйво не вилазило за заокруглення
         c.create_rectangle(0, 0, W, 2, fill=C_KEY, outline="", tags="card")
-        ui.grad_round_rect(c, 26, 3, W - 28, 6, 2, C_BLURPLE, ui.accent2(P), tags=("card",))
+        if not sky:
+            ui.grad_round_rect(c, 26, 3, W - 28, 6, 2, C_BLURPLE, ui.accent2(P), tags=("card",))
         # логотип і назва
         ui.logo(c, 22, 16, 20, P, tags=("card", "drag"))
-        c.create_text(50, 26, text="Auto-Compress", anchor="w", fill=C_MUTED,
-                      font=(FONT, 9, "bold"), tags=("card", "drag"))
+        c.create_text(50, 26, text="AUTO-COMPRESS" if sky else "Auto-Compress", anchor="w", fill=C_MUTED,
+                      font=ui.tag_font(8) if sky else (FONT, 9, "bold"), tags=("card", "drag"))
         # хрестик
         cx, cy = W - 32, 26
         c.create_oval(cx - 13, cy - 13, cx + 13, cy + 13, fill=C_BG, outline="",
@@ -494,12 +502,18 @@ class Overlay(tk.Toplevel):
         self._widgets.append(w)
 
     def _text(self, text, y, size, color, bold=True, x=None, tags=(), width=None):
+        if ui.is_mono(self.P) and bold and size >= 15:      # Moon: заголовок Instrument Serif курсивом
+            f = ui.title_font(text, size - 1)
+        else:
+            f = (FONT, size, "bold" if bold else "normal")
         return self.canvas.create_text(
             self.W // 2 if x is None else x, y, text=text, fill=color,
-            font=(FONT, size, "bold" if bold else "normal"), justify="center",
+            font=f, justify="center",
             tags=("dyn",) + tuple(tags), width=width or (self.W - 2 * self.MARGIN))
 
     def _glow(self, cx, cy, R, color, strength=0.28):
+        if ui.is_mono(self.P):       # Moon: без заливки навколо значка — щоб промені було видно
+            return
         for i in range(8, 0, -1):
             t = i / 8.0
             r = R * (1 + 0.9 * t)
@@ -595,6 +609,26 @@ class Overlay(tk.Toplevel):
         x1, y1 = b["cx"] - b["w"] / 2, b["cy"] - h / 2 + off
         x2, y2 = b["cx"] + b["w"] / 2, b["cy"] + h / 2 + off
         tags = ("dyn", tag)
+        if ui.is_mono(self.P):
+            # кнопки «скляні»: без заливки, тож промені місяця видно під ними
+            if b["kind"] == "primary":    # головна: рамка чисто біла + обідок і світіння (кільцями)
+                rings = ((7, "#141414"), (5, "#262626"), (3, "#3a3a3a")) if b["hover"] else                         ((6, "#0c0c0c"), (4, "#181818"), (2, "#2a2a2a"))
+                for d, col in rings:
+                    ui.round_rect(c, x1 + 4 - d, y1 + 4 - d, x2 - 4 + d, y2 - 4 + d, h / 2 - 4 + d,
+                                  fill="", outline=col, tags=tags)
+                ui.round_rect(c, x1 + 4, y1 + 4, x2 - 4, y2 - 4, h / 2 - 4, fill="",
+                              outline="#ffffff", width=1.5 if b["hover"] else 1, tags=tags)
+            else:                         # звичайна: радіус 12, рамка білий 24%
+                up = 1 if b["hover"] and not b["down"] else 0
+                ui.round_rect(c, x1, y1 - up, x2, y2 - up, 12, fill="",
+                              outline="#7a7a7a" if b["hover"] else "#3d3d3d", tags=tags)
+                off -= up
+            # прозоре «тіло» кнопки, щоб клік/наведення ловились і між буквами
+            c.create_rectangle(x1 + 6, y1 + 6, x2 - 6, y2 - 6, fill="", outline="", tags=tags)
+            fs = ui.fit_size(self, b["text"], b["w"] - 26, 11)
+            c.create_text(b["cx"], b["cy"] + off, text=b["text"], fill="#f5f5f2",
+                          font=(FONT, fs, "bold"), tags=tags)
+            return
         if b["kind"] == "primary":
             a1, a2 = C_BLURPLE, ui.accent2(self.P)
             if b["hover"]:
@@ -1486,7 +1520,11 @@ class Watcher:
         LANG = self.cfg.get("lang", "en")
         dc_core.LANG = LANG
         dc_core.configure(self.cfg)
-        apply_theme(self.cfg.get("theme", "discord"))
+        if not self.cfg.get("design_mono"):     # 3.1: новий дизайн — один раз вмикаємо всім
+            self.cfg["design_mono"] = True
+            self.cfg["theme"] = "mono"
+            save_config(self.cfg)
+        apply_theme(self.cfg.get("theme", "mono"))
         # «Що нового»: показуємо ОДИН раз після оновлення (не на першому запуску).
         # Позначку ставимо одразу — до відкриття меню, яке має свою копію конфіга.
         import changelog
@@ -1701,7 +1739,7 @@ class Watcher:
         LANG = cfg.get("lang", "en")
         dc_core.LANG = LANG
         dc_core.configure(cfg)
-        apply_theme(cfg.get("theme", "discord"))
+        apply_theme(cfg.get("theme", "mono"))
         try:
             if self.tray:
                 self.tray.update_texts(self._tray_texts())

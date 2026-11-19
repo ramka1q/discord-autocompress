@@ -6,6 +6,7 @@ edit_inspector.py — панель властивостей справа від 
 Тільки стандартна бібліотека (tkinter).
 """
 import tkinter as tk
+import themes
 
 import edit_fx as fx
 
@@ -187,8 +188,9 @@ class Inspector(tk.Frame):
             self._bind_wheel(ch)
 
     def _section(self, text):
-        tk.Label(self.body, text=text.upper(), bg=self.P["bg2"], fg=self.P["muted"], anchor="w",
-                 font=(self.P["font"], 8, "bold")).pack(fill="x", padx=14, pady=(10, 2))
+        mono = self.P.get("mono")
+        tk.Label(self.body, text=text.upper(), bg=self.P["bg2"], fg=self.P["text"] if mono else self.P["muted"],
+                 anchor="w", font=(themes.MONO_FONT if mono else self.P["font"], 8, "bold"))            .pack(fill="x", padx=14, pady=(10, 2))
 
     def _slider(self, label, lo, hi, get, set_, fmt, default):
         def setter(v):
