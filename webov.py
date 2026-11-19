@@ -88,7 +88,7 @@ def prelaunch(watcher):
             "--disable-sync", "--force-dark-mode"]
     si = subprocess.STARTUPINFO()
     si.dwFlags |= 1                # STARTF_USESHOWWINDOW
-    si.wShowWindow = 7             # SW_SHOWMINNOACTIVE: стартує згорнутим, нічого не блимає
+    si.wShowWindow = 0             # SW_HIDE: вікно створюється, але не показується (без кнопки на панелі)
     try:
         _st["proc"] = subprocess.Popen(args, creationflags=0x08000000, startupinfo=si)
         _st["launched"] = time.monotonic()

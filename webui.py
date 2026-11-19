@@ -251,12 +251,7 @@ class Bridge:
             # інша тема — це звичайне (Tk) меню: відкриваємо його, а веб-вікно закриється
             self.on_tk(lambda: self.w.open_settings(tab="appearance"))
 
-            def shut():                      # про всяк випадок закриваємо веб-вікно й самі
-                h = _find_window(TITLES["menu"])
-                if h:
-                    import ctypes
-                    ctypes.windll.user32.PostMessageW(ctypes.c_void_p(h), 0x0010, 0, 0)   # WM_CLOSE
-            threading.Timer(1.2, shut).start()
+            threading.Timer(0.3, hide_main).start()      # веб-вікно ховаємо (лишається готовим)
             return {"ok": True, "close": True}
         return {"ok": True, "reload": reload_page}
 
@@ -438,6 +433,9 @@ class Bridge:
 
     def act_restart(self, a):
         self.on_tk(self.w.restart_app)
+
+    def act_hide_main(self, a):
+        hide_main()
 
     def act_whatsnew_popup(self, a):
         open_page(self.w, "news")
@@ -772,6 +770,12 @@ def close_all():
     u32.EnumWindows(cb, 0)
     for h in found:
         u32.PostMessageW(ctypes.c_void_p(h), 0x0010, 0, 0)       # WM_CLOSE
+    for proc in (_MAIN.get("proc"),):
+        try:
+            if proc and proc.poll() is None:
+                proc.terminate()
+        except Exception:
+            pass
     try:
         import webov
         p = webov._st.get("proc")
@@ -826,8 +830,134 @@ def _focus(hwnd):
     u32.SetForegroundWindow(ctypes.c_void_p(hwnd))
 
 
+# ---------------- ОДНЕ заздалегідь запущене сховане вікно для меню/галереї/новин ---------------- #
+_MAIN = {"proc": None, "hwnd": None, "launching": 0.0}
+SIZES = {"menu": (1180, 780), "gallery": (980, 700), "news": (620, 860)}
+
+
+def _is_window(h):
+    import ctypes
+    return bool(h) and bool(ctypes.windll.user32.IsWindow(ctypes.c_void_p(h)))
+
+
+def _launch_main(watcher):
+    """Запускає Edge СХОВАНИМ (SW_HIDE): вікно створюється, але ні разу не показується —
+    немає ні «планетки», ні кнопки на панелі задач, поки сторінка не готова."""
+    exe = edge_path()
+    if not exe:
+        return False
+    bridge, port = start(watcher)
+    if _MAIN["launching"] and time.monotonic() - _MAIN["launching"] < 8:
+        return True
+    _MAIN["launching"] = time.monotonic()
+    url = f"http://127.0.0.1:{port}/?t={bridge.token}#menu"
+    os.makedirs(PROFILE, exist_ok=True)
+    w, h = SIZES["menu"]
+    args = [exe, f"--app={url}", f"--user-data-dir={PROFILE}", f"--window-size={w},{h}",
+            "--window-position=-32000,-32000", "--no-first-run", "--no-default-browser-check",
+            "--disable-features=Translate,msEdgeSidebarV2,msUndersideButton,msHubApps",
+            "--disable-sync", "--force-dark-mode"]
+    si = subprocess.STARTUPINFO()
+    si.dwFlags |= 1          # STARTF_USESHOWWINDOW
+    si.wShowWindow = 0       # SW_HIDE
+    try:
+        _MAIN["proc"] = subprocess.Popen(args, creationflags=0x08000000, startupinfo=si)
+    except OSError as e:
+        dc_core.dlog("webui main launch fail " + repr(e))
+        _MAIN["launching"] = 0.0
+        return False
+    threading.Thread(target=_find_main, daemon=True).start()
+    return True
+
+
+def _find_main(wait=12.0):
+    """hwnd схованого головного вікна (будь-яка з наших назв)."""
+    import ctypes
+    u32 = ctypes.windll.user32
+    titles = set(TITLES.values())
+    pid = _MAIN["proc"].pid if _MAIN.get("proc") else None
+    t0 = time.monotonic()
+    while time.monotonic() - t0 < wait:
+        found = []
+
+        @ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+        def cb(hwnd, _):
+            n = u32.GetWindowTextLengthW(hwnd)
+            if n:
+                buf = ctypes.create_unicode_buffer(n + 1)
+                u32.GetWindowTextW(hwnd, buf, n + 1)
+                if buf.value in titles:
+                    found.append(hwnd)
+            return True
+        u32.EnumWindows(cb, 0)
+        if found:
+            _MAIN["hwnd"] = found[0]
+            _MAIN["launching"] = 0.0
+            return found[0]
+        time.sleep(0.03)
+    _MAIN["launching"] = 0.0
+    return None
+
+
+def prelaunch(watcher):
+    """Викликається на старті програми: готуємо сховане вікно меню заздалегідь."""
+    if _is_window(_MAIN["hwnd"]):
+        return True
+    return _launch_main(watcher)
+
+
+def _watch_main(watcher):
+    """Хрестиком закрили вікно — за секунду готуємо нове сховане (наступне відкриття миттєве)."""
+    def run():
+        while True:
+            time.sleep(1.0)
+            h = _MAIN.get("hwnd")
+            if h and not _is_window(h):
+                _MAIN["hwnd"] = None
+                try:
+                    import themes
+                    if not themes.palette(watcher.cfg.get("theme", "mono")).get("mono"):
+                        continue             # інша тема — веб-вікно не потрібне
+                    _launch_main(watcher)
+                except Exception as e:
+                    dc_core.dlog("webui relaunch fail " + repr(e))
+    if not _MAIN.get("watching"):
+        _MAIN["watching"] = True
+        threading.Thread(target=run, daemon=True).start()
+
+
+def hide_main():
+    import ctypes
+    h = _MAIN.get("hwnd")
+    if _is_window(h):
+        ctypes.windll.user32.ShowWindow(ctypes.c_void_p(h), 0)
+
+
+def _show_main(hwnd, page):
+    import ctypes
+    u32 = ctypes.windll.user32
+    sw, sh = u32.GetSystemMetrics(0), u32.GetSystemMetrics(1)
+    w, h = SIZES.get(page, (1100, 760))
+    w, h = min(w, sw - 40), min(h, sh - 80)
+    x, y = max(0, (sw - w) // 2), max(0, (sh - h) // 2 - 20)
+    hv = ctypes.c_void_p(hwnd)
+    u32.SetWindowTextW(hv, TITLES.get(page, ""))
+    if not u32.IsWindowVisible(hv) or u32.IsIconic(hv):
+        u32.SetWindowPos(hv, None, x, y, w, h, 0x0004 | 0x0010)        # NOZORDER | NOACTIVATE
+    u32.ShowWindow(hv, 9 if u32.IsIconic(hv) else 5)                     # SW_RESTORE / SW_SHOW
+    fg = u32.GetForegroundWindow()
+    t1 = u32.GetWindowThreadProcessId(fg, None)
+    t2 = ctypes.windll.kernel32.GetCurrentThreadId()
+    if t1 and t1 != t2:                     # дозвіл стати поверх (інакше Windows лише мигне кнопкою)
+        u32.AttachThreadInput(t2, t1, True)
+        u32.SetForegroundWindow(hv)
+        u32.AttachThreadInput(t2, t1, False)
+    else:
+        u32.SetForegroundWindow(hv)
+
+
 def open_page(watcher, page="menu", tab=None, gallery_hwnd=None):
-    """Відкриває сторінку в окремому вікні Edge (або піднімає вже відкрите).
+    """Показує меню / галерею / «Що нового» у заздалегідь готовому вікні Edge.
     False — Edge немає (тоді викликач показує Tk-вікно)."""
     exe = edge_path()
     if not exe or not os.path.isfile(os.path.join(WEB, "index.html")):
@@ -838,37 +968,26 @@ def open_page(watcher, page="menu", tab=None, gallery_hwnd=None):
     except Exception as e:
         dc_core.dlog("webui start fail " + repr(e))
         return False
+    _watch_main(watcher)
     if page == "gallery":
         bridge.gallery_hwnd = gallery_hwnd
-    existing = _find_window(TITLES.get(page, ""))
-    if existing:
-        dc_core.dlog(f"webui open {page}: focus existing {existing}")
-        if tab:
-            bridge.emit("nav", page=page, tab=tab)
-        if page == "gallery":
-            bridge.emit("reload", page="gallery")
-        _focus(existing)
+    hwnd = _MAIN.get("hwnd") if _is_window(_MAIN.get("hwnd")) else None
+    if hwnd is None:
+        if not _MAIN.get("launching"):
+            _launch_main(watcher)
+
+        def later():                     # перший раз: чекаємо, поки сховане вікно готове, і показуємо
+            h = _find_main(12.0)
+            if h:
+                time.sleep(0.35)        # сторінка встигає завантажитись і поставити значок
+                bridge.emit("nav", page=page, tab=tab or "")
+                time.sleep(0.05)
+                _show_main(h, page)
+        threading.Thread(target=later, daemon=True).start()
+        dc_core.dlog(f"webui open {page}: launching hidden window first")
         return True
-    size = {"menu": (1180, 780), "gallery": (980, 700), "news": (620, 860)}.get(page, (1100, 760))
-    try:
-        import ctypes
-        sw, sh = ctypes.windll.user32.GetSystemMetrics(0), ctypes.windll.user32.GetSystemMetrics(1)
-    except Exception:
-        sw, sh = 1920, 1080
-    w, h = min(size[0], sw - 40), min(size[1], sh - 80)
-    x, y = max(0, (sw - w) // 2), max(0, (sh - h) // 2 - 20)
-    frag = f"#{page}" + (f"/{tab}" if tab else "")
-    url = f"http://127.0.0.1:{port}/?t={bridge.token}{frag}"
-    os.makedirs(PROFILE, exist_ok=True)
-    args = [exe, f"--app={url}", f"--user-data-dir={PROFILE}", f"--window-size={w},{h}",
-            f"--window-position={x},{y}", "--no-first-run", "--no-default-browser-check",
-            "--disable-features=Translate,msEdgeSidebarV2,msUndersideButton,msHubApps",
-            "--disable-sync", "--force-dark-mode", "--enable-features=WebContentsForceDark:false"]
-    try:
-        subprocess.Popen(args, creationflags=0x08000000)
-    except OSError as e:
-        dc_core.dlog("webui edge launch fail " + repr(e))
-        return False
-    threading.Thread(target=_dress_window, args=(port, TITLES.get(page, "")), daemon=True).start()
-    dc_core.dlog(f"webui open {page} {tab or ''}")
+    bridge.emit("nav", page=page, tab=tab or "")
+    time.sleep(0.04)                    # сторінка перемикається до показу — без мигання старого
+    _show_main(hwnd, page)
+    dc_core.dlog(f"webui open {page}: shown")
     return True

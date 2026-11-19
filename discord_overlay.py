@@ -1751,6 +1751,8 @@ class Watcher:
         try:
             if themes.palette(THEME).get("mono") and self.cfg.get("web_ui", True) is not False:
                 import webov
+                import webui
+                webui.prelaunch(self)          # сховане вікно меню/галереї/новин — показ миттєвий
                 webov.prelaunch(self)
                 threading.Thread(target=lambda: webov.window(wait=20), daemon=True).start()
         except Exception as e:

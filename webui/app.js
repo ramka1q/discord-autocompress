@@ -34,7 +34,7 @@ function card(label, sub, inner) { return `<section class="glass card rise">${la
 async function setCfg(k, v) {
   ST.cfg[k] = v;
   const r = await api("/api/set", { [k]: v });
-  if (r.close) return setTimeout(() => window.close(), 400);
+  if (r.close) return;                       // програма сама сховає це вікно
   if (r.reload) return location.reload();
   toast(T("saved"));
 }
@@ -306,7 +306,7 @@ document.addEventListener("click", async e => {
   const el = e.target.closest("[data-tab],[data-do],[data-url],[data-theme],[data-seg] button,[data-paste],[data-lib],[data-hist],[data-tab-menu],.li");
   if (!el) return;
   if (el.matches(".li")) { document.querySelectorAll(".li.on").forEach(x => x.classList.remove("on")); el.classList.add("on"); return; }
-  if (el.dataset.tabMenu) { act("open_menu", { tab: el.dataset.tabMenu }); return window.close(); }
+  if (el.dataset.tabMenu) { act("open_menu", { tab: el.dataset.tabMenu }); return; }
   if (el.dataset.tab) {
     if (PAGE !== "menu") { act("open_menu", { tab: el.dataset.tab }); return; }
     TAB = el.dataset.tab; history.replaceState(null, "", "#menu/" + TAB); return render();
@@ -319,8 +319,8 @@ document.addEventListener("click", async e => {
     el.parentElement.querySelectorAll("button").forEach(b => b.classList.toggle("on", b === el));
     await setCfg(k, v); if (k === "encoder") render(); return;
   }
-  if (el.dataset.lib) { e.stopPropagation(); const r = await act(el.dataset.lib, { path: el.dataset.p }); if (el.dataset.lib === "lib_edit") window.close(); return r; }
-  if (el.dataset.paste) { const r = await act("lib_paste", { path: el.dataset.paste }); toast(T("lib_copied")); setTimeout(() => window.close(), r.pasted ? 120 : 900); return; }
+  if (el.dataset.lib) { e.stopPropagation(); const r = await act(el.dataset.lib, { path: el.dataset.p }); if (el.dataset.lib === "lib_edit") hideWin(); return r; }
+  if (el.dataset.paste) { const r = await act("lib_paste", { path: el.dataset.paste }); toast(T("lib_copied")); setTimeout(hideWin, r.pasted ? 120 : 900); return; }
   if (el.dataset.hist) {
     const sel = $(".li.on"); const msg = $("#hist_msg");
     if (!sel) { msg.textContent = T("stats_pick"); return; }
@@ -339,7 +339,7 @@ document.addEventListener("click", async e => {
   if (a === "deps_check" && r.deps) { live.deps_now = r.deps; render(); }
   if (a === "pick_sound" || a === "reset_sound") { ST = await api("/api/state?page=" + PAGE); S = ST.S; render(); }
   if (el.dataset.then === "reload") { ST = await api("/api/state?page=" + PAGE); render(); }
-  if (el.dataset.then === "close" || (PAGE === "gallery" && a === "open_editor")) window.close();
+  if (el.dataset.then === "close" || (PAGE === "gallery" && a === "open_editor")) hideWin();
 });
 document.addEventListener("change", e => {
   const el = e.target;
@@ -351,7 +351,8 @@ document.addEventListener("input", e => {
   if (el.type === "range") { el.style.setProperty("--p", (100 * (el.value - el.min) / (el.max - el.min)) + "%");
     if (el.dataset.range === "audio_kbps") $("#audio_val").textContent = +el.value ? el.value + " kbps" : T("audio_off"); }
 });
-addEventListener("keydown", e => { if (e.key === "Escape" && PAGE !== "menu" && PAGE !== "overlay") window.close(); });
+addEventListener("keydown", e => { if (e.key === "Escape" && PAGE !== "menu" && PAGE !== "overlay") hideWin(); });
+function hideWin() { if (PAGE === "overlay") return; act("hide_main"); }
 new MutationObserver(() => document.querySelectorAll("input[type=range]").forEach(el =>
   el.style.setProperty("--p", (100 * (el.value - el.min) / (el.max - el.min)) + "%"))).observe(document.body, { childList: true, subtree: true });
 
@@ -361,7 +362,14 @@ function sizeTxt(b) { return b >= 1048576 ? (b / 1048576).toFixed(1) + " МБ" :
 function onEvent(ev) {
   const k = ev.kind;
   if (k === "ov") { if (PAGE === "overlay") { OVS = ev.scene; renderOverlay(); } return; }
-  if (k === "nav") { PAGE = ev.page; if (ev.tab) TAB = ev.tab; return render(); }
+  if (k === "nav") {                      // показ схованого вікна: інша сторінка / вкладка, свіжі дані
+    if (PAGE === "overlay") return;
+    PAGE = ev.page || "menu"; if (ev.tab) TAB = ev.tab;
+    document.title = { gallery: "My edits · Moon", news: "What's new · Moon" }[PAGE] || "Discord Auto-Compress · Moon";
+    history.replaceState(null, "", "#" + PAGE + (PAGE === "menu" ? "/" + TAB : ""));
+    api("/api/state?page=" + PAGE).then(st => { ST = st; S = st.S; render(); });
+    return render();
+  }
   if (k === "reload") return boot();
   if (k === "update") {
     const u = live.update || (live.update = { busy: true });
