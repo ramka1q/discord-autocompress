@@ -1686,6 +1686,11 @@ class Watcher:
     # у меню (вкладка Оновлення), там же кнопка перезапуску.
 
     def quit_app(self):
+        try:                              # веб-вікна (Edge) — окремі процеси: закриваємо їх самі
+            import webui
+            webui.close_all()
+        except Exception:
+            pass
         try:
             if self.tray:
                 self.tray.stop()          # posts WM_CLOSE -> NIM_DELETE на потоці трею

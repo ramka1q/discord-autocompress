@@ -10,6 +10,12 @@ changelog.py — версія програми та список змін по �
 REPO_URL = "https://github.com/ramka1q/discord-autocompress"
 
 CHANGES = [
+    {"v": "3.2.3", "date": "2026-11-19 23:55", "items": [
+        {"icon": "🛠", "tab": None,
+         "uk": ("Вікна закриваються самі", "Після оновлення чи виходу з програми веб-вікна (меню, «Мої монтажі», «Що нового») закриваються, а не лишаються висіти."),
+         "ru": ("Окна закрываются сами", "После обновления или выхода из программы веб-окна (меню, «Мои монтажи», «Что нового») закрываются, а не остаются висеть."),
+         "en": ("Windows close themselves", "After an update or quitting the app, web windows (menu, My edits, What's new) close instead of hanging around.")},
+    ]},
     {"v": "3.2.2", "date": "2026-11-19 23:40", "items": [
         {"icon": "🎨", "tab": "appearance",
          "uk": ("Інші теми знову працюють", "Вибери Discord, Midnight, Doki Doki чи Aero — меню відкриється в цій темі. Вибери Moon — повернеться веб-дизайн."),

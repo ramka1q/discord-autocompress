@@ -738,6 +738,34 @@ def _find_window(title):
     return found[0] if found else None
 
 
+def close_all():
+    """Закриває всі веб-вікна програми (меню, галерея, «Що нового», вікно стиснення)."""
+    import ctypes
+    u32 = ctypes.windll.user32
+    titles = set(TITLES.values()) | {"DAC Overlay"}
+    found = []
+
+    @ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+    def cb(hwnd, _):
+        n = u32.GetWindowTextLengthW(hwnd)
+        if n:
+            buf = ctypes.create_unicode_buffer(n + 1)
+            u32.GetWindowTextW(hwnd, buf, n + 1)
+            if buf.value in titles:
+                found.append(hwnd)
+        return True
+    u32.EnumWindows(cb, 0)
+    for h in found:
+        u32.PostMessageW(ctypes.c_void_p(h), 0x0010, 0, 0)       # WM_CLOSE
+    try:
+        import webov
+        p = webov._st.get("proc")
+        if p and p.poll() is None:
+            p.terminate()
+    except Exception:
+        pass
+
+
 def _focus(hwnd):
     import ctypes
     u32 = ctypes.windll.user32

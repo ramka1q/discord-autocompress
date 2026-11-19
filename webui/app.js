@@ -409,9 +409,14 @@ function onEvent(ev) {
   }
 }
 async function pollLoop() {
+  let fails = 0;
   for (;;) {
-    try { const r = await api("/api/poll?since=" + LAST_EV); LAST_EV = r.last; r.events.forEach(onEvent); }
-    catch (e) { await new Promise(res => setTimeout(res, 1500)); }
+    try { const r = await api("/api/poll?since=" + LAST_EV); LAST_EV = r.last; fails = 0; r.events.forEach(onEvent); }
+    catch (e) {
+      // програму закрили або перезапустили — це вікно вже нічим не керується: закриваємось
+      if (++fails >= 3) { window.close(); return; }
+      await new Promise(res => setTimeout(res, 1000));
+    }
   }
 }
 
