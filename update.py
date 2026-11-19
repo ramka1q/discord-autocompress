@@ -69,7 +69,51 @@ def _fetch(rel: str, base: str = None) -> bytes:
         return r.read()
 
 
-def _sync(quiet: bool = True, apply: bool = True, progress=None):
+def _blob_sha(data):
+    """git-хеш вмісту (як у GitHub) — щоб без скачування знати, чи файл змінився."""
+    import hashlib
+    return hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
+
+
+def _remote_tree(base):
+    """{шлях: (git-хеш, розмір)} коміту з base (raw-адреса з sha) або None."""
+    m = re.match(r"https://raw\.githubusercontent\.com/([^/]+)/([^/]+)/([0-9a-f]{40})$", base.rstrip("/"))
+    if not m:
+        return None
+    owner, repo, sha = m.groups()
+    req = urllib.request.Request(f"https://api.github.com/repos/{owner}/{repo}/git/trees/{sha}?recursive=1",
+                                 headers={"User-Agent": "DAC-Updater/2.2"})
+    with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
+        tree = json.loads(r.read().decode("utf-8"))
+    return {t["path"]: (t["sha"], int(t.get("size", 0))) for t in tree.get("tree", []) if t.get("type") == "blob"}
+
+
+def _plan(files, base):
+    """Які файли треба скачати і скільки це байт: (список, байт або None)."""
+    try:
+        tree = _remote_tree(base)
+        if not tree:
+            return list(files), None
+        need, size = [], 0
+        for rel in files:
+            info = tree.get(rel)
+            if not info:
+                return list(files), None
+            dst = os.path.join(HERE, rel.replace("/", os.sep))
+            try:
+                with open(dst, "rb") as f:
+                    if _blob_sha(f.read()) == info[0]:
+                        continue
+            except OSError:
+                pass
+            need.append(rel)
+            size += info[1]
+        return need, size
+    except Exception:
+        return list(files), None
+
+
+def _sync(quiet: bool = True, apply: bool = True, progress=None, on_plan=None):
     """Ядро оновлення. Повертає (ok: bool, changed: int).
     ok=False -> збій (мережа/репо); changed = скільки файлів відрізняється/замінено.
     apply=False -> лише РАХУЄ різницю, нічого не пише (для питання «є оновлення?»)."""
@@ -85,16 +129,24 @@ def _sync(quiet: bool = True, apply: bool = True, progress=None):
             print("[!] Не вдалося перевірити оновлення:", e)
         return False, 0
 
-    files = manifest.get("files", [])
+    files, total = _plan(manifest.get("files", []), base)
+    if on_plan:
+        try:
+            on_plan(len(files), total)          # скільки файлів і байт буде скачано
+        except Exception:
+            pass
     fresh = {}
+    got = 0
     for i, rel in enumerate(files):
         if progress:
             try:
-                progress(i * 100 // max(1, len(files)), rel)
+                pct = got * 100 // total if total else i * 100 // max(1, len(files))
+                progress(pct, rel)
             except Exception:
                 pass
         try:
             fresh[rel] = _fetch(rel, base)
+            got += len(fresh[rel])
         except Exception as e:
             if not quiet:
                 print("[!] Помилка завантаження", rel, "—", e)
@@ -130,10 +182,10 @@ def run(quiet: bool = True) -> bool:
     return ok
 
 
-def check(quiet: bool = True, progress=None):
+def check(quiet: bool = True, progress=None, on_plan=None):
     """Примусова перевірка з меню (ігнорує маркер .autoupdate). Повертає (ok, changed).
     progress(pct, name) — для смужки (0..100 по файлах)."""
-    return _sync(quiet, progress=progress)
+    return _sync(quiet, progress=progress, on_plan=on_plan)
 
 
 def available(quiet: bool = True):

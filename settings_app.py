@@ -739,20 +739,34 @@ class SettingsApp:
             except (tk.TclError, RuntimeError):
                 pass
 
+        plan = {"txt": self.T("upd_files")}
+
+        def size_txt(b):
+            return f"{b / 1048576:.1f} МБ" if b >= 1048576 else f"{max(1, round(b / 1024))} КБ"
+
+        def got_plan(n, total):
+            parts = []
+            if n:
+                parts.append(self.T("upd_plan_files", n=n) + (f" ({size_txt(total)})" if total else ""))
+            if need_mpv:
+                parts.append(self.T("upd_plan_player", s=size_txt(mpvplayer.Z_SIZE)))
+            plan["txt"] = (self.T("upd_plan", what=" + ".join(parts)) if parts else self.T("checking"))
+            ui_(lambda: self._upd_show(plan["txt"], 0))
+
         def work():
             try:
                 import update
-                ok, changed = update.check(progress=lambda p, rel: ui_(
-                    lambda: self._upd_show(self.T("upd_files"), p * files_part // 100)))
+                ok, changed = update.check(on_plan=got_plan, progress=lambda p, rel: ui_(
+                    lambda: self._upd_show(plan["txt"], p * files_part // 100)))
             except Exception:
                 ok, changed = False, 0
             if not ok or not need_mpv:
                 return ui_(lambda: self._upd_done(ok, changed))
-            ui_(lambda: self._upd_show(self.T("upd_files"), files_part))
+            ui_(lambda: self._upd_show(plan["txt"], files_part))
 
             def st(state, pct, src):
                 if state == "running":
-                    ui_(lambda: self._upd_show(self.T("upd_player"), files_part + pct * (100 - files_part) // 100))
+                    ui_(lambda: self._upd_show(plan["txt"], files_part + pct * (100 - files_part) // 100))
                 elif state == "retry":
                     ui_(lambda: self._upd_show(self.T("upd_player_retry", src=src), None))
                 elif state == "wait":
@@ -785,7 +799,24 @@ class SettingsApp:
         except (tk.TclError, AttributeError):
             pass
 
+    @staticmethod
+    def _disk_version():
+        """Версія, що вже ЛЕЖИТЬ на диску (фонове оновлення при запуску могло її поміняти,
+        поки програма працює зі старим кодом)."""
+        try:
+            import re
+            here = os.path.dirname(os.path.abspath(changelog.__file__))
+            with open(os.path.join(here, "changelog.py"), encoding="utf-8") as f:
+                m = re.search(r'\{"v":\s*"([^"]+)"', f.read())
+            return m.group(1) if m else None
+        except Exception:
+            return None
+
     def _upd_done(self, ok, changed):
+        if ok and changed == 0:
+            dv = self._disk_version()
+            if dv and dv != APP_VERSION:      # файли вже нові, а запущена стара версія
+                changed = 1
         self._upd_state = (ok, changed)
         try:
             self.upd_btn.config(state="normal")

@@ -28,6 +28,7 @@ MIRRORS = [                                 # від найшвидшого (з�
     ("GitHub", [f"https://github.com/{_REPO}/releases/download/mpv-v1/libmpv-2.dll.z"]),
 ]
 DLL_SIZE = 121789952
+Z_SIZE = 47250489             # скільки реально качається (стиснуто)
 DLL_CRC32 = 3745875392
 _dl = {"state": "idle", "pct": 0}      # idle / running / done / failed
 _FMT_DOUBLE, _FMT_FLAG, _FMT_STRING = 5, 3, 1
