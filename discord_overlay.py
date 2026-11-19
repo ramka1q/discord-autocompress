@@ -1835,9 +1835,21 @@ class Watcher:
                 self.tray.update_texts(self._tray_texts())
         except Exception:
             pass
+        is_mono = themes.palette(THEME).get("mono")
         # у звичайному меню вибрали Moon -> закриваємо його й відкриваємо веб-меню
-        if not was_mono and themes.palette(THEME).get("mono") and self.settings_win is not None:
+        if not was_mono and is_mono and self.settings_win is not None:
             self.root.after(150, self._switch_to_web_menu)
+        if not was_mono and is_mono:
+            self.root.after(400, self._prelaunch_overlay)     # веб-оверлей знову готовий заздалегідь
+        if was_mono and not is_mono:
+            # інша тема: сховані вікна Edge (меню й оверлей) більше не потрібні — не тримаємо їх
+            def _close_web():
+                try:
+                    import webui
+                    webui.close_all()
+                except Exception as e:
+                    dc_core.dlog("close web on theme change fail " + repr(e))
+            self.root.after(800, _close_web)
 
     def _switch_to_web_menu(self):
         sw = self.settings_win

@@ -226,7 +226,14 @@ class SettingsApp:
             tk.Misc.tkraise(c)
             if self._toast_after:
                 self.win.after_cancel(self._toast_after)
-            self._toast_after = self.win.after(1400, lambda: c.place_forget())
+            def _hide(c=c):
+                self._toast_after = None
+                try:
+                    if c.winfo_exists():
+                        c.place_forget()
+                except tk.TclError:
+                    pass
+            self._toast_after = self.win.after(1400, _hide)
         except (tk.TclError, AttributeError):
             pass
 

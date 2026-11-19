@@ -357,7 +357,7 @@ new MutationObserver(() => document.querySelectorAll("input[type=range]").forEac
   el.style.setProperty("--p", (100 * (el.value - el.min) / (el.max - el.min)) + "%"))).observe(document.body, { childList: true, subtree: true });
 
 function progressHTML(text, pct) { return `<div class="status">${esc(text)}  ${Math.round(pct)}%</div><div class="bar"><i style="width:${pct}%"></i></div>`; }
-function sizeTxt(b) { return b >= 1048576 ? (b / 1048576).toFixed(1) + " МБ" : Math.max(1, Math.round(b / 1024)) + " КБ"; }
+function sizeTxt(b) { return b >= 1048576 ? (b / 1048576).toFixed(1) + " " + T("unit_mb") : Math.max(1, Math.round(b / 1024)) + " " + (ST.lang === "en" ? "KB" : "КБ"); }
 
 function onEvent(ev) {
   const k = ev.kind;
@@ -376,6 +376,7 @@ function onEvent(ev) {
     }).catch(() => act("nav_ack", { id: ev.id }));
     return render();
   }
+  if (k === "vis") { if (ev.who === (PAGE === "overlay" ? "ov" : "main") && window.MoonRun) window.MoonRun(ev.on); return; }
   if (k === "reload") return boot();
   if (k === "update") {
     const u = live.update || (live.update = { busy: true });
@@ -444,6 +445,7 @@ async function boot() {
   if (PAGE === "overlay") { const r = await act("ov_scene"); OVS = r.scene; }
   document.documentElement.lang = ST.lang;
   render();
+  act("vis_get", { who: PAGE === "overlay" ? "ov" : "main" }).then(r => { if (r && r.on === false && window.MoonRun) window.MoonRun(false); }).catch(() => {});
   if (!LAST_EV) { const r = await api("/api/poll?since=999999999&w=0").catch(() => ({ last: 0 })); LAST_EV = r.last || 0; }
 }
 boot().then(pollLoop);

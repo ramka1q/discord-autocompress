@@ -157,6 +157,13 @@ def hide():
     hw = _st.get("hwnd") or _find()
     if hw:
         user32.ShowWindow(ctypes.c_void_p(hw), 0)     # SW_HIDE
+    try:
+        import webui
+        s = webui._srv.get("obj")
+        if s and getattr(s[0], "overlay", None) is None:
+            s[0].set_vis("ov", False)
+    except Exception:
+        pass
 
 
 def is_own(hwnd):
@@ -229,6 +236,10 @@ class Mirror:
 
     def bridge_cb(self):
         self.b.overlay = self
+        try:
+            self.b.set_vis("ov", True)
+        except Exception:
+            pass
 
     def tick(self):
         ov = self.ov
@@ -263,6 +274,10 @@ class Mirror:
         ov = self.ov
         if getattr(ov, "_visible", True) is False:
             return
+        try:
+            self.b.set_vis("ov", True)
+        except Exception:
+            pass
         place(ov._x, ov._y, ov.W, ov.H, show=True)
         self.shown = True
 

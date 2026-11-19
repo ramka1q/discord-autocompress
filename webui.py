@@ -82,6 +82,8 @@ class Bridge:
         self.w = watcher
         self.token = base64.urlsafe_b64encode(os.urandom(24)).decode("ascii").rstrip("=")
         self.events, self.ev_lock, self.ev_cond = [], threading.Lock(), threading.Condition()
+        self.ev_n = 0                    # наскрізний номер події (не залежить від обрізання списку)
+        self.vis = {}                    # чи показане вікно: {"main": bool, "ov": bool}
         self.tkq = queue.Queue()
         self.gallery_hwnd = None
         self.overlay = None              # webov.Mirror поточного вікна стиснення
@@ -122,7 +124,8 @@ class Bridge:
     # ---------- події для сторінки ----------
     def emit(self, kind, **data):
         with self.ev_cond:
-            self.events.append(dict(data, kind=kind, n=len(self.events) + 1))
+            self.ev_n += 1
+            self.events.append(dict(data, kind=kind, n=self.ev_n))
             del self.events[:-400]
             self.ev_cond.notify_all()
 
@@ -133,7 +136,7 @@ class Bridge:
                 out = [e for e in self.events if e["n"] > since]
                 left = t_end - time.monotonic()
                 if out or left <= 0:
-                    last = self.events[-1]["n"] if self.events else 0
+                    last = self.ev_n
                     return {"events": out, "last": last}
                 self.ev_cond.wait(left)
 
@@ -288,6 +291,23 @@ class Bridge:
             self.ov_ack = max(getattr(self, "ov_ack", 0), int(a.get("seq", 0)))
         except (TypeError, ValueError):
             pass
+
+    def set_vis(self, who, on, watch=False):
+        on = bool(on)
+        hold = getattr(self, "vis_hold", None)
+        if hold is None:
+            hold = self.vis_hold = {}
+        if not watch and on:
+            hold[who] = time.monotonic() + 4.0          # зараз покажемо — сторожу не гасити
+        if watch and not on and time.monotonic() < hold.get(who, 0):
+            return
+        if self.vis.get(who) is not on:
+            self.vis[who] = on
+            self.emit("vis", who=who, on=on)
+
+    def act_vis_get(self, a):
+        who = "ov" if a.get("who") == "ov" else "main"
+        return {"ok": True, "on": self.vis.get(who, False)}
 
     def act_nav_ack(self, a):
         self.nav_ack = a.get("id")
@@ -737,9 +757,33 @@ def start(watcher):
     port = sock.getsockname()[1]
     threading.Thread(target=_serve, args=(sock, bridge), daemon=True).start()
     threading.Thread(target=_icon_png, daemon=True).start()      # значок готуємо заздалегідь
+    threading.Thread(target=_vis_watch, args=(bridge,), daemon=True).start()
     _srv["obj"] = (bridge, port)
     dc_core.dlog(f"webui server on {port}")
     return _srv["obj"]
+
+
+def _shown(h):
+    import ctypes
+    u32 = ctypes.windll.user32
+    hv = ctypes.c_void_p(h)
+    return bool(h) and bool(u32.IsWindow(hv)) and bool(u32.IsWindowVisible(hv)) and not u32.IsIconic(hv)
+
+
+def _vis_watch(bridge):
+    """Сховане / згорнуте веб-вікно не повинно малювати місяць (раніше схований оверлей
+    їв ~40% ядра + GPU постійно). Раз на 0.5 с кажемо сторінкам, чи їх видно."""
+    while True:
+        try:
+            bridge.set_vis("main", _shown(_MAIN.get("hwnd")), watch=True)
+            import webov
+            hv = webov._st.get("hwnd")
+            if not hv and webov._st.get("proc"):
+                hv = webov._find()
+            bridge.set_vis("ov", _shown(hv) or (bridge.overlay is not None and hv is None), watch=True)
+        except Exception as e:
+            dc_core.dlog("webui vis watch fail " + repr(e))
+        time.sleep(0.5)
 
 
 def _find_window(title):
@@ -790,8 +834,11 @@ def close_all():
         p = webov._st.get("proc")
         if p and p.poll() is None:
             p.terminate()
+        webov._st["hwnd"] = None
     except Exception:
         pass
+    _MAIN["hwnd"] = None
+    _MAIN["launching"] = 0.0
 
 
 def _dress_window(port, title):
@@ -961,6 +1008,9 @@ def hide_main():
     h = _MAIN.get("hwnd")
     if _is_window(h):
         ctypes.windll.user32.ShowWindow(ctypes.c_void_p(h), 0)
+    s = _srv.get("obj")
+    if s:
+        s[0].set_vis("main", False)
 
 
 def _show_main(hwnd, page):
@@ -994,6 +1044,7 @@ def _nav_and_show(bridge, hwnd, page, tab):
     """Перемикаємо сторінку і показуємо вікно ЛИШЕ після того, як вона відповіла
     «готово» (уже намальована, назва й значок наші). Запас — 3 с (повільний ПК)."""
     nid = f"{page}-{time.monotonic():.4f}"
+    bridge.set_vis("main", True)
     bridge.nav_ack = None
     bridge.emit("nav", page=page, tab=tab or "", id=nid)
     t0 = time.monotonic()

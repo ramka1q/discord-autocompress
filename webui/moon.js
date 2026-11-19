@@ -160,7 +160,11 @@
         el.style.setProperty("--ray", rayLight(b.left + b.width / 2, b.top + b.height / 2).toFixed(2));
       }
     }
-    requestAnimationFrame(frame);
+    if (running && !document.hidden) requestAnimationFrame(frame); else looping = false;
   }
+  let running = true, looping = true;
+  function kick() { if (running && !document.hidden && !looping) { looping = true; last = performance.now(); requestAnimationFrame(frame); } }
+  window.MoonRun = on => { running = !!on; kick(); };       // програма: вікно сховане -> пауза
+  document.addEventListener("visibilitychange", kick);
   requestAnimationFrame(frame);
 })();
