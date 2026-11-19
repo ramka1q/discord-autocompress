@@ -76,7 +76,7 @@ _shell32.DragFinish.argtypes = [ctypes.c_void_p]
 C_BG, C_BG2, C_DARK = host.C_BG, host.C_BG2, host.C_DARK
 C_BLURPLE, C_BLURPLE_H = host.C_BLURPLE, host.C_BLURPLE_H
 C_TEXT, C_MUTED, C_GREEN, C_RED = host.C_TEXT, host.C_MUTED, host.C_GREEN, host.C_RED
-FONT = host.FONT
+FONT = "Segoe UI"            # редактор зі своїм шрифтом — тема Moon його не змінює
 
 # ---- палітра таймлайна в стилі CapCut ----
 C_TRACK = "#121317"          # тло таймлайна
@@ -125,13 +125,18 @@ def _sync_theme():
     тож після зміни теми в меню редактор лишався у старих кольорах."""
     global C_BG, C_BG2, C_DARK, C_BLURPLE, C_BLURPLE_H, C_TEXT, C_MUTED, C_GREEN, C_RED
     global C_CLIP_SEL, C_ACC2
-    C_BG, C_BG2, C_DARK = host.C_BG, host.C_BG2, host.C_DARK
-    C_BLURPLE, C_BLURPLE_H = host.C_BLURPLE, host.C_BLURPLE_H
-    C_TEXT, C_MUTED, C_GREEN, C_RED = host.C_TEXT, host.C_MUTED, host.C_GREEN, host.C_RED
-    C_CLIP_SEL = host.C_BLURPLE
-    C_ACC2 = ui.accent2(themes.palette(host.THEME))
+    pal = themes.palette(host.THEME)
+    if pal.get("mono"):        # дизайн Moon редактор НЕ чіпає — лишається як був (кольори Discord)
+        pal = themes.palette("discord")
+    C_BG, C_BG2, C_DARK = pal["bg"], pal["panel"], pal["dark"]
+    C_BLURPLE, C_BLURPLE_H = pal["accent"], pal["accent_h"]
+    C_TEXT, C_MUTED, C_GREEN, C_RED = pal["text"], pal["muted"], pal["green"], pal["red"]
+    C_CLIP_SEL = C_BLURPLE
+    C_ACC2 = ui.accent2(pal)
+    global C_WARN
+    C_WARN = pal.get("warn", "#faa61a")
     global C_TRACK, C_LANE, C_RULER, C_CLIP, C_SND, C_OVL, C_WAVE_IN, C_SNAP, C_DROP, C_TXT, MONO
-    MONO = bool(themes.palette(host.THEME).get("mono"))
+    MONO = False
     if MONO:      # дизайн Moon: доріжка без кольорів — лише чорний, білий і сірий
         C_TRACK, C_LANE, C_RULER, C_CLIP = "#000000", "#0a0a0a", "#000000", "#161616"
         C_SND, C_OVL, C_TXT = "#3b3b39", "#2a2a28", "#55554f"
@@ -146,6 +151,7 @@ MONO = False
 
 
 C_ACC2 = C_BLURPLE
+C_WARN = "#faa61a"
 
 
 def fmt(t):
@@ -756,7 +762,7 @@ class VideoEditor(tk.Toplevel):
         tb = tk.Frame(self, bg=C_BG, height=50)
         tb.pack(side="bottom", fill="x")
         tb.pack_propagate(False)
-        self.time_lbl = tk.Label(tb, text="", bg=C_BG, fg=C_TEXT, font=(themes.MONO_FONT, 11, "bold"))
+        self.time_lbl = tk.Label(tb, text="", bg=C_BG, fg=C_TEXT, font=("Consolas", 11, "bold"))
         self.time_lbl.pack(side="left", padx=16)
         IconBtn(tb, "⛶", self._toggle_max, tip=E("ed_tt_max"), fs=13).pack(side="right", padx=14)
         mid = tk.Frame(tb, bg=C_BG)
@@ -783,24 +789,7 @@ class VideoEditor(tk.Toplevel):
                 except Exception:
                     pass
             self.after(30, _dark)
-        if MONO:      # Moon: місяць з променями справа вгорі, за плеєром
-            frames = ui.sky_frames(self.mid, "sky_editor.png")
-            sky = frames[0] if frames else None
-            self._sky = sky
-
-            def _set_sky(im):
-                self._sky = im
-                if getattr(self, "_sky_lbl", None):
-                    self._sky_lbl.configure(image=im)
-                try:
-                    self.video.itemconfigure("sky", image=im)
-                except (tk.TclError, AttributeError):
-                    pass
-            ui.animate_sky(self.mid, frames, _set_sky)
-            if sky:
-                self._sky_lbl = tk.Label(self.mid, image=sky, bd=0, bg=C_BG)
-                self._sky_lbl.place(relx=1.0, y=0, anchor="ne")
-                self._sky_lbl.lower()
+        self._moonfx = None
         P = {"bg2": C_BG2, "dark": C_DARK, "text": C_TEXT, "muted": C_MUTED,
              "accent": C_BLURPLE, "font": FONT, "mono": MONO}
         self._insp = edit_inspector.Inspector(self.mid, self, P, E)
@@ -887,9 +876,33 @@ class VideoEditor(tk.Toplevel):
             except Exception: pass
         self._rs_after = self.after(90, self._apply_resize)
 
+    def _start_moonfx(self):
+        """Moon: живий місяць з променями на канвасі плеєра (частота монітора)."""
+        if not MONO or self._closed:
+            return
+        if self._moonfx is not None:          # змінився розмір — перемальовуємо на новому місці
+            try:
+                self._moonfx.cx = self.video.winfo_width() - 46
+                self._moonfx._frame(0.0)
+            except Exception:
+                pass
+            return
+        try:
+            c = self.video
+            # у редакторі луна нерухома: жива анімація забирала б час у плеєра й доріжки
+            self._moonfx = ui.MoonFX(c, c.winfo_width() - 46, 30, 110, reach=6.0, static=True)
+            c.tag_lower("moonfx")
+            c.tag_lower("card")
+            c.tag_lower("screen")
+            c.tag_raise("card", "moonfx")
+            c.tag_raise("screen", "card")
+        except Exception as e:
+            dc_core.dlog("moonfx fail " + repr(e))
+
     def _draw_sky(self):
         """Moon: той самий місяць і на канвасі плеєра — зсунутий так, щоб збігся з тим, що
         за ним у вікні (без швів)."""
+        self._start_moonfx()
         sky = getattr(self, "_sky", None)
         if not sky or self._closed:
             return
@@ -3593,7 +3606,7 @@ class VideoEditor(tk.Toplevel):
             src = self._src(p)
             if src["kind"] == "video" and src["has_audio"] and not fx.g(p, "novideo"):
                 self._toggle_novideo()
-                self.info_lbl.config(text=E("ed_del_last_video"), fg=host.C_WARN)
+                self.info_lbl.config(text=E("ed_del_last_video"), fg=C_WARN)
             else:
                 self.info_lbl.config(text=E("ed_del_last"), fg=C_RED)
 
@@ -4694,7 +4707,7 @@ class VideoEditor(tk.Toplevel):
         if getattr(self, "_xfmt", "video") == "audio":
             kb = self._mp3_kbps(total, target)
             self.info_lbl.config(text=(f"🎵 MP3 · {kb} kbps" if kb else E("ed_q_long")),
-                                 fg=(C_GREEN if kb >= 128 else host.C_WARN if kb else C_RED))
+                                 fg=(C_GREEN if kb >= 128 else C_WARN if kb else C_RED))
             self.export_btn.config(state=("normal" if kb else "disabled"))
             return
         if getattr(self, "_xfmt", "video") == "gif":
@@ -4709,8 +4722,8 @@ class VideoEditor(tk.Toplevel):
             self.sources[o["src"]]["has_audio"] and not o["mute"] for o in self.ovls)
         v = dc_core.fit_bitrates(total, target, self.cfg["audio_kbps"], has_a)[1] or 0
         if v >= 600: col, tag = C_GREEN, E("ed_q_good")
-        elif v >= 150: col, tag = host.C_WARN, E("ed_q_ok")
-        elif v >= dc_core.MIN_VKBPS: col, tag = host.C_WARN, E("ed_q_weak")
+        elif v >= 150: col, tag = C_WARN, E("ed_q_ok")
+        elif v >= dc_core.MIN_VKBPS: col, tag = C_WARN, E("ed_q_weak")
         else: col, tag = C_RED, E("ed_q_long")
         self.info_lbl.config(text=tag, fg=col)   # без цифр — лише оцінка якості
         self.export_btn.config(state=("normal" if v >= dc_core.MIN_VKBPS else "disabled"))

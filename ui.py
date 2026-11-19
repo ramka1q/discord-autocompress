@@ -840,3 +840,161 @@ def logo(c, x, y, s, P=None, tags=()):
             return None
         _LOGO_CACHE[s] = img
     return c.create_image(x, y, image=img, anchor="nw", tags=tags)
+
+
+# ------------------------------------------------- живий місяць (Tk) --- #
+def refresh_hz():
+    """Частота монітора (Гц) — анімація місяця йде саме з такою частотою."""
+    try:
+        class DEVMODE(ctypes.Structure):
+            _fields_ = [("n", ctypes.c_wchar * 32), ("a", ctypes.c_ushort * 4), ("b", ctypes.c_ulong),
+                        ("c", ctypes.c_byte * 16), ("d", ctypes.c_short * 5), ("e", ctypes.c_wchar * 32),
+                        ("f", ctypes.c_ushort), ("bpp", ctypes.c_ulong), ("w", ctypes.c_ulong),
+                        ("h", ctypes.c_ulong), ("fl", ctypes.c_ulong), ("hz", ctypes.c_ulong)]
+        dm = DEVMODE()
+        dm.a[2] = ctypes.sizeof(DEVMODE)
+        if ctypes.windll.user32.EnumDisplaySettingsW(None, -1, ctypes.byref(dm)) and 24 <= dm.hz <= 500:
+            return int(dm.hz)
+    except Exception:
+        pass
+    return 60
+
+
+_TIMER = {"n": 0}
+
+
+def _hi_res_timer(on):
+    """Точний таймер Windows (1 мс) лише поки живе хоч одна анімація."""
+    try:
+        if on:
+            if _TIMER["n"] == 0:
+                ctypes.windll.winmm.timeBeginPeriod(1)
+            _TIMER["n"] += 1
+        else:
+            _TIMER["n"] = max(0, _TIMER["n"] - 1)
+            if _TIMER["n"] == 0:
+                ctypes.windll.winmm.timeEndPeriod(1)
+    except Exception:
+        pass
+
+
+class MoonFX:
+    """Місяць + 17 променів, що гойдаються й мерехтять, наживо на будь-якому Canvas.
+    Кадри йдуть із частотою монітора (60/144/180 Гц…), рух рахується за ЧАСОМ —
+    тож швидкість однакова на будь-якому FPS. Можна вести кілька канвасів однією
+    сценою (offset — зсув канваса відносно «неба»), напр. у редакторі."""
+
+    def __init__(self, canvases, cx, cy, r=110, below=None, reach=7.0, static=False):
+        self.cv = canvases if isinstance(canvases, list) else [(canvases, 0, 0)]
+        self.cx, self.cy, self.r, self.reach = cx, cy, r, reach
+        self.below = below
+        import os
+        import random
+        import time as _t
+        self._t = _t
+        rnd = random.Random(7)
+        self.rays = []
+        for i in range(17):
+            main = i % 4 == 0
+            self.rays.append(dict(a=math.radians(135 + (i - 8) * 6.2 + rnd.uniform(-1.5, 1.5)), main=main,
+                                  k=0.55 if main else rnd.uniform(.18, .32), p1=rnd.uniform(0, 6.28),
+                                  p2=rnd.uniform(0, 6.28), f1=rnd.uniform(.07, .12), f2=rnd.uniform(.13, .21)))
+        self.img = None
+        p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", f"moon_{120 if r > 115 else 110}.png")
+        try:
+            self.img = tk.PhotoImage(master=self.cv[0][0], file=p)
+        except (tk.TclError, OSError):
+            self.img = None
+        self.ms = max(4, int(round(1000.0 / refresh_hz())))
+        self.items = {}
+        self._col = {}
+        self.t0 = _t.monotonic()
+        self.alive = True
+        self._build()
+        if static:                       # один кадр без анімації (нуль навантаження)
+            self.alive = False
+            self._frame(0.0)
+            return
+        _hi_res_timer(True)
+        self._tick()
+
+    # шари променя: (ширина як частка, яскравість 0..1); ділимо на відрізки — далі тьмяніше
+    LAYERS = ((1.0, .13), (.42, .34))
+    SEGS = 9
+
+    def _build(self):
+        for c, ox, oy in self.cv:
+            ids = []
+            for _ in self.rays:
+                ids.append([[c.create_polygon(0, 0, 0, 0, 0, 0, fill="#000000", outline="", tags="moonfx")
+                             for _l in self.LAYERS] for _s in range(self.SEGS)])
+            im = c.create_image(0, 0, image=self.img, tags="moonfx") if self.img else None
+            self.items[c] = (ids, im)
+            try:
+                c.tag_lower("moonfx")
+                if self.below is not None:
+                    c.tag_lower(self.below)
+            except tk.TclError:
+                pass
+
+    def stop(self):
+        if self.alive:
+            self.alive = False
+            _hi_res_timer(False)
+
+    def _tick(self):
+        if not self.alive:
+            return
+        try:
+            if not self.cv[0][0].winfo_exists():
+                return self.stop()
+            t1 = self._t.monotonic()
+            self._frame(t1 - self.t0)
+            cost = (self._t.monotonic() - t1) * 1000
+            # не забираємо весь час у вікна: якщо кадр дорогий — пауза щонайменше як сам кадр
+            self.cv[0][0].after(max(self.ms, int(cost * 1.5)), self._tick)
+        except tk.TclError:
+            self.stop()
+
+    def _frame(self, t):
+        r = self.r
+        cx = self.cx() if callable(self.cx) else self.cx
+        cy = self.cy() if callable(self.cy) else self.cy
+        fx = cx + r * (0.06 * math.sin(t * 0.21) + 0.02 * math.sin(t * 0.53))   # ледь плаває
+        fy = cy + r * (0.05 * math.cos(t * 0.17) + 0.02 * math.sin(t * 0.41))
+        breath = 0.5 + 0.5 * math.sin(t * 2.1) * math.sin(t * 0.7)
+        geo = []
+        for R in self.rays:
+            a = R["a"] + math.radians(2.4 * math.sin(t * R["f1"] + R["p1"]) + 1.1 * math.sin(t * R["f2"] + R["p2"]))
+            fl = (0.8 + 0.2 * math.sin(t * 1.7 + R["p2"]) * math.sin(t * .6 + R["p1"])) * (0.92 + 0.12 * breath)
+            L = r * self.reach * (1.3 if R["main"] else 1.0)
+            wid = math.radians(4.2 if R["main"] else 2.6)
+            ca, sa = math.cos(a), math.sin(a)
+            nx, ny = -sa, ca
+            segs = []
+            for s in range(self.SEGS):
+                d0 = r * 0.85 + (L - r * 0.85) * s / self.SEGS
+                d1 = r * 0.85 + (L - r * 0.85) * (s + 1) / self.SEGS
+                fade = (1 - (s + 0.5) / self.SEGS) ** 1.35     # дрібні сходинки -> плавне згасання
+                lay = []
+                for wf, br in self.LAYERS:
+                    w0, w1 = d0 * math.tan(wid) * wf, d1 * math.tan(wid) * wf
+                    pts = (fx + ca * d0 + nx * w0, fy + sa * d0 + ny * w0, fx + ca * d1 + nx * w1, fy + sa * d1 + ny * w1,
+                           fx + ca * d1 - nx * w1, fy + sa * d1 - ny * w1, fx + ca * d0 - nx * w0, fy + sa * d0 - ny * w0)
+                    v = int(min(255, 255 * br * R["k"] * fl * fade * 1.9))
+                    lay.append((pts, "#%02x%02x%02x" % (v, v, max(0, v - 2))))
+                segs.append(lay)
+            geo.append(segs)
+        for c, (ids, im) in self.items.items():
+            ox, oy = next((o for o in self.cv if o[0] is c))[1:]
+            for ray_ids, segs in zip(ids, geo):
+                for seg_ids, lay in zip(ray_ids, segs):
+                    for iid, (pts, col) in zip(seg_ids, lay):
+                        if ox or oy:
+                            pts = [p - (ox if k % 2 == 0 else oy) for k, p in enumerate(pts)]
+                        c.coords(iid, *pts)
+                        if self._col.get(iid) != col:      # колір міняємо лише коли змінився
+                            self._col[iid] = col
+                            c.itemconfigure(iid, fill=col)
+            if im:
+                c.coords(im, fx - ox, fy - oy)

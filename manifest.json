@@ -1,9 +1,15 @@
 {
   "files": [
+    "assets/moon_120.png",
+    "assets/moon_110.png",
+    "webov.py",
+    "webui.py",
+    "webui/moon.js",
+    "webui/app.js",
+    "webui/app.css",
+    "webui/index.html",
     "assets/sky_head.png",
-    "assets/sky_editor.png",
     "assets/sky_card_wide.png",
-    "assets/sky_card.png",
     "fonts/OFL.txt",
     "fonts/Manrope-Regular.ttf",
     "fonts/Manrope-Bold.ttf",

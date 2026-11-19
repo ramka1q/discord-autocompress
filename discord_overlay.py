@@ -314,9 +314,27 @@ class Overlay(tk.Toplevel):
         self.canvas.bind("<ButtonRelease-1>", self._btn_release)
         self.bind("<Escape>", lambda e: self._esc())
 
+        # веб-дизайн: те саме вікно, але показує його Edge (живий місяць, справжнє скло)
+        self._mirror = None
+        try:
+            if ui.is_mono(self.P) and watcher is not None and cfg.get("web_ui", True) is not False:
+                import webov
+                import webui
+                if webov.window(wait=0.05):
+                    self.attributes("-alpha", 0.0)
+                    self.geometry(f"{self.W}x{self.H}+-32000+-32000")
+                    bridge, _port = webui.start(watcher)
+                    self._mirror = webov.Mirror(self, bridge)
+                else:
+                    webov.prelaunch(watcher)          # наступного разу вже буде веб
+        except Exception as e:
+            dc_core.dlog("webov attach fail " + repr(e))
+            self._mirror = None
+
         self._show_offer()
         self._load_meta()
-        self._intro()
+        if self._mirror is None:
+            self._intro()
 
         # оверлей живе «поверх Discord»: ховаємо його, коли Discord згорнули або
         # прикрили іншим вікном, і показуємо знову, коли Discord знову активний
@@ -379,6 +397,10 @@ class Overlay(tk.Toplevel):
         """Чи належить активне вікно НАШОМУ процесу (оверлей, редактор тощо)."""
         if not fg:
             return False
+        if self._mirror is not None:
+            import webov
+            if webov.is_own(fg):           # клік по веб-вікну оверлея — це теж «наше»
+                return True
         try:
             pid = wintypes.DWORD()
             user32.GetWindowThreadProcessId(fg, ctypes.byref(pid))
@@ -403,11 +425,13 @@ class Overlay(tk.Toplevel):
             else:
                 show = False           # згорнули Discord або перейшли в іншу програму
             if show and not self._visible:
-                self.deiconify()
-                self.attributes("-topmost", True)
+                if self._mirror is None:
+                    self.deiconify()
+                    self.attributes("-topmost", True)
                 self._visible = True
             elif not show and self._visible:
-                self.withdraw()
+                if self._mirror is None:
+                    self.withdraw()
                 self._visible = False
         except Exception:
             pass
@@ -433,18 +457,22 @@ class Overlay(tk.Toplevel):
         c, P, W, H = self.canvas, self.P, self.W, self.H
         c.delete("card")
         # «тінь» — кілька зсунутих темних обрисів (у Tk немає альфи)
-        for i, t in ((5, 0.55), (3, 0.35)):
-            ui.round_rect(c, 2 + i - 2, 2 + i, W - 2 - i + 2, H - 2 + i - 4, 26,
-                          fill=ui.darken(C_BG, t), outline="", tags="card")
+        mono = ui.is_mono(P)
+        if not mono:
+            for i, t in ((5, 0.55), (3, 0.35)):
+                ui.round_rect(c, 2 + i - 2, 2 + i, W - 2 - i + 2, H - 2 + i - 4, 26,
+                              fill=ui.darken(C_BG, t), outline="", tags="card")
         ui.round_rect(c, 2, 2, W - 4, H - 6, 26, fill=C_BG,
-                      outline=ui.mix(C_BG, C_TEXT, 0.10), tags=("card", "drag"))
-        sky = ui.sky(c, "sky_card.png") if ui.is_mono(P) else None
-        if sky:      # Moon: місяць з променями справа вгорі (кут картки вже «прозорий» у самій картинці)
-            c.create_image(W - 2, 0, image=sky, anchor="ne", tags=("card", "drag", "skyimg"))
-            if not getattr(self, "_sky_anim", False):
-                self._sky_anim = True
-                ui.animate_sky(c, ui.sky_frames(c, "sky_card.png"),
-                               lambda im: c.itemconfigure("skyimg", image=im))
+                      outline=ui.mix(C_BG, C_TEXT, 0.10), tags=("card", "drag", "cardbg"))
+        sky = mono
+        if mono:     # Moon: живий місяць з променями (частота монітора); поза карткою — «прозоре»
+            if getattr(self, "_moonfx", None) is None:
+                self._moonfx = ui.MoonFX(c, W - 40, 34, 110, reach=6.5)
+                self.bind("<Destroy>", lambda e: self._moonfx.stop() if e.widget is self else None, add="+")
+            k = 80
+            c.create_polygon(ui.rr_pts(2 - k / 2, 2 - k / 2, W - 4 + k / 2, H - 6 + k / 2, 26 + k / 2), smooth=True,
+                             fill="", outline=C_KEY, width=k, tags=("card", "cardmask"))
+            ui.round_rect(c, 2, 2, W - 4, H - 6, 26, fill="", outline="#1a1a1a", tags=("card", "cardmask"))
         # м'яке сяйво акценту у верхній частині
         for i in range(10 if not sky else 0, 0, -1):
             t = i / 10.0
@@ -474,6 +502,10 @@ class Overlay(tk.Toplevel):
                                                   c.config(cursor="")))
         c.tag_bind("xbtn", "<Button-1>", lambda e: self._esc())
         c.tag_lower("card")
+        if mono:     # порядок: картка -> промені/місяць -> маска кутів -> решта
+            c.tag_lower("moonfx")
+            c.tag_lower("cardbg")
+            c.tag_raise("cardmask", "moonfx")
 
     def _clear(self):
         for name in ("ring", "joke", "autoclose", "pop"):
@@ -490,6 +522,7 @@ class Overlay(tk.Toplevel):
                 pass
         self._widgets.clear()
         self._btns.clear()
+        self._w_chips, self._w_badge, self._w_done, self._w_ac = [], None, None, None
         self._hover_tag = None
         self.canvas.delete("dyn")
         try:
@@ -527,17 +560,22 @@ class Overlay(tk.Toplevel):
         c2 = c2 or ui.accent2(self.P)
         cx = self.W // 2
         self._glow(cx, cy, R, ui.mix(c1, c2, 0.5))
-        ui.grad_ring(self.canvas, cx, cy, R + 4, 4, 1.0, c1, c2, C_BG2, tags="dyn", segs=48)
+        self._w_badge = {"icon": icon, "cx": cx, "cy": cy, "R": R}
+        ui.grad_ring(self.canvas, cx, cy, R + 4, 4, 1.0, c1, c2, C_BG2, tags=("dyn", "badge"), segs=48)
         self.canvas.create_oval(cx - R + 2, cy - R + 2, cx + R - 2, cy + R - 2,
-                                fill=C_BG2, outline="", tags="dyn")
-        self.canvas.create_text(cx, cy + 1, text=icon, font=(FONT, 24), fill=C_TEXT, tags="dyn")
+                                fill=C_BG2, outline="", tags=("dyn", "badge"))
+        self.canvas.create_text(cx, cy + 1, text=icon, font=(FONT, 24), fill=C_TEXT, tags=("dyn", "badge"))
 
     def _chip(self, cx, cy, text, fg, fill, size=10, tag=None, pad=12, anchor="center"):
         """Заокруглений «чип» з текстом; повертає (x1, x2)."""
         w = ui.measure(self, text, size) + 2 * pad
         h = size * 2 + 10
         x1 = cx - w / 2 if anchor == "center" else (cx if anchor == "w" else cx - w)
-        tags = ("dyn",) + ((tag,) if tag else ())
+        tags = ("dyn", "chip") + ((tag,) if tag else ())
+        if not hasattr(self, "_w_chips"):
+            self._w_chips = []
+        self._w_chips.append({"t": text, "x1": x1, "x2": x1 + w, "cy": cy, "h": h, "tag": tag or "",
+                              "size": size, "hot": tag == "custmb"})
         ui.round_rect(self.canvas, x1, cy - h / 2, x1 + w, cy + h / 2, h / 2, fill=fill,
                       outline="", tags=tags + (("chipbg_" + tag,) if tag else ()))
         self.canvas.create_text(x1 + w / 2, cy, text=text, fill=fg, font=(FONT, size, "bold"),
@@ -880,6 +918,7 @@ class Overlay(tk.Toplevel):
         """Галочка «Готово»: кільце швидко замикається, а значок легенько «пружинить»."""
         self.canvas.delete("donering")
         k = min(1.0, (step + 1) / 10.0)
+        self._w_done = {"cx": cx, "cy": cy, "ok": col == C_GREEN}
         ui.grad_ring(self.canvas, cx, cy, 38, 5, ui.ease_out(k), col, ui.lighten(col, 0.35), C_BG2,
                      tags=("dyn", "donering"), segs=48)
         R = 30 * (0.75 + 0.25 * ui.ease_out(k) + 0.06 * (1 - k) * (k > 0.6))
@@ -908,6 +947,7 @@ class Overlay(tk.Toplevel):
             if state["left"] <= 0:
                 return self._close()
             self.canvas.delete("acbar")
+            self._w_ac = {"y": y, "f": round(state["left"] / ms, 3)}
             ui.round_rect(self.canvas, x1, y, x2, y + 3, 1.5, fill=C_BG2, outline="",
                           tags=("dyn", "acbar"))
             xe = x1 + (x2 - x1) * state["left"] / ms
@@ -1071,11 +1111,14 @@ class Overlay(tk.Toplevel):
         self._text(L("unit_mb"), cy, 13, C_MUTED, bold=False, x=cx + 50)
         self.shrink_err = self._text("", 256, 9, C_RED, bold=False)
         self.mb_entry.bind("<Return>", lambda e: on_ok())
+        self._entry_ok = on_ok          # для веб-вікна (Enter у полі на сторінці)
         self.mb_entry.bind("<Escape>", lambda e: on_back())
         self._btn_full(L("ov_compress"), on_ok, 300)
         self._btn_full(L("ov_back") if on_back != self._close else L("close"), on_back, 350,
                        primary=False)
         self._set_height(400)
+        if self._mirror is not None:      # у веб-вікні поле вводу своє — не забираємо фокус
+            return
         try:
             self.focus_force()
             self.mb_entry.focus_set()
@@ -1338,6 +1381,11 @@ class Overlay(tk.Toplevel):
                 except Exception:
                     pass
         self._timers.clear()
+        if getattr(self, "_mirror", None) is not None:
+            try:
+                self._mirror.close()
+            except Exception:
+                pass
         try:
             self.destroy()
         except Exception:
@@ -1559,6 +1607,8 @@ class Watcher:
         self._start_tray()
         if open_settings:
             self.root.after(200, self.open_settings)
+        # веб-вікно стиснення запускаємо заздалегідь (сховане) — після Ctrl+V воно з'явиться одразу
+        self.root.after(2500, self._prelaunch_overlay)
         if show_news:
             self.root.after(1400, self.show_whats_new)
 
@@ -1576,6 +1626,8 @@ class Watcher:
         dc_core.dlog("TK CALLBACK ERROR: " + "".join(traceback.format_exception(exc, val, tb)))
 
     def show_whats_new(self):
+        if self._web("news"):
+            return
         try:
             import whatsnew
             whatsnew.WhatsNew(self.root, LANG, THEME,
@@ -1607,8 +1659,11 @@ class Watcher:
                 buf = ctypes.create_unicode_buffer(n + 1)
                 user32.GetWindowTextW(hwnd, buf, n + 1)
                 title = buf.value
+            dh = hwnd if "Discord" in title else None
+            if self._web("gallery", gallery_hwnd=dh):
+                return
             import library
-            library.open_gallery(self, hwnd if "Discord" in title else None)
+            library.open_gallery(self, dh)
         except Exception as e:
             dc_core.dlog("gallery EXCEPTION " + repr(e))
 
@@ -1687,7 +1742,29 @@ class Watcher:
             self.quit_app()
 
     # ---- меню налаштувань ----
+    def _prelaunch_overlay(self):
+        try:
+            if themes.palette(THEME).get("mono") and self.cfg.get("web_ui", True) is not False:
+                import webov
+                webov.prelaunch(self)
+                threading.Thread(target=lambda: webov.window(wait=20), daemon=True).start()
+        except Exception as e:
+            dc_core.dlog("webov prelaunch fail " + repr(e))
+
+    def _web(self, page, **kw):
+        """Веб-вікно (дизайн Moon у Edge). False — Edge немає або вимкнено -> Tk."""
+        if self.cfg.get("web_ui", True) is False:
+            return False
+        try:
+            import webui
+            return webui.open_page(self, page, **kw)
+        except Exception as e:
+            dc_core.dlog("webui EXCEPTION " + repr(e))
+            return False
+
     def open_settings(self, tab=None):
+        if self.settings_win is None and self._web("menu", tab=tab):
+            return
         if self.settings_win is not None:
             try:
                 if tab:
@@ -1843,6 +1920,7 @@ class Watcher:
 
     def _closed(self):
         self.overlay_open = False
+        self.root.after(1500, self._prelaunch_overlay)     # якщо веб-вікно закрили — підготувати знову
 
     def _show_pill(self, hwnd, path, size):
         try:
