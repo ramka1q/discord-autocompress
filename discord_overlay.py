@@ -1593,6 +1593,11 @@ class Watcher:
         # самолікування: якщо при запуску частина файлів прийшла іншої версії —
         # докачуємо їх з ОДНОГО коміту (діє лише у встановленій копії з маркером .autoupdate)
         threading.Thread(target=self._self_heal, daemon=True).start()
+        try:
+            import appicon
+            appicon.register_process_app_id()   # «Discord Auto-Compress» на панелі завдань і в сповіщеннях
+        except Exception as e:
+            dc_core.dlog("app id: " + repr(e))
         self.root = tk.Tk()
         self.root.withdraw()
         # будь-яка помилка в обробнику подій -> у журнал (у exe консолі немає, і вона губилась)

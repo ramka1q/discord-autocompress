@@ -877,6 +877,10 @@ def _dress_window(port, title):
         for h in found:
             if title:
                 u32.SetWindowTextW(ctypes.c_void_p(h), title)
+            try:
+                appicon.brand_window(h)
+            except Exception:
+                pass
             if hbig:
                 u32.SendMessageW(ctypes.c_void_p(h), 0x0080, 1, ctypes.c_void_p(hbig))     # WM_SETICON big
                 u32.SendMessageW(ctypes.c_void_p(h), 0x0080, 0, ctypes.c_void_p(hsmall))   # small
@@ -1021,6 +1025,11 @@ def hide_main():
 def _show_main(hwnd, page):
     import ctypes
     u32 = ctypes.windll.user32
+    try:
+        import appicon
+        appicon.brand_window(hwnd)        # «Discord Auto-Compress» на панелі завдань, а не «Microsoft Edge»
+    except Exception:
+        pass
     sw, sh = u32.GetSystemMetrics(0), u32.GetSystemMetrics(1)
     w, h = SIZES.get(page, (1100, 760))
     w, h = min(w, sw - 40), min(h, sh - 80)

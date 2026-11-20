@@ -10,6 +10,12 @@ changelog.py — версія програми та список змін по �
 REPO_URL = "https://github.com/ramka1q/discord-autocompress"
 
 CHANGES = [
+    {"v": "3.5.3", "date": "2026-11-20 10:58", "items": [
+        {"icon": "🏷", "tab": None,
+         "uk": ("Наша назва всюди", "На панелі завдань і в меню правої кнопки тепер «Discord Auto-Compress» з нашим значком, а не «Microsoft Edge». Сповіщення теж підписані назвою програми."),
+         "ru": ("Наше название везде", "На панели задач и в меню правой кнопки теперь «Discord Auto-Compress» с нашим значком, а не «Microsoft Edge». Уведомления тоже подписаны названием программы."),
+         "en": ("Our name everywhere", "The taskbar and its right-click menu now say Discord Auto-Compress with our icon instead of Microsoft Edge. Notifications are labeled with the app name too.")},
+    ]},
     {"v": "3.5.2", "date": "2026-11-20 10:55", "items": [
         {"icon": "🔄", "tab": None,
          "uk": ("Оновлення без зайвого перезапуску", "Якщо програма оновилась сама під час запуску, вона одразу перезапускається в нову версію (коли нічого не стискає і редактор закритий) — раніше нова версія з'являлась лише після ще одного запуску."),
