@@ -473,7 +473,7 @@ class Inspector(tk.Frame):
         def set_preset(key):
             pr = fx.AUDIO_PRESETS[key]
             for k in fx.AFX_KEYS:
-                obj[k] = pr[k]
+                obj[k] = pr.get(k, fx.PIECE_DEFAULTS[k])
             if "vol" in pr:
                 obj["vol"] = pr["vol"]
                 obj.pop("mute", None) if "mute" not in obj else obj.__setitem__("mute", False)
@@ -502,6 +502,11 @@ class Inspector(tk.Frame):
                      lambda v: f"+{v:.0f} dB" + ("  💥" if v >= 15 else ""), 0.0)
         self._slider(E("ins_reverb"), 0.0, 1.0, lambda: float(fx.g(obj, "rev")), setter("rev"),
                      self._pct, 0.0)
+        self._section(E("ins_enhance_a"))
+        self._chips([(False, E("ins_off")), (True, E("ins_dn"))], lambda: bool(fx.g(obj, "dn")),
+                    lambda v: obj.__setitem__("dn", v), per_row=2)
+        self._chips([(False, E("ins_off")), (True, E("ins_venh"))], lambda: bool(fx.g(obj, "venh")),
+                    lambda v: obj.__setitem__("venh", v), per_row=2)
 
     def _pct(self, v):
         return f"{int(round(v * 100))}%"
@@ -613,13 +618,53 @@ class Inspector(tk.Frame):
         Tabs(self.tabbar, self.P, tabs, lambda: cur, pick, height=32).pack(fill="x", padx=2)
         getattr(self, "_tab_" + cur)(kind, p, src)
 
+    def _keyframes(self, p):
+        """Ключові кадри: ◆ у точці плейхеда, ◀ ▶ — до сусіднього ключа, очистити."""
+        E, ed, P = self.E, self.ed, self.P
+        self._section(E("ins_kf"))
+        on = ed._kf_at(p)
+        self._row([("\u25c6 " + (E("ins_kf_del") if on else E("ins_kf_add")), ed._kf_toggle),
+                   ("\u25c0", lambda: ed._kf_jump(-1)), ("\u25b6", lambda: ed._kf_jump(1)),
+                   ("\u2715 " + E("ins_kf_clear"), ed._kf_clear)])
+        n = len(fx.kf_times(p))
+        tk.Label(self.body, text=E("ins_kf_hint", n=n), bg=P["bg2"], fg=P["muted"], anchor="w",
+                 justify="left", wraplength=self.W - 30, font=(P["font"], 8)).pack(fill="x", padx=14, pady=(0, 4))
+
+    def _crop(self, p):
+        E = self.E
+        self._section(E("ins_crop"))
+        for k in fx.CROP_KEYS:
+            self._slider(E("ins_" + k), 0.0, 0.45, (lambda k=k: float(fx.g(p, k))), self._setp(p, k),
+                         self._pct, 0.0)
+
+    def _keymask(self, p):
+        E = self.E
+        self._section(E("ins_chroma"))
+        cols = [(None, E("ck_none")), ("#00ff00", E("ck_green")), ("#0000ff", E("ck_blue")),
+                ("#000000", E("ck_black")), ("#ffffff", E("ck_white"))]
+        self._chips(cols, lambda: p.get("ck"), lambda v: p.__setitem__("ck", v), per_row=5)
+        self._slider(E("ins_ck_sim"), 0.02, 0.8, lambda: float(p.get("cks", 0.3)), self._setp(p, "cks"),
+                     self._pct, 0.3)
+        self._section(E("ins_mask"))
+        self._chips([(m, E("mask_" + m)) for m in fx.MASKS], lambda: p.get("mask") or "none",
+                    lambda v: p.__setitem__("mask", v), per_row=4)
+        self._chips([(False, E("mask_normal")), (True, E("mask_invert"))], lambda: bool(p.get("minv")),
+                    lambda v: p.__setitem__("minv", v), per_row=2)
+
     def _tab_video(self, kind, p, src):
         E, ed = self.E, self.ed
+        if kind == "clip":
+            self._keyframes(p)
         self._transform(kind, p)
+        if kind == "clip":
+            self._slider(E("ins_opacity"), 0.0, 1.0, lambda: float(fx.g(p, "opa")),
+                         self._setp(p, "opa"), self._pct, 1.0)
         if kind == "ovl":
             self._section(E("ins_overlay"))
             self._slider(E("ins_opacity"), 0.0, 1.0, lambda: float(p.get("op", 1.0)),
                          self._setp(p, "op"), self._pct, 1.0)
+            self._keymask(p)
+        self._crop(p)
         self._section(E("ins_fades"))
         self._fades(p, (p["e"] - p["s"]) / p.get("speed", 1.0))
         if kind == "clip" and src["kind"] == "video":
@@ -700,21 +745,45 @@ class Inspector(tk.Frame):
     def _tab_speed(self, kind, p, src):
         E, ed = self.E, self.ed
         self._section(E("ins_speed"))
+        base = lambda: float(p.get("cbase", p["speed"])) if p.get("curve") else p["speed"]
         self._chips([(v, f"{v:g}\u00d7") for v in (0.25, 0.5, 1.0, 1.5, 2.0, 3.0)],
-                    lambda: p["speed"], lambda v: ed._set_speed(v, undo=False), per_row=6)
+                    base, lambda v: ed._set_speed(v, undo=False), per_row=6)
 
         def set_sp(v):
             v = max(0.1, round(float(v) * 20) / 20.0)
-            if abs(v - p["speed"]) > 1e-6:
+            if abs(v - base()) > 1e-6:
                 ed._set_speed(v, undo=False)
-        self._slider(E("ins_speed_x"), 0.1, 5.0, lambda: float(p["speed"]), set_sp,
+        self._slider(E("ins_speed_x"), 0.1, 5.0, lambda: float(base()), set_sp,
                      lambda v: f"{v:.2f}\u00d7", 1.0)
+        self._section(E("ins_curve"))
+        self._chips([(None, E("cv_none"))] + [(k, E("cv_" + k)) for k in fx.CURVES],
+                    lambda: p.get("curve"), lambda v: ed._set_curve(v), per_row=4)
         dur = (p["e"] - p["s"]) / p["speed"]
         tk.Label(self.body, text=E("ins_speed_dur", d=f"{dur:.1f}"), bg=self.P["bg2"], fg=self.P["muted"],
                  anchor="w", font=(self.P["font"], 8)).pack(fill="x", padx=14, pady=(0, 4))
 
     def _tab_adjust(self, kind, p, src):
         self._look(p)
+        E = self.E
+        sg = lambda v: f"{int(round(v * 100)):+d}"
+        self._slider(E("ins_temp"), -1.0, 1.0, lambda: float(fx.g(p, "temp")), self._setp(p, "temp"), sg, 0.0)
+        self._slider(E("ins_tint"), -1.0, 1.0, lambda: float(fx.g(p, "tint")), self._setp(p, "tint"), sg, 0.0)
+        self._slider(E("ins_hue"), -180.0, 180.0, lambda: float(fx.g(p, "hue")), self._setp(p, "hue"),
+                     lambda v: f"{v:+.0f}\u00b0", 0.0)
+        self._slider(E("ins_hl"), -1.0, 1.0, lambda: float(fx.g(p, "hl")), self._setp(p, "hl"), sg, 0.0)
+        self._slider(E("ins_sh"), -1.0, 1.0, lambda: float(fx.g(p, "sh")), self._setp(p, "sh"), sg, 0.0)
+        self._slider(E("ins_sharp"), 0.0, 1.0, lambda: float(fx.g(p, "sharp")), self._setp(p, "sharp"),
+                     self._pct, 0.0)
+        self._slider(E("ins_vig"), 0.0, 1.0, lambda: float(fx.g(p, "vig")), self._setp(p, "vig"), self._pct, 0.0)
+        self._slider(E("ins_grain"), 0.0, 1.0, lambda: float(fx.g(p, "grain")), self._setp(p, "grain"),
+                     self._pct, 0.0)
+        self._section(E("ins_enhance_v"))
+        for k in ("stab", "deflick", "mblur"):
+            self._chips([(False, E("ins_off")), (True, E("ins_" + k))], (lambda k=k: bool(fx.g(p, k))),
+                        (lambda v, k=k: p.__setitem__(k, v)), per_row=2)
+        self._section(self.E("mp_effects"))
+        self._chips([(v, self.E("vfx_" + v)) for v in fx.VFX], lambda: fx.g(p, "vfx"),
+                    self._setp(p, "vfx", str), per_row=3)
 
     def _tab_anim(self, kind, p, src):
         """Animation: In / Out / Combo, категорії і сітка плиток з живим прев'ю."""
@@ -821,6 +890,8 @@ class Inspector(tk.Frame):
                     self._setp(t, "style", str), per_row=3)
         self._section(E("ins_color"))
         sw = Swatches(self.body, P, fx.TEXT_COLORS, lambda: t.get("color", "#ffffff"), None, self.W - 16)
+
+        self._row([("\U0001f5e3 " + E("ins_tts"), lambda: ed._tts(t))])
 
         def set_col(c):
             if c == t.get("color"):

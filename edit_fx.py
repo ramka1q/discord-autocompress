@@ -16,8 +16,18 @@ PIECE_DEFAULTS = {"vol": 1.0, "fin": 0.0, "fout": 0.0, "flt": "none",
                   "br": 0.0, "ct": 1.0, "sat": 1.0, "rot": 0, "flip": False,
                   # ефекти звуку: тон (півтони), бас (дБ), реверб (0..1), ефект
                   "pitch": 0.0, "bass": 0.0, "rev": 0.0, "aeff": "none",
-                  "novideo": False}     # «видалити відео — лишити звук»
-AFX_KEYS = ("pitch", "bass", "rev", "aeff")
+                  "novideo": False,     # «видалити відео — лишити звук»
+                  # v3.4: непрозорість кліпа, відеоефект, кадрування (частки з кожного боку)
+                  "opa": 1.0, "vfx": "none",
+                  "cropl": 0.0, "cropt": 0.0, "cropr": 0.0, "cropb": 0.0,
+                  # v3.4 «Коригування» як у CapCut: температура, відтінок, тон, різкість,
+                  # світлі / тіні, віньєтка, зерно; покращення відео; звук: шумодав, голос
+                  "temp": 0.0, "tint": 0.0, "hue": 0.0, "sharp": 0.0, "hl": 0.0, "sh": 0.0,
+                  "vig": 0.0, "grain": 0.0, "stab": False, "deflick": False, "mblur": False,
+                  "dn": False, "venh": False}
+ADJ_KEYS = ("temp", "tint", "hue", "sharp", "hl", "sh", "vig", "grain", "stab", "deflick", "mblur")
+CROP_KEYS = ("cropl", "cropt", "cropr", "cropb")
+AFX_KEYS = ("pitch", "bass", "rev", "aeff", "dn", "venh")
 AUDIO_EFFECTS = ["none", "phone", "underwater", "8d", "echo"]
 _AEFF = {
     "phone": "highpass=f=400,lowpass=f=3000",
@@ -46,6 +56,29 @@ _FILTER_VF = {
     "fade": "eq=contrast=0.86:brightness=0.05:saturation=0.75",
 }
 
+# ---- відеоефекти (вкладка «Ефекти» зліва): ставляться в pre_vf, тобто однаково
+#      у прев'ю, програвачі й експорті. Лише фільтри, що є і в старих збірках ffmpeg.
+VFX = ["none", "glitch", "vhs", "oldfilm", "blur", "shake", "chromatic", "flash", "rainbow",
+       "invert", "sepia", "edge", "pixel", "sharpen", "posterize", "bloom", "noise"]
+_VFX = {
+    "glitch": "rgbashift=rh=-8:bh=8:edge=smear",
+    "vhs": "rgbashift=rh=3:bh=-3,noise=alls=14:allf=t,eq=saturation=1.25:contrast=1.05",
+    "oldfilm": "noise=alls=24:allf=t,hue=s=0.25,eq=contrast=1.18:brightness=-0.03",
+    "blur": "boxblur=8:1",
+    "shake": "crop=w='iw*0.92':h='ih*0.92':x='iw*0.04+iw*0.03*sin(t*41)':y='ih*0.04+ih*0.03*cos(t*37)'",
+    "chromatic": "rgbashift=rh=-5:rv=2:bh=5:bv=-2",
+    "flash": "eq=brightness='0.35*lt(mod(t,0.6),0.08)':eval=frame",
+    "rainbow": "hue=h='t*120'",
+    "invert": "negate",
+    "sepia": "colorchannelmixer=.393:.769:.189:0:.349:.686:.168:0:.272:.534:.131",
+    "edge": "edgedetect=mode=colormix:high=0.2",
+    "pixel": "scale='trunc(iw/32)*2':'trunc(ih/32)*2',scale='iw*16':'ih*16':flags=neighbor",
+    "sharpen": "unsharp=7:7:1.6",
+    "posterize": "lutrgb=r='bitand(val,224)':g='bitand(val,224)':b='bitand(val,224)'",
+    "bloom": "eq=brightness=0.06:saturation=1.3:contrast=1.08,unsharp=9:9:-0.7",
+    "noise": "noise=alls=35:allf=t",
+}
+
 TRANSITIONS = ["fade", "fadeblack", "fadewhite", "slideleft", "wipeleft", "smoothleft",
                "circleopen", "zoomin", "pixelize", "radial"]
 
@@ -64,7 +97,8 @@ def is_default(p):
 
 def look_default(p):
     """Колір/поворот без змін (кадр із кешу скрабу можна показувати як є)."""
-    return (all(g(p, k) == PIECE_DEFAULTS[k] for k in ("flt", "br", "ct", "sat", "rot", "flip"))
+    return (all(g(p, k) == PIECE_DEFAULTS[k] for k in ("flt", "br", "ct", "sat", "rot", "flip",
+                                                        "vfx") + CROP_KEYS + ADJ_KEYS)
             and abs(float(p.get("ang", 0.0) or 0.0)) < 0.05)
 
 
@@ -86,8 +120,46 @@ def num(v):
 def eff_dims(w, h, p):
     """Розміри джерела ПІСЛЯ повороту на 90/270."""
     if int(g(p, "rot")) % 180 == 90:
-        return h, w
-    return w, h
+        w, h = h, w
+    fw, fh = crop_frac(p)
+    return max(2, int(w * fw)), max(2, int(h * fh))
+
+
+def crop_frac(p):
+    """Яка частка ширини / висоти лишається після кадрування."""
+    return (max(0.05, 1.0 - float(g(p, "cropl")) - float(g(p, "cropr"))),
+            max(0.05, 1.0 - float(g(p, "cropt")) - float(g(p, "cropb"))))
+
+
+def adjust_vf(p):
+    """Тонке коригування кольору (вкладка «Колір» праворуч)."""
+    out = []
+    t, n = float(g(p, "temp") or 0), float(g(p, "tint") or 0)
+    if abs(t) > 1e-3 or abs(n) > 1e-3:
+        out.append(f"lutrgb=r='clip(val*{num(1 + 0.18 * t)},0,255)':g='clip(val*{num(1 - 0.12 * n)},0,255)':"
+                   f"b='clip(val*{num(1 - 0.18 * t)},0,255)'")
+    h = float(g(p, "hue") or 0)
+    if abs(h) > 0.5:
+        out.append(f"hue=h={num(h)}")
+    hl, sh = float(g(p, "hl") or 0), float(g(p, "sh") or 0)
+    if abs(hl) > 1e-3 or abs(sh) > 1e-3:
+        a = min(0.95, max(0.02, 0.25 + 0.15 * sh))
+        b = min(0.98, max(a + 0.02, 0.75 + 0.15 * hl))
+        out.append(f"curves=all='0/0 0.25/{num(a)} 0.75/{num(b)} 1/1'")
+    sp = float(g(p, "sharp") or 0)
+    if sp > 1e-3:
+        out.append(f"unsharp=5:5:{num(1.8 * sp)}")
+    gr = float(g(p, "grain") or 0)
+    if gr > 1e-3:
+        out.append(f"noise=alls={int(round(40 * gr))}:allf=t")
+    vg = float(g(p, "vig") or 0)
+    if vg > 1e-3:
+        out.append(f"vignette=angle={num(0.15 + 0.75 * vg)}")
+    return out
+
+
+def has_crop(p):
+    return any(float(g(p, k) or 0) > 1e-3 for k in CROP_KEYS)
 
 
 def pre_vf(p):
@@ -102,6 +174,20 @@ def pre_vf(p):
         out.append("transpose=2")
     if g(p, "flip"):
         out.append("hflip")
+    if has_crop(p):
+        fw, fh = crop_frac(p)
+        out.append(f"crop=w='trunc(iw*{num(fw)}/2)*2':h='trunc(ih*{num(fh)}/2)*2':"
+                   f"x='iw*{num(g(p, 'cropl'))}':y='ih*{num(g(p, 'cropt'))}'")
+    if g(p, "stab"):
+        out.append("deshake")
+    if g(p, "deflick"):
+        out.append("deflicker=size=5")
+    if g(p, "mblur"):
+        out.append("tmix=frames=3:weights='1 2 1'")
+    v = _VFX.get(g(p, "vfx"))
+    if v:
+        out.append(v)
+    out += adjust_vf(p)
     f = _FILTER_VF.get(g(p, "flt"))
     if f:
         out.append(f)
@@ -247,6 +333,90 @@ def atempo_chain(sp):
     return parts
 
 
+# ---- криві швидкості (як у CapCut): форма = множники швидкості в 5 точках кліпа;
+#      ділимо кліп на CURVE_N шматків зі сталою швидкістю. p["speed"] = СЕРЕДНЯ швидкість
+#      (тож уся математика тривалостей лишається як була), p["cbase"] = базова швидкість.
+CURVES = {"montage": [2.0, 0.55, 2.0, 0.55, 2.0], "hero": [1.0, 1.0, 0.25, 1.0, 1.0],
+          "bullet": [2.5, 2.2, 0.2, 2.2, 2.5], "jumpcut": [1.0, 1.0, 5.0, 1.0, 1.0],
+          "flashin": [5.0, 2.5, 1.0, 1.0, 1.0], "flashout": [1.0, 1.0, 1.0, 2.5, 5.0]}
+CURVE_N = 16
+
+
+def curve_segs(p):
+    c = CURVES.get(p.get("curve") or "")
+    if not c:
+        return None
+    base = float(p.get("cbase", 1.0))
+    out = []
+    for i in range(CURVE_N):
+        x0, x1 = i / CURVE_N, (i + 1) / CURVE_N
+        xm = (x0 + x1) / 2 * (len(c) - 1)
+        j = min(len(c) - 2, int(xm))
+        f = xm - j
+        out.append((x0, x1, max(0.05, base * (c[j] + (c[j + 1] - c[j]) * f))))
+    return out
+
+
+def curve_speed(p):
+    segs = curve_segs(p)
+    if not segs:
+        return float(p.get("speed", 1.0))
+    return 1.0 / sum((x1 - x0) / v for x0, x1, v in segs)
+
+
+def _curve_T(segs, L, x):
+    t = 0.0
+    for x0, x1, v in segs:
+        if x <= x0:
+            break
+        t += (min(x, x1) - x0) * L / v
+    return t
+
+
+def curve_setpts(p, start):
+    """setpts: час виходу від точки start (секунда джерела) з кривою швидкості."""
+    segs = curve_segs(p)
+    s, L = float(p["s"]), max(0.01, float(p["e"]) - float(p["s"]))
+    X = f"(({num(start - s)}+(PTS-STARTPTS)*TB)/{num(L)})"
+    cum, parts = 0.0, []
+    for x0, x1, v in segs:
+        parts.append((x0, x1, v, cum))
+        cum += (x1 - x0) * L / v
+    x0, x1, v, c0 = parts[-1]
+    e = f"{num(c0)}+({X}-{num(x0)})*{num(L / v)}"
+    for x0, x1, v, c0 in reversed(parts[:-1]):
+        e = f"if(lt({X},{num(x1)}),{num(c0)}+({X}-{num(x0)})*{num(L / v)},{e})"
+    t0 = _curve_T(segs, L, (start - s) / L)
+    return f"setpts='({e}-{num(t0)})/TB'"
+
+
+def curve_atempo(p, start, uid):
+    """Звук з кривою швидкості: шматки atrim + atempo, склеєні concat (від start)."""
+    segs = curve_segs(p)
+    s, L = float(p["s"]), max(0.01, float(p["e"]) - float(p["s"]))
+    xs = (start - s) / L
+    pcs = []
+    for x0, x1, v in segs:
+        if x1 <= xs + 1e-9:
+            continue
+        a = max(x0, xs)
+        pcs.append(((a - xs) * L, (x1 - xs) * L, v))
+    if not pcs:
+        return "asetpts=PTS-STARTPTS"
+
+    def one(st, en, v, last):
+        tr = f"atrim=start={num(st)}" + ("" if last else f":end={num(en)}")
+        return tr + ",asetpts=PTS-STARTPTS," + ",".join(atempo_chain(v))
+    if len(pcs) == 1:
+        return "asetpts=PTS-STARTPTS," + one(*pcs[0], True)
+    k = len(pcs)
+    out = "asetpts=PTS-STARTPTS,asplit=" + str(k) + "".join(f"[cs{uid}x{i}]" for i in range(k))
+    for i, (st, en, v) in enumerate(pcs):
+        out += f";[cs{uid}x{i}]" + one(st, en, v, i == k - 1) + f"[cd{uid}x{i}]"
+    out += ";" + "".join(f"[cd{uid}x{i}]" for i in range(k)) + f"concat=n={k}:v=0:a=1"
+    return out
+
+
 def afx_default(p):
     return all(g(p, k) == PIECE_DEFAULTS[k] for k in AFX_KEYS)
 
@@ -267,6 +437,11 @@ def afx_chain(p):
     e = _AEFF.get(g(p, "aeff"))
     if e:
         out.append(e)
+    if g(p, "dn"):                       # шумодав (як «Зменшити шум» у CapCut)
+        out.append("afftdn=nr=18:nf=-30")
+    if g(p, "venh"):                     # покращити голос: зрізати гул, підняти розбірливість
+        out += ["highpass=f=80", "equalizer=f=3000:t=q:w=1.2:g=4",
+                "acompressor=threshold=0.125:ratio=3:attack=10:release=200:makeup=1.6"]
     rev = float(g(p, "rev") or 0.0)
     if rev > 0.02:
         a = 0.12 + 0.5 * rev
@@ -275,8 +450,8 @@ def afx_chain(p):
     return out
 
 
-def audio_chain(obj, vol, fades):
-    return [UPMIX] + afx_chain(obj) + gain_chain(vol) + list(fades)
+def audio_chain(obj, vol, fades, off=0.0):
+    return [UPMIX] + afx_chain(obj) + kf_vol_af(obj, off) + gain_chain(vol) + list(fades)
 
 
 # ----------------------------------------------------------------- текст -- #
@@ -392,12 +567,151 @@ def anim_table(kind):
 
 
 def has_anim(p):
-    return bool(p.get("ain") or p.get("aout") or p.get("acombo"))
+    return bool(p.get("ain") or p.get("aout") or p.get("acombo") or has_kf(p)
+                or float(g(p, "opa")) < 0.999)
+
+
+# ------------------------------------------------------------- ключові кадри -- #
+# p["kf"] = {"zoom"|"nx"|"ny"|"ang"|"opa"|"vol": [[ts, value], ...]} — ts = секунда ДЖЕРЕЛА
+# (тому розрізання / обрізка кліпа не зсувають ключі). Значення — абсолютні; між ключами
+# лінійно, до першого / після останнього — значення крайнього ключа (як у CapCut).
+# Словник і списки НЕ змінюємо на місці (undo тримає копії) — лише замінюємо.
+KF_KEYS = ("zoom", "nx", "ny", "ang", "opa", "vol")
+KF_DEF = {"zoom": 1.0, "nx": 0.0, "ny": 0.0, "ang": 0.0, "opa": 1.0, "vol": 1.0}
+
+
+def has_kf(p, key=None):
+    kf = p.get("kf") or {}
+    if key:
+        return bool(kf.get(key))
+    return any(kf.get(k) for k in KF_KEYS)
+
+
+def kf_times(p):
+    """Усі секунди джерела, де в кліпа є ключ (будь-якого параметра)."""
+    out = set()
+    for k in KF_KEYS:
+        for ts, _v in (p.get("kf") or {}).get(k) or []:
+            out.add(round(float(ts), 3))
+    return sorted(out)
+
+
+def kf_base(p, key):
+    if key == "opa":
+        return float(g(p, "opa"))
+    return float(p.get(key, KF_DEF[key]) or 0.0)
+
+
+def kf_val(p, key, ts):
+    pts = (p.get("kf") or {}).get(key)
+    if not pts:
+        return kf_base(p, key)
+    if ts <= pts[0][0]:
+        return float(pts[0][1])
+    for (t0, v0), (t1, v1) in zip(pts, pts[1:]):
+        if ts <= t1:
+            return float(v0) + (float(v1) - float(v0)) * (ts - t0) / max(1e-6, t1 - t0)
+    return float(pts[-1][1])
+
+
+def kf_set(p, key, ts, val, eps=0.02):
+    """Новий p["kf"] з ключем key у ts (замінює ключ, що ближче за eps)."""
+    kf = dict(p.get("kf") or {})
+    pts = [list(x) for x in (kf.get(key) or []) if abs(float(x[0]) - ts) > eps]
+    pts.append([round(float(ts), 4), float(val)])
+    kf[key] = sorted(pts)
+    p["kf"] = kf
+
+
+def kf_del_at(p, ts, eps=0.02):
+    kf = {}
+    for k, pts in (p.get("kf") or {}).items():
+        keep = [x for x in pts if abs(float(x[0]) - ts) > eps]
+        if keep:
+            kf[k] = keep
+    p["kf"] = kf
+
+
+def kf_expr(p, key, tsx):
+    """Вираз ffmpeg: значення key в момент tsx (вираз секунди джерела)."""
+    pts = (p.get("kf") or {}).get(key) or []
+    if not pts:
+        return None
+    e = num(pts[-1][1])
+    for (t0, v0), (t1, v1) in reversed(list(zip(pts, pts[1:]))):
+        lin = f"{num(v0)}+({num(float(v1) - float(v0))})*(({tsx})-{num(t0)})/{num(max(1e-6, t1 - t0))}"
+        e = f"if(lt({tsx},{num(t1)}),{lin},{e})"
+    return f"if(lt({tsx},{num(pts[0][0])}),{num(pts[0][1])},{e})"
+
+
+def _kf_params(p):
+    """S/X/Y/A/F від ключових кадрів (відносно статичних zoom/nx/ny/ang кліпа)."""
+    out = {}
+    tsx = f"({num(p.get('s', 0.0))}+(t)*{num(p.get('speed', 1.0))})"
+    zb = max(0.01, float(p.get("zoom", 1.0)))
+    ze = kf_expr(p, "zoom", tsx)
+    S = f"(({ze})/{num(zb)})" if ze else None
+    if S:
+        out["S"] = S
+    for key, ax in (("nx", "X"), ("ny", "Y")):
+        e = kf_expr(p, key, tsx)
+        b = float(p.get(key, 0.0))
+        if e or (S and abs(b) > 1e-4):
+            cur = f"({e})" if e else num(b)
+            out[ax] = f"({cur}-{num(b)}*{S or '1'})"
+    e = kf_expr(p, "ang", tsx)
+    if e:
+        out["A"] = f"((({e})-{num(float(p.get('ang', 0.0) or 0.0))})*PI/180)"
+    e = kf_expr(p, "opa", tsx)
+    if e:
+        out["F"] = f"clip({e},0,1)"
+    elif float(g(p, "opa")) < 0.999:
+        out["F"] = num(g(p, "opa"))
+    return out
+
+
+def kf_vol_af(p, off=0.0):
+    """Ключі гучності -> volume з виразом (множник відносно статичної гучності кліпа)."""
+    if not p or not has_kf(p, "vol"):
+        return []
+    vb = float(p.get("vol", 1.0))
+    if vb <= 0.005:
+        return []
+    tsx = f"({num(p.get('s', 0.0))}+(t+{num(off)})*{num(p.get('speed', 1.0))})"
+    return [f"volume=volume='max(0,{kf_expr(p, 'vol', tsx)})/{num(vb)}':eval=frame"]
+
+
+# ------------------------------------------------- накладки: хромакей / маска -- #
+MASKS = ["none", "circle", "rect", "heart", "star", "split", "line"]
+_MASK = {
+    "circle": "lte(pow((X-W/2)/(W/2),2)+pow((Y-H/2)/(H/2),2),1)",
+    "rect": "lte(pow(abs(X-W/2)/(W/2),8)+pow(abs(Y-H/2)/(H/2),8),0.8)",
+    "heart": "lte(pow(pow(1.25*(X-W/2)/(W/2),2)+pow(1.25*(H/2-Y)/(H/2)+0.25,2)-1,3)"
+             "-pow(1.25*(X-W/2)/(W/2),2)*pow(1.25*(H/2-Y)/(H/2)+0.25,3),0)",
+    "star": "lte(hypot((X-W/2)/(W/2),(Y-H/2)/(H/2)),0.55+0.4*cos(5*atan2(X-W/2,H/2-Y)))",
+    "split": "lt(X,W/2)",
+    "line": "lt(abs(Y-H/2),H/6)",
+}
+
+
+def key_mask_vf(o):
+    """Хромакей (прибрати колір фону) і форма-маска для накладки -> рядок або ''."""
+    out = []
+    ck = o.get("ck")
+    if ck:
+        sim = max(0.01, min(1.0, float(o.get("cks", 0.3))))
+        out.append(f"format=rgba,colorkey=0x{ck.lstrip('#')}:{num(sim)}:{num(min(1.0, sim * 0.4 + 0.02))}")
+    m = _MASK.get(o.get("mask") or "none")
+    if m:
+        if o.get("minv"):
+            m = f"1-{m}"
+        out.append(f"format=rgba,geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='alpha(X,Y)*({m})'")
+    return ",".join(out)
 
 
 def _expr_params(p, dur):
     """Словник {S,X,Y,A,B,F: вираз від t (вихідний час кліпа від 0)} або {}."""
-    out = {}
+    out = dict(_kf_params(p))
 
     def put(key, e, mode):
         if key not in out:

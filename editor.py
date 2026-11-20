@@ -163,6 +163,10 @@ C_ACC2 = C_BLURPLE
 C_WARN = "#faa61a"
 
 
+def piece_curve(p):
+    return bool(p.get("curve")) and p.get("curve") in fx.CURVES
+
+
 def fmt(t):
     t = max(0, t)
     return f"{int(t // 60)}:{int(t % 60):02d}.{int((t * 10) % 10)}"
@@ -750,6 +754,14 @@ class VideoEditor(tk.Toplevel):
         self.b_mute = ib(lb, "🔊", self._toggle_mute, E("ed_tt_mute"))
         self.b_ovl = ib(lb, "🎭", lambda: self._to_overlay(), E("ed_tt_ovl"))
         sep(lb)
+        self.b_dl = ib(lb, "⇤", lambda: self._del_side(True), E("ed_tt_delleft"), fs=13)
+        self.b_dr = ib(lb, "⇥", lambda: self._del_side(False), E("ed_tt_delright"), fs=13)
+        self.b_freeze = ib(lb, "❄", self._freeze, E("ed_tt_freeze"), fs=13)
+        self.b_rev = ib(lb, "⇄", self._reverse, E("ed_tt_reverse"), fs=13)
+        self.b_mirror = ib(lb, "⇋", self._flip, E("ed_tt_mirror"), fs=13)
+        self.b_rot = ib(lb, "⟳", self._rotate, E("ed_tt_rotate"), fs=13)
+        self.b_kf = ib(lb, "◆", self._kf_toggle, E("ed_tt_kf"), fs=12)
+        sep(lb)
         self.b_txt = ib(lb, "T", self._add_text, E("ed_tt_text"), fs=14)
         self.b_mic = ib(lb, "🎙", self._toggle_rec, E("ed_tt_mic"), fs=13)
         self.b_mic.bind("<Button-3>", lambda e: self._mic_menu())
@@ -1203,6 +1215,7 @@ class VideoEditor(tk.Toplevel):
 
     # ----------------------------------------------- ПРЕВ'Ю (ffmpeg→PNG) --- #
     def _show_poster(self, t, fast=False):
+        self._kf_sync()
         self._pending = t
         live = self._scr_to(t)              # кадр ЗА повзунком одразу (mpv), постер — під ним
         if fast and not live:
@@ -1219,6 +1232,9 @@ class VideoEditor(tk.Toplevel):
         sw, sh, x, y = self._ovl_geom(o, cw, ch)
         pre = fx.pre_vf(o)
         f = (pre + "," if pre else "") + f"scale={sw}:{sh}"
+        km = fx.key_mask_vf(o)
+        if km:
+            f += "," + km
         op = float(o.get("op", 1.0)) * alpha
         if op < 0.999:
             f += f",format=rgba,colorchannelmixer=aa={fx.num(max(0.0, op))}"
@@ -1247,7 +1263,7 @@ class VideoEditor(tk.Toplevel):
         # фейд кліпа в цей момент -> кадр темнішає, як у готовому відео
         cd = (piece["e"] - piece["s"]) / piece["speed"]
         fa = fx.alpha_factor((t - piece["s"]) / piece["speed"], cd,
-                             fx.g(piece, "fin"), fx.g(piece, "fout"))
+                             fx.g(piece, "fin"), fx.g(piece, "fout")) * max(0.0, min(1.0, float(fx.g(piece, "opa"))))
         if fa < 0.999:
             k = fx.num(fa)
             vf += f",colorchannelmixer=rr={k}:gg={k}:bb={k}"
@@ -1511,6 +1527,7 @@ class VideoEditor(tk.Toplevel):
                 self._tf_on = False        # клік поза об'єктом -> сховати рамку
                 self.video.delete("tf")
             return
+        self._kf_touch()
         self._show_poster(self.cur)
         self._draw_tfbox()
         self._redraw()                     # оновити значок 🔍 на кліпі
@@ -1570,6 +1587,7 @@ class VideoEditor(tk.Toplevel):
 
     def _prop_changed(self):
         """Змінили властивість у правій панелі -> прев'ю + доріжка (+ відтворення наживо)."""
+        self._kf_touch()
         self._edit_gen += 1
         self._show_poster(self.cur)
         self._req_draw()
@@ -1691,6 +1709,287 @@ class VideoEditor(tk.Toplevel):
 
     def _media_set_tr(self, slot, typ):
         self._set_tr(slot, typ)
+        if self._insp:
+            self._insp.sync(force=True)
+        if self._media:
+            self._media.refresh(force=True)
+
+    # ------------------------------------------------ ключові кадри (як у CapCut) -- #
+    def _kf_clip(self):
+        if (self.sel_ovl is not None or self.sel_txt is not None or self._sel_snd is not None
+                or not self.order):
+            return None
+        return self._sel_piece()
+
+    def _kf_sync(self):
+        """Статичні zoom/nx/ny/ang/opa/vol кліпа = значення ключів у точці плейхеда
+        (рамка, повзунки і постер показують кадр саме в цей момент)."""
+        p = self._kf_clip()
+        if p is None:
+            self._kf_snap = None
+            return
+        if fx.has_kf(p):
+            for k in fx.KF_KEYS:
+                if fx.has_kf(p, k):
+                    p[k] = fx.kf_val(p, k, self.cur)
+            if self._insp:
+                try:
+                    self._insp.refresh_values()
+                except Exception:
+                    pass
+        self._kf_snap = (id(p), {k: fx.kf_base(p, k) for k in fx.KF_KEYS})
+
+    def _kf_touch(self):
+        """Користувач змінив властивість кліпа з ключами -> ключ у точці плейхеда."""
+        p = self._kf_clip()
+        snap = getattr(self, "_kf_snap", None)
+        if p is None or not fx.has_kf(p) or not snap or snap[0] != id(p):
+            return
+        if not (p["s"] - 0.001 <= self.cur <= p["e"] + 0.001):
+            return
+        for k in fx.KF_KEYS:
+            v = fx.kf_base(p, k)
+            if abs(v - snap[1][k]) > 1e-6:
+                fx.kf_set(p, k, self.cur, v)
+        self._kf_snap = (id(p), {k: fx.kf_base(p, k) for k in fx.KF_KEYS})
+        self._req_draw()
+
+    def _kf_at(self, p):
+        return any(abs(t - self.cur) <= 0.02 for t in fx.kf_times(p))
+
+    def _kf_toggle(self):
+        """◆: додати ключ (усі властивості) у точці плейхеда або прибрати наявний."""
+        p = self._kf_clip()
+        if p is None or self.busy:
+            return
+        if self.playing:
+            self._pause()
+        if not (p["s"] - 0.001 <= self.cur <= p["e"] + 0.001):
+            return
+        self._push_undo()
+        if self._kf_at(p):
+            fx.kf_del_at(p, self.cur)
+        else:
+            keys = ["zoom", "nx", "ny", "ang", "opa"]
+            src = self._src(p)
+            if src["kind"] == "video" and src["has_audio"]:
+                keys.append("vol")
+            for k in keys:
+                fx.kf_set(p, k, self.cur, fx.kf_base(p, k))
+        self._kf_sync()
+        self._prop_changed()
+        self._redraw()
+        if self._insp:
+            self._insp.sync(force=True)
+
+    def _kf_clear(self):
+        p = self._kf_clip()
+        if p is None or not fx.has_kf(p):
+            return
+        self._push_undo()
+        p["kf"] = {}
+        self._prop_changed()
+        self._redraw()
+        if self._insp:
+            self._insp.sync(force=True)
+
+    def _kf_jump(self, d):
+        p = self._kf_clip()
+        if p is None:
+            return
+        ts = [t for t in fx.kf_times(p) if p["s"] - 0.001 <= t <= p["e"] + 0.001]
+        if d > 0:
+            c = [t for t in ts if t > self.cur + 0.02]
+            t = c[0] if c else None
+        else:
+            c = [t for t in ts if t < self.cur - 0.02]
+            t = c[-1] if c else None
+        if t is None:
+            return
+        if self.playing:
+            self._pause()
+        self._set_playhead_lt(self._clip_layout_start(self.sel) + (t - p["s"]) / p["speed"], fast=False)
+        if self._insp:
+            self._insp.sync(force=True)
+
+    # ------------------------------- стоп-кадр / реверс / видалити зліва-справа -- #
+    def _freeze(self):
+        """Стоп-кадр: кадр під плейхедом стає картинкою на 3 с (кліп розрізається)."""
+        if self.busy or not self.order:
+            return
+        p = self._sel_piece()
+        src = self._src(p)
+        if src["kind"] != "video" or fx.g(p, "novideo"):
+            return
+        if self.playing:
+            self._pause()
+        t = min(max(self.cur, p["s"]), p["e"] - 0.04)
+        png = os.path.join(self._tmp, f"freeze_{len(self.sources)}_{int(t * 1000)}.png")
+        rc = subprocess.run(["ffmpeg", "-y", "-ss", f"{t:.3f}", "-i", src["path"], "-frames:v", "1", png],
+                            capture_output=True, creationflags=dc_core.NO_WINDOW).returncode
+        if rc != 0 or not os.path.exists(png):
+            return
+        si = self._add_source(png, "image", {"duration": 0, "width": src["w"], "height": src["h"],
+                                             "fps": src["fps"]})
+        self._push_undo()
+        slot = self.sel
+        fz = self._new_piece(si, 0.0, 3.0)
+        for k in ("zoom", "nx", "ny", "ang", "rot", "flip", "flt", "br", "ct", "sat", "vfx", "opa") + fx.CROP_KEYS:
+            if k in p:
+                fz[k] = p[k]
+        at = slot + 1
+        if p["s"] + 0.04 < t < p["e"] - 0.04:
+            right = dict(p)
+            right["s"] = t
+            right["gap"] = 0.0
+            right.pop("tr", None)
+            p["e"] = t
+            self.pieces.append(right)
+            self.order.insert(slot + 1, len(self.pieces) - 1)
+        elif t <= p["s"] + 0.04:
+            at = slot
+            fz["gap"], p["gap"] = self._gapof(p), 0.0
+        self.pieces.append(fz)
+        self.order.insert(at, len(self.pieces) - 1)
+        self.sel = at
+        self.cur = 0.0
+        self._gen_visuals(si)
+        self._show_poster(0.0)
+        self._redraw()
+        if self._media:
+            self._media.refresh(force=True)
+
+    def _del_side(self, left):
+        """Видалити ліворуч / праворуч від плейхеда (Q / W, як у CapCut)."""
+        if self.busy or not self.order:
+            return
+        if self.playing:
+            self._pause()
+        p = self._sel_piece()
+        if not (p["s"] + 0.04 < self.cur < p["e"] - 0.04):
+            return
+        self._push_undo()
+        if left:
+            p["s"] = self.cur
+        else:
+            p["e"] = self.cur
+        self._show_poster(self.cur)
+        self._redraw()
+
+    def _reverse(self):
+        """Реверс кліпа: ffmpeg рендерить перевернуту копію шматка (частинами по 4 с, щоб
+        не з'їсти пам'ять), кліп переходить на неї. Повторний реверс — назад на оригінал."""
+        if self.busy or not self.order:
+            return
+        if self.playing:
+            self._pause()
+        p = self._sel_piece()
+        src = self._src(p)
+        if src["kind"] != "video":
+            return
+        rv = p.get("revof")
+        if rv:                                   # уже реверснутий -> назад на оригінал
+            self._push_undo()
+            b = rv["b"]
+            s0, e0 = p["s"], p["e"]
+            p["src"], p["s"], p["e"] = rv["src"], b - e0, b - s0
+            self.cur = b - self.cur
+            if p.get("kf"):
+                p["kf"] = {k: sorted([[round(b - t, 4), v] for t, v in pts]) for k, pts in p["kf"].items()}
+            p.pop("revof", None)
+            self._show_poster(min(max(self.cur, p["s"]), p["e"]))
+            self._redraw()
+            return
+        a, b = p["s"], p["e"]
+        key = (p["src"], round(a, 3), round(b, 3))
+        cache = getattr(self, "_rev_cache", None)
+        if cache is None:
+            cache = self._rev_cache = {}
+        orig_si = p["src"]
+
+        def apply(path):
+            if self._closed:
+                return
+            self.busy = False
+            self._set_progress(None, "")
+            if not path:
+                self._set_progress(None, E("ed_rev_fail"), C_RED)
+                return
+            cache[key] = path
+            si = self._add_source(path, "video", {"duration": b - a, "has_audio": src["has_audio"],
+                                                  "width": src["w"], "height": src["h"], "fps": src["fps"]})
+            q = self._sel_piece()
+            if q is not p:
+                return
+            self._push_undo()
+            p["src"], p["s"], p["e"] = si, 0.0, b - a
+            p["revof"] = {"src": orig_si, "b": b}
+            if p.get("kf"):
+                p["kf"] = {k: sorted([[round(b - t, 4), v] for t, v in pts]) for k, pts in p["kf"].items()}
+            self.cur = min(max(0.0, b - self.cur), b - a)
+            self._gen_visuals(si)
+            self._show_poster(self.cur)
+            self._redraw()
+            if self._media:
+                self._media.refresh(force=True)
+        if key in cache and os.path.exists(cache[key]):
+            apply(cache[key])
+            return
+        self.busy = True
+        self._set_progress(0.0, E("ed_rev_busy"))
+        out = os.path.join(self._tmp, f"rev_{len(self.sources)}_{int(a * 1000)}_{int(b * 1000)}.mp4")
+
+        def work():
+            C = 4.0
+            parts = []
+            n = max(1, int(math.ceil((b - a) / C - 1e-6)))
+            ok = True
+            for k in range(n):
+                if self._closed:
+                    ok = False
+                    break
+                hi = b - k * C
+                lo = max(a, hi - C)
+                pf = os.path.join(self._tmp, f"rvp_{k}.mp4")
+                cmd = ["ffmpeg", "-y", "-ss", f"{lo:.3f}", "-t", f"{hi - lo:.3f}", "-i", src["path"],
+                       "-vf", "reverse", "-c:v", "libx264", "-preset", "veryfast", "-crf", "17",
+                       "-pix_fmt", "yuv420p", "-video_track_timescale", "90000"]
+                cmd += (["-af", "areverse,aresample=44100", "-ac", "2", "-c:a", "aac", "-b:a", "192k"]
+                        if src["has_audio"] else ["-an"])
+                cmd.append(pf)
+                rc = subprocess.run(cmd, capture_output=True, creationflags=dc_core.NO_WINDOW).returncode
+                if rc != 0 or not os.path.exists(pf):
+                    ok = False
+                    break
+                parts.append(pf)
+                pct = (k + 1) * 95.0 / n
+                self._ui(lambda pct=pct: self._set_progress(pct, E("ed_rev_busy")))
+            if ok:
+                listf = os.path.join(self._tmp, "rv_list.txt")
+                with open(listf, "w", encoding="utf-8") as fh:
+                    for pf in parts:
+                        fh.write("file '%s'\n" % pf.replace("\\", "/").replace("'", "'\\''"))
+                rc = subprocess.run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", listf, "-c", "copy",
+                                     out], capture_output=True, creationflags=dc_core.NO_WINDOW).returncode
+                ok = rc == 0 and os.path.exists(out)
+            for pf in parts:
+                try:
+                    os.remove(pf)
+                except OSError:
+                    pass
+            self._ui(lambda: apply(out if ok else None))
+        threading.Thread(target=work, daemon=True).start()
+
+    def _media_set_vfx(self, v):
+        if not self.order:
+            return
+        p = self._look_target()
+        if fx.g(p, "vfx") == v:
+            return
+        self._push_undo()
+        p["vfx"] = v
+        self._prop_changed()
+        self._redraw()
         if self._insp:
             self._insp.sync(force=True)
         if self._media:
@@ -2128,8 +2427,42 @@ class VideoEditor(tk.Toplevel):
         self.order.insert(self.sel + 1, len(self.pieces) - 1)
         self._redraw()
 
+    def _vspeed(self, p, start=None):
+        """setpts швидкості кліпа (стала або крива), від точки start джерела."""
+        if piece_curve(p):
+            return fx.curve_setpts(p, p["s"] if start is None else start)
+        return f"setpts=(PTS-STARTPTS)/{p['speed']:g}"
+
+    def _aspeed(self, p, start=None):
+        if piece_curve(p):
+            self._uidn += 1
+            return [fx.curve_atempo(p, p["s"] if start is None else start, self._uidn)]
+        return [self._atempo(p["speed"])] if p["speed"] != 1.0 else []
+
+    def _set_curve(self, v):
+        p = self._sel_piece()
+        if v:
+            base = float(p.get("cbase", p["speed"])) if p.get("curve") else p["speed"]
+            p["curve"], p["cbase"] = v, base
+            p["speed"] = fx.curve_speed(p)
+        elif p.get("curve"):
+            p["speed"] = float(p.get("cbase", 1.0))
+            p.pop("curve", None)
+        self._redraw()
+        self._replay_soon()
+        if self._insp:
+            self._insp.after_idle(lambda: self._insp.sync(force=True))
+
     def _set_speed(self, sp, undo=True):
         p = self._sel_piece()
+        if piece_curve(p):
+            if undo:
+                self._push_undo()
+            p["cbase"] = sp
+            p["speed"] = fx.curve_speed(p)
+            self._redraw()
+            self._replay_soon()
+            return
         if p["speed"] != sp:
             if undo:
                 self._push_undo()
@@ -2359,7 +2692,7 @@ class VideoEditor(tk.Toplevel):
         src = self._src(p)
         sc = src.get("scrub")
         if (not sc or src["kind"] != "video" or self.playing or self._is_transformed(p)
-                or not fx.look_default(p) or self._bgmode == "blur" or fx.g(p, "novideo")):
+                or not fx.look_default(p) or self._bgmode != "black" or fx.g(p, "novideo")):
             return False
         mt = self._playhead_montage_t()
         if self._active_texts(mt) or any(o["at"] <= mt <= o["at"] + o["e"] - o["s"] for o in self.ovls):
@@ -2857,10 +3190,16 @@ class VideoEditor(tk.Toplevel):
             # ярлик: тривалість + значки (швидкість / без звуку / масштаб / картинка)
             if cx2 - cx1 > 34 and cx2 > LX + 20:
                 lab = f"{d:.1f}s"
-                if p["speed"] != 1.0:
+                if piece_curve(p):
+                    lab += "  ⤳ " + E("cv_" + p["curve"])
+                elif p["speed"] != 1.0:
                     lab += f"  {p['speed']:g}×"
                 if p["mute"]:
                     lab += "  🔇"
+                if p.get("revof"):
+                    lab += "  ⇄"
+                if fx.g(p, "vfx") != "none":
+                    lab += "  ✦"
                 if self._is_transformed(p):
                     lab += "  🔍"
                 if not fx.look_default(p):
@@ -2884,6 +3223,14 @@ class VideoEditor(tk.Toplevel):
             if sel:
                 self._draw_handle(c, cx1 + 1, True, self._active == "L", y1, y2)
                 self._draw_handle(c, cx2 - 1, False, self._active == "R", y1, y2)
+            if sel and fx.has_kf(p):
+                for ts in fx.kf_times(p):
+                    if s - 0.001 <= ts <= e + 0.001:
+                        kx = cx1 + (ts - s) / p["speed"] * pps
+                        on = abs(ts - self.cur) <= 0.02
+                        ky = y2 - 10
+                        c.create_polygon(kx, ky - 6, kx + 6, ky, kx, ky + 6, kx - 6, ky,
+                                         fill="#ffd23f" if on else "#ffffff", outline="#000000")
         # стики кліпів: іконка переходу (клік -> вибрати перехід)
         self._junc = []
         cy = (y1 + y2) / 2.0
@@ -3123,8 +3470,69 @@ class VideoEditor(tk.Toplevel):
         for b in ("black", "blur"):
             m.add_command(label=E("bg_" + b) + ("   ✓" if b == self._bgmode else ""),
                           command=lambda b=b: self._set_canvas(bg=b))
+        cm = tk.Menu(m, tearoff=0, bg=m.cget("bg"), fg=m.cget("fg"))
+        for nm, col in self.BG_COLORS:
+            b = "c" + col
+            cm.add_command(label=E("bgc_" + nm) + ("   ✓" if b == self._bgmode else ""),
+                           command=lambda b=b: self._set_canvas(bg=b))
+        m.add_cascade(label=E("bg_color"), menu=cm)
         bt = self.ratio_btn
         self._popup(m, bt.winfo_rootx(), bt.winfo_rooty() + bt.winfo_height())
+
+    BG_COLORS = [("white", "#ffffff"), ("grey", "#808080"), ("red", "#e53935"), ("orange", "#fb8c00"),
+                 ("yellow", "#fdd835"), ("green", "#43a047"), ("blue", "#1e88e5"), ("purple", "#8e24aa"),
+                 ("pink", "#ec407a")]
+
+    def _bgcol(self):
+        b = self._bgmode
+        return "0x" + b[2:] if b.startswith("c#") else "black"
+
+    def _tts(self, t):
+        """Текст -> мова (голоси Windows, без інтернету) -> звук на доріжці під текстом."""
+        txt = fx.clean_text(t.get("text", "")).strip()
+        if not txt or self.busy:
+            return
+        self._rec_n += 1
+        tf = os.path.join(self._tmp, f"tts_{self._rec_n}.txt")
+        wav = os.path.join(self._tmp, f"tts_{self._rec_n}.wav")
+        with open(tf, "w", encoding="utf-8") as fh:
+            fh.write(txt)
+        lang = {"uk": "uk", "ru": "ru"}.get(host.LANG, "en")
+        ps = ("Add-Type -AssemblyName System.Speech;"
+              "$s=New-Object System.Speech.Synthesis.SpeechSynthesizer;"
+              f"$v=$s.GetInstalledVoices()|?{{$_.VoiceInfo.Culture.TwoLetterISOLanguageName -eq '{lang}'}}|select -First 1;"
+              "if($v){$s.SelectVoice($v.VoiceInfo.Name)};"
+              f"$s.SetOutputToWaveFile('{wav}');"
+              f"$s.Speak([IO.File]::ReadAllText('{tf}',[Text.Encoding]::UTF8));$s.Dispose()")
+        at = float(t["at"])
+        self._set_progress(None, E("ed_tts_busy"))
+
+        def work():
+            try:
+                subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
+                               capture_output=True, creationflags=dc_core.NO_WINDOW, timeout=120)
+            except Exception:
+                pass
+
+            def fin():
+                try:
+                    d = media.audio_info(wav)["duration"] if os.path.exists(wav) else 0
+                except Exception:
+                    d = 0
+                if d < 0.1:
+                    self._set_progress(None, E("ed_tts_fail"), C_RED)
+                    return
+                self._set_progress(None, "")
+                self._push_undo()
+                sn = {"path": wav, "at": at, "dur": d, "s": 0.0, "fdur": d, "vol": 1.0,
+                      "name": "\U0001f5e3 " + txt[:24], "env": None, "fin": 0.0, "fout": 0.0}
+                self.snds.append(sn)
+                self._gen_snd_env(sn)
+                self._redraw()
+                if self._media:
+                    self._media.refresh(force=True)
+            self._ui(fin)
+        threading.Thread(target=work, daemon=True).start()
 
     def _set_canvas(self, ratio=None, bg=None):
         r = self._ratio if ratio is None else ratio
@@ -3363,6 +3771,15 @@ class VideoEditor(tk.Toplevel):
             self.b_mute.set_icon("🔇" if p["mute"] else "🔊")
             self.b_ovl.set_state("normal" if len(self.order) > 1 and not self.busy else "disabled")
             self.b_add.set_state("disabled" if self.busy else "normal")
+            inside = p["s"] + eps < self.cur < p["e"] - eps
+            clip = self.sel_ovl is None and self._sel_snd is None and self.sel_txt is None
+            st = lambda ok: "normal" if ok and not self.busy else "disabled"
+            self.b_dl.set_state(st(inside and clip))
+            self.b_dr.set_state(st(inside and clip))
+            self.b_freeze.set_state(st(vid and clip))
+            self.b_rev.set_state(st(vid and clip))
+            self.b_kf.set_state(st(clip))
+            self.b_kf.set_on(clip and self._kf_at(p))
             self.b_txt.set_state("disabled" if (self.busy or not self._font) else "normal")
         except (tk.TclError, AttributeError, IndexError):
             pass
@@ -3415,8 +3832,9 @@ class VideoEditor(tk.Toplevel):
     def _ovl_geom(self, o, cw, ch):
         """Розмір і позиція накладки на канвасі cw×ch (для overlay= і рамки)."""
         src = self.sources[o["src"]]
-        iw = src["w"] or cw
-        ih = src["h"] or ch
+        fw, fh = fx.crop_frac(o)
+        iw = max(2, int((src["w"] or cw) * fw))
+        ih = max(2, int((src["h"] or ch) * fh))
         f0 = min(cw / float(iw), ch / float(ih))
         sw = max(2, int(iw * f0 * o["zoom"] / 2) * 2)
         sh = max(2, int(ih * f0 * o["zoom"] / 2) * 2)
@@ -4169,7 +4587,7 @@ class VideoEditor(tk.Toplevel):
         cdur = (piece["e"] - piece["s"]) / sp
         rem = cdur - off
         m0 = self._clip_layout_start(self.sel) + off     # монтажний час старту відтворення
-        chain = [f"setpts=(PTS-STARTPTS)/{sp:g}", self._transform_vf(piece, cw, ch)]
+        chain = [self._vspeed(piece, start), self._transform_vf(piece, cw, ch)]
         self._uidn += 1
         anim = fx.anim_vf(piece, cw, ch, 30, cdur, off, self._uidn)
         if anim:
@@ -4213,9 +4631,9 @@ class VideoEditor(tk.Toplevel):
         if not a_ok:
             return vf, None, False
         vol = (0.0 if piece["mute"] else fx.g(piece, "vol")) if gain else 1.0
-        ach = ["asetpts=PTS-STARTPTS"] + ([self._atempo(sp)] if sp != 1.0 else [])
+        ach = ["asetpts=PTS-STARTPTS"] + self._aspeed(piece, start)
         ach += fx.audio_chain(piece, vol, fx.fade_win(-off, cdur - off, fx.g(piece, "fin"),
-                                               fx.g(piece, "fout"), "a"))
+                                               fx.g(piece, "fout"), "a"), off)
         aparts = ["[in]" + ",".join(ach) + "[a0]"]
         sparts, labs = self._snd_play_parts(m0, rem)
         aparts += sparts
@@ -4813,6 +5231,16 @@ class VideoEditor(tk.Toplevel):
             self._toggle_insp()
         elif not ctrl and kc == 82:
             self._toggle_rec()
+        elif not ctrl and kc == 81:
+            self._del_side(True)
+        elif not ctrl and kc == 87:
+            self._del_side(False)
+        elif not ctrl and kc == 75:
+            self._kf_toggle()
+        elif not ctrl and kc == 219:
+            self._kf_jump(-1)
+        elif not ctrl and kc == 221:
+            self._kf_jump(1)
         else:
             return None
         return "break"
@@ -4867,7 +5295,7 @@ class VideoEditor(tk.Toplevel):
     def _transform_vf(self, p, cw, ch):
         """Фільтр композиції кліпа на канвас cw×ch: поворот/колір + вписати + zoom/nx/ny."""
         if fx.g(p, "novideo"):            # «тільки звук»: чорний кадр потрібного розміру
-            return f"scale={cw}:{ch},setsar=1,drawbox=c=black:t=fill"
+            return f"scale={cw}:{ch},setsar=1,drawbox=c={self._bgcol()}:t=fill"
         src = self.sources[p["src"]]
         iw, ih = fx.eff_dims(src["w"] or cw, src["h"] or ch, p)
         f0 = min(cw / float(iw), ch / float(ih))
@@ -4892,7 +5320,7 @@ class VideoEditor(tk.Toplevel):
                     f"crop={cw}:{ch},boxblur=20:2,eq=brightness=-0.06[bb{u}];"
                     f"[fg{u}]scale={sw}:{sh}[ff{u}];[bb{u}][ff{u}]overlay={x}:{y}") + self._ang_vf(p)
         return ((pre + "," if pre else "") +
-                f"scale={sw}:{sh},pad={pw}:{ph}:{px}:{py}:black,"
+                f"scale={sw}:{sh},pad={pw}:{ph}:{px}:{py}:{self._bgcol()},"
                 f"crop={cw}:{ch}:{x0 + px}:{y0 + py}") + self._ang_vf(p)
 
     @staticmethod
@@ -4951,8 +5379,8 @@ class VideoEditor(tk.Toplevel):
                        "-video_track_timescale", "90000", f]
             else:
                 sp = p["speed"]
-                if sp != 1.0:
-                    vf += f",setpts=PTS/{sp:g}"
+                if sp != 1.0 or piece_curve(p):
+                    vf += "," + self._vspeed(p)
                 vf = ",".join([vf] + ([anim] if anim else []) + ["setsar=1"] + vfade)
                 vol = fx.g(p, "vol")
                 use_a = src["has_audio"] and not p["mute"] and vol > 0.005
@@ -4965,7 +5393,7 @@ class VideoEditor(tk.Toplevel):
                         "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
                         "-pix_fmt", "yuv420p"]
                 if use_a:
-                    af = ([self._atempo(sp)] if sp != 1.0 else []) + ["aresample=44100"]
+                    af = self._aspeed(p) + ["aresample=44100"]
                     af += fx.audio_chain(p, vol, afade)
                     cmd += ["-af", ",".join(af), "-ac", "2", "-c:a", "aac", "-b:a", "192k"]
                 else:
@@ -5210,7 +5638,7 @@ class VideoEditor(tk.Toplevel):
                     gpu = hw == "h264_nvenc" and dc_core.gpu_decode_ok(src["path"])
                     cmd += [*(dc_core.GPU_IN if gpu else []), "-ss", f"{p['s']:.3f}",
                             "-t", f"{p['e'] - p['s']:.3f}", "-i", src["path"]]
-                    chain = [f"setpts=(PTS-STARTPTS)/{sp:g}", vf]
+                    chain = [self._vspeed(p), vf]
                     if gpu:   # зменшуємо НА ВІДЕОКАРТІ до потрібного розміру і лише тоді копіюємо
                         chain.insert(0, self._gpu_prescale(src, p, cw, ch))
                     vol = fx.g(p, "vol")
@@ -5223,7 +5651,7 @@ class VideoEditor(tk.Toplevel):
                           "setsar=1", "format=yuv420p", "settb=AVTB"] + vfade
                 fc.append(f"[{idx}:v]" + ",".join(chain) + f"[cv{i}]")
                 if use_a:
-                    af = ["asetpts=PTS-STARTPTS"] + ([self._atempo(sp)] if sp != 1.0 else [])
+                    af = ["asetpts=PTS-STARTPTS"] + self._aspeed(p)
                     af += ["aresample=44100"] + fx.audio_chain(p, fx.g(p, "vol"), afade) + [afmt]
                     af += ["apad", f"atrim=0:{dd:.3f}", "asetpts=PTS-STARTPTS"]
                     fc.append(f"[{idx}:a]" + ",".join(af) + f"[ca{i}]")
@@ -5453,7 +5881,7 @@ class VideoEditor(tk.Toplevel):
             if src["kind"] == "video" and src["has_audio"] and not p["mute"] and vol > 0.005:
                 any_audio = True
                 cmd += ["-vn", "-ss", f"{p['s']:.3f}", "-t", f"{p['e'] - p['s']:.3f}", "-i", src["path"]]
-                af = ["asetpts=PTS-STARTPTS"] + ([self._atempo(sp)] if sp != 1.0 else [])
+                af = ["asetpts=PTS-STARTPTS"] + self._aspeed(p)
                 af += ["aresample=44100"] + fx.audio_chain(p,
                     vol, fx.fade_win(0.0, dd, fx.g(p, "fin"), fx.g(p, "fout"), "a")) + [afmt]
                 af += ["apad", f"atrim=0:{dd:.3f}", "asetpts=PTS-STARTPTS"]

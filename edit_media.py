@@ -39,7 +39,8 @@ _TR_ICON = {"fade": "◐", "fadeblack": "●", "fadewhite": "○", "slideleft": 
 
 class MediaPanel(tk.Frame):
     W = 300
-    CATS = [("media", "▣"), ("audio", "♪"), ("text", "T"), ("trans", "⧓"), ("filters", "◑")]
+    CATS = [("media", "▣"), ("audio", "♪"), ("text", "T"), ("effects", "✦"), ("trans", "⧓"),
+            ("filters", "◑")]
 
     def __init__(self, parent, ed, P, E):
         super().__init__(parent, bg=P["bg2"], width=self.W)
@@ -293,6 +294,25 @@ class MediaPanel(tk.Frame):
                               font=(P["font"], 16, "bold"))
             self._tile(g, n, 3, draw, lab, lambda t=t, slot=slot: ed._media_set_tr(slot, t), selected=t == cur)
         self._hint(E("mp_trans_hint"))
+
+    # ------------------------------------------------------------ Ефекти -- #
+    def _cat_effects(self):
+        ed, E, P = self.ed, self.E, self.P
+        if not ed.order:
+            return
+        p = ed._look_target()
+        cur = fx.g(p, "vfx")
+        self._title(E("mp_effects").upper())
+        g = self._grid()
+        ic = {"none": "∅", "glitch": "▚", "vhs": "📼", "oldfilm": "🎞", "blur": "◌", "shake": "〰",
+              "chromatic": "◈", "flash": "⚡", "rainbow": "🌈", "invert": "◑", "sepia": "☕",
+              "edge": "✎", "pixel": "▦", "sharpen": "◆", "posterize": "▤", "bloom": "✺", "noise": "░"}
+        for n, v in enumerate(fx.VFX):
+            def draw(c, w, h, v=v):
+                c.create_rectangle(3, 3, w - 3, h - 3, fill="#2a2440", outline="")
+                c.create_text(w / 2, h / 2, text=ic.get(v, "✦"), fill="#ffffff", font=(P["font"], 17))
+            self._tile(g, n, 3, draw, E("vfx_" + v), lambda v=v: ed._media_set_vfx(v), selected=v == cur)
+        self._hint(E("mp_vfx_hint"))
 
     # ----------------------------------------------------------- Фільтри -- #
     def _cat_filters(self):
