@@ -493,6 +493,8 @@ class VideoEditor(tk.Toplevel):
         self.pieces = [self._new_piece(si, 0.0, 5.0 if self._empty else max(0.1, info["duration"]))]
         self.order = [0]
         self.sel = 0
+        self._msel = set()           # кілька вибраних кліпів (Ctrl / Shift + клік): індекси pieces
+        self._clipboard = None       # Ctrl+C: ("clip", [кліпи]) / ("ovl"|"txt"|"snd", [об'єкт])
         self.snds = []               # додані звуки: {"path","at","dur","vol","name","env"}
         self._sel_snd = None         # вибраний звук (його хвиля малюється в блоці)
         self.sel_txt = None
@@ -1227,12 +1229,65 @@ class VideoEditor(tk.Toplevel):
         self._prev_after = self.after(300 if live else (25 if fast else 110), self._run_poster)
         self._mpv_schedule_prewarm()
 
-    def _ovl_vf(self, o, cw, ch, alpha=1.0):
-        """Ланцюжок накладки: поворот/колір -> масштаб -> прозорість. Повертає (vf, x, y)."""
+    def _ovl_vf(self, o, cw, ch, alpha=1.0, toff=None, ts=None):
+        """Ланцюжок накладки: поворот/колір -> масштаб -> прозорість. Повертає (vf, x, y).
+        Ключі накладки: ts — показати значення в цю секунду джерела (постер);
+        toff=(зсув часу всередині ланцюжка, зсув часу головного відео) — анімувати."""
+        if fx.has_kf(o) and ts is not None:
+            o = dict(o)
+            for k in fx.OVL_KF_KEYS:
+                if fx.has_kf(o, k):
+                    o[k] = fx.kf_val(o, k, ts)
         sw, sh, x, y = self._ovl_geom(o, cw, ch)
         pre = fx.pre_vf(o)
-        f = (pre + "," if pre else "") + f"scale={sw}:{sh}"
         km = fx.key_mask_vf(o)
+        if fx.has_kf(o) and toff is not None:
+            num = fx.num
+            tin = f"({num(o['s'])}+(t)-{num(toff[0])})"
+            tmain = f"({num(o['s'])}+(t)-{num(toff[1])})"
+            zb = max(0.01, float(o["zoom"]))
+            ze = fx.kf_expr(o, "zoom", tin)
+            W, H = sw, sh
+            if ze:
+                mx = max([float(v) for _t, v in o["kf"]["zoom"]] + [zb]) / zb
+                W, H = max(2, int(sw * mx / 2) * 2), max(2, int(sh * mx / 2) * 2)
+            f = (pre + "," if pre else "") + f"scale={W}:{H}"
+            if km:
+                f += "," + km
+            if ze:
+                k = f"({ze})/{num(zb * mx)}"
+                f += (f",format=rgba,scale=w='max(2,trunc({W}*{k}/2)*2)':h='max(2,trunc({H}*{k}/2)*2)':eval=frame,"
+                      f"format=rgba,pad={W}:{H}:(ow-iw)/2:(oh-ih)/2:color=black@0:eval=frame")
+            if fx.has_kf(o, "op"):
+                # прозорість у часі: сходинки по 4% (geq після масштабу в часі валить ffmpeg і дуже
+                # повільний) — кожна сходинка = colorchannelmixer, увімкнений лише на своєму відрізку
+                f += ",format=rgba"
+                dur = max(0.05, o["e"] - o["s"])
+                step, segs, t0, q0 = 1.0 / 15.0, [], 0.0, None
+                k = 0
+                while k * step <= dur + step:
+                    tt = min(dur, k * step)
+                    q = round(max(0.0, min(1.0, fx.kf_val(o, "op", o["s"] + tt))) * 25) / 25.0
+                    if q0 is None:
+                        q0 = q
+                    elif q != q0:
+                        segs.append((t0, tt, q0))
+                        t0, q0 = tt, q
+                    k += 1
+                segs.append((t0, dur + 3600.0, q0))
+                for a0, b0, q in segs:
+                    if q < 0.999:
+                        a1, b1 = a0 + toff[0] - 0.0005, b0 + toff[0]
+                        f += (f",colorchannelmixer=aa={num(q)}:"
+                              f"enable='between(t,{num(a1)},{num(b1)})'")
+            elif float(o.get("op", 1.0)) < 0.999:
+                f += f",format=rgba,colorchannelmixer=aa={num(float(o.get('op', 1.0)))}"
+            nxe = fx.kf_expr(o, "nx", tmain) or num(o["nx"])
+            nye = fx.kf_expr(o, "ny", tmain) or num(o["ny"])
+            x = f"'{num(cw / 2.0)}+({nxe})*{cw}-{num(W / 2.0)}'"
+            y = f"'{num(ch / 2.0)}+({nye})*{ch}-{num(H / 2.0)}'"
+            return f, x, y
+        f = (pre + "," if pre else "") + f"scale={sw}:{sh}"
         if km:
             f += "," + km
         op = float(o.get("op", 1.0)) * alpha
@@ -1288,14 +1343,14 @@ class VideoEditor(tk.Toplevel):
                 tt = max(0.0, o["s"] + (mt - o["at"]))
                 cmd += ["-ss", f"{tt:.3f}", "-i", osrc["path"]]
             a = fx.alpha_factor(mt - o["at"], o["e"] - o["s"], fx.g(o, "fin"), fx.g(o, "fout"))
-            ovf, x, y = self._ovl_vf(o, cw, ch, alpha=a)
+            ovf, x, y = self._ovl_vf(o, cw, ch, alpha=a, ts=o["s"] + (mt - o["at"]))
             fc.append(f"[{j + 1}:v]{ovf}[o{j}]")
             fc.append(f"{vin}[o{j}]overlay={x}:{y}[b{j + 1}]")
             vin = f"[b{j + 1}]"
         for k, tx in enumerate(texts):
             tf = fx.write_text_file(tx, self._tmp, f"p{self._frame_idx}_{k}")
             a = fx.alpha_factor(mt - tx["at"], tx["dur"], tx.get("fin", 0), tx.get("fout", 0))
-            fc.append(f"{vin}{fx.drawtext(tx, cw, ch, self._font, tf, alpha_mul=a)}[t{k}]")
+            fc.append(f"{vin}{fx.drawtext(tx, cw, ch, self._font, tf, alpha_mul=a, local=mt - tx['at'])}[t{k}]")
             vin = f"[t{k}]"
         cmd += ["-filter_complex", ";".join(fc), "-map", vin, "-frames:v", "1", png]
 
@@ -1697,6 +1752,107 @@ class VideoEditor(tk.Toplevel):
             self._select(("snd", i))
             self._redraw()
 
+    # ------------------------------------- копіювати / вставити / шари --- #
+    def _live_msel(self):
+        return {ix for ix in self._msel if ix in self.order}
+
+    def _copy(self, cut=False):
+        """Ctrl+C / Ctrl+X: вибрані кліпи (кілька теж), накладка, текст або звук."""
+        if self.busy:
+            return
+        if self.sel_txt is not None and self.sel_txt < len(self.texts):
+            self._clipboard = ("txt", [dict(self.texts[self.sel_txt])])
+        elif self.sel_ovl is not None and self.sel_ovl < len(self.ovls):
+            self._clipboard = ("ovl", [dict(self.ovls[self.sel_ovl])])
+        elif self._sel_snd is not None and self._sel_snd < len(self.snds):
+            self._clipboard = ("snd", [dict(self.snds[self._sel_snd])])
+        elif self.order:
+            ms = self._live_msel()
+            ixs = [ix for ix in self.order if ix in ms] if len(ms) > 1 else [self.order[self.sel]]
+            self._clipboard = ("clip", [dict(self.pieces[ix]) for ix in ixs])
+        else:
+            return
+        n = len(self._clipboard[1])
+        self._set_progress(None, E("ed_copied", n=n))
+        if cut:
+            self._delete_selected()
+
+    def _paste(self):
+        """Ctrl+V: кліпи — одразу після вибраного кліпа; решта — на плейхед."""
+        cb = self._clipboard
+        if not cb or self.busy:
+            return
+        if self.playing:
+            self._pause()
+        kind, items = cb
+        self._push_undo()
+        mt = self._playhead_montage_t()
+        if kind == "clip":
+            at = self.sel + 1
+            new = []
+            for k, p in enumerate(items):
+                q = dict(p)
+                q["gap"] = 0.0
+                if k == 0:
+                    q.pop("tr", None)
+                self.pieces.append(q)
+                self.order.insert(at + k, len(self.pieces) - 1)
+                new.append(len(self.pieces) - 1)
+            self._select(None)
+            self.sel = at + len(items) - 1
+            self._msel = set(new) if len(new) > 1 else set()
+            q = self._sel_piece()
+            self.cur = q["s"]
+        elif kind == "ovl":
+            o = dict(items[0]); o["at"] = mt
+            self.ovls.append(o)
+            self._select(("ovl", len(self.ovls) - 1))
+        elif kind == "txt":
+            t = dict(items[0]); t["at"] = mt
+            self.texts.append(t)
+            self._select(("txt", len(self.texts) - 1))
+        elif kind == "snd":
+            sn = dict(items[0]); sn["at"] = mt
+            self.snds.append(sn)
+            self._select(("snd", len(self.snds) - 1))
+        self._show_poster(self.cur)
+        self._redraw()
+        if self._insp:
+            self._insp.sync(force=True)
+        if self._media:
+            self._media.refresh(force=True)
+
+    def _ovl_layer(self, d, to_end=False):
+        """Шар накладки: вище / нижче (хто поверх кого). Останній у списку — найвище."""
+        i = self.sel_ovl
+        if i is None or i >= len(self.ovls) or len(self.ovls) < 2:
+            return
+        j = (len(self.ovls) - 1 if d > 0 else 0) if to_end else i + d
+        j = max(0, min(len(self.ovls) - 1, j))
+        if j == i:
+            return
+        self._push_undo()
+        o = self.ovls.pop(i)
+        self.ovls.insert(j, o)
+        self.sel_ovl = j
+        self._show_poster(self.cur)
+        self._redraw()
+        if self._insp:
+            self._insp.sync(force=True)
+
+    def _media_add_tpl(self, tpl):
+        """Шаблон тексту з лівої панелі: шрифт, стиль, кольори, анімації."""
+        self._add_text()
+        if self.sel_txt is not None and self.sel_txt < len(self.texts):
+            t = self.texts[self.sel_txt]
+            for k, v in tpl.items():
+                t[k] = dict(v) if isinstance(v, dict) else v
+            self._show_poster(self.cur)
+            self._redraw()
+            if self._insp:
+                self._insp.sync(force=True)
+            self.after(80, self._focus_text_box)
+
     def _media_add_text(self, style, color):
         self._add_text()
         if self.sel_txt is not None and self.sel_txt < len(self.texts):
@@ -1715,67 +1871,81 @@ class VideoEditor(tk.Toplevel):
             self._media.refresh(force=True)
 
     # ------------------------------------------------ ключові кадри (як у CapCut) -- #
-    def _kf_clip(self):
-        if (self.sel_ovl is not None or self.sel_txt is not None or self._sel_snd is not None
-                or not self.order):
-            return None
-        return self._sel_piece()
+    def _kf_target(self):
+        """(об'єкт, секунда його джерела під плейхедом): кліп або накладка (ключі є в обох)."""
+        if self.sel_txt is not None or self._sel_snd is not None or not self.order:
+            return None, None
+        if self.sel_ovl is not None and self.sel_ovl < len(self.ovls):
+            o = self.ovls[self.sel_ovl]
+            return o, o["s"] + (self._playhead_montage_t() - o["at"])
+        return self._sel_piece(), self.cur
+
+    def _kf_keys(self, obj):
+        if any(obj is o for o in self.ovls):
+            return fx.OVL_KF_KEYS
+        keys = ["zoom", "nx", "ny", "ang", "opa"]
+        src = self.sources[obj["src"]]
+        if src["kind"] == "video" and src["has_audio"]:
+            keys.append("vol")
+        return tuple(keys)
 
     def _kf_sync(self):
-        """Статичні zoom/nx/ny/ang/opa/vol кліпа = значення ключів у точці плейхеда
+        """Статичні властивості об'єкта = значення його ключів у точці плейхеда
         (рамка, повзунки і постер показують кадр саме в цей момент)."""
-        p = self._kf_clip()
-        if p is None:
+        obj, ts = self._kf_target()
+        if obj is None:
             self._kf_snap = None
             return
-        if fx.has_kf(p):
+        if fx.has_kf(obj):
             for k in fx.KF_KEYS:
-                if fx.has_kf(p, k):
-                    p[k] = fx.kf_val(p, k, self.cur)
+                if fx.has_kf(obj, k):
+                    obj[k] = fx.kf_val(obj, k, ts)
             if self._insp:
                 try:
                     self._insp.refresh_values()
                 except Exception:
                     pass
-        self._kf_snap = (id(p), {k: fx.kf_base(p, k) for k in fx.KF_KEYS})
+        self._kf_snap = (id(obj), {k: fx.kf_base(obj, k) for k in fx.KF_KEYS})
 
     def _kf_touch(self):
-        """Користувач змінив властивість кліпа з ключами -> ключ у точці плейхеда."""
-        p = self._kf_clip()
+        """Змінили властивість об'єкта з ключами -> ключ у точці плейхеда."""
+        obj, ts = self._kf_target()
         snap = getattr(self, "_kf_snap", None)
-        if p is None or not fx.has_kf(p) or not snap or snap[0] != id(p):
+        if obj is None or not fx.has_kf(obj) or not snap or snap[0] != id(obj):
             return
-        if not (p["s"] - 0.001 <= self.cur <= p["e"] + 0.001):
+        if not (obj["s"] - 0.001 <= ts <= obj["e"] + 0.001):
             return
-        for k in fx.KF_KEYS:
-            v = fx.kf_base(p, k)
+        for k in self._kf_keys(obj):
+            v = fx.kf_base(obj, k)
             if abs(v - snap[1][k]) > 1e-6:
-                fx.kf_set(p, k, self.cur, v)
-        self._kf_snap = (id(p), {k: fx.kf_base(p, k) for k in fx.KF_KEYS})
+                fx.kf_set(obj, k, ts, v)
+        self._kf_snap = (id(obj), {k: fx.kf_base(obj, k) for k in fx.KF_KEYS})
         self._req_draw()
 
-    def _kf_at(self, p):
-        return any(abs(t - self.cur) <= 0.02 for t in fx.kf_times(p))
+    def _kf_at(self, p=None, ts=None):
+        if p is None:
+            p, ts = self._kf_target()
+            if p is None:
+                return False
+        ts = self.cur if ts is None else ts
+        return any(abs(t - ts) <= 0.02 for t in fx.kf_times(p))
 
     def _kf_toggle(self):
         """◆: додати ключ (усі властивості) у точці плейхеда або прибрати наявний."""
-        p = self._kf_clip()
-        if p is None or self.busy:
+        obj, ts = self._kf_target()
+        if obj is None or self.busy:
             return
         if self.playing:
             self._pause()
-        if not (p["s"] - 0.001 <= self.cur <= p["e"] + 0.001):
+            obj, ts = self._kf_target()
+        if not (obj["s"] - 0.001 <= ts <= obj["e"] + 0.001):
             return
         self._push_undo()
-        if self._kf_at(p):
-            fx.kf_del_at(p, self.cur)
+        if self._kf_at(obj, ts):
+            fx.kf_del_at(obj, ts)
         else:
-            keys = ["zoom", "nx", "ny", "ang", "opa"]
-            src = self._src(p)
-            if src["kind"] == "video" and src["has_audio"]:
-                keys.append("vol")
-            for k in keys:
-                fx.kf_set(p, k, self.cur, fx.kf_base(p, k))
+            for k in self._kf_keys(obj):
+                fx.kf_set(obj, k, ts, fx.kf_base(obj, k))
         self._kf_sync()
         self._prop_changed()
         self._redraw()
@@ -1783,34 +1953,166 @@ class VideoEditor(tk.Toplevel):
             self._insp.sync(force=True)
 
     def _kf_clear(self):
-        p = self._kf_clip()
-        if p is None or not fx.has_kf(p):
+        obj, _ts = self._kf_target()
+        if obj is None or not fx.has_kf(obj):
             return
         self._push_undo()
-        p["kf"] = {}
+        obj["kf"] = {}
         self._prop_changed()
         self._redraw()
         if self._insp:
             self._insp.sync(force=True)
 
     def _kf_jump(self, d):
-        p = self._kf_clip()
-        if p is None:
+        obj, cur = self._kf_target()
+        if obj is None:
             return
-        ts = [t for t in fx.kf_times(p) if p["s"] - 0.001 <= t <= p["e"] + 0.001]
+        ts = [t for t in fx.kf_times(obj) if obj["s"] - 0.001 <= t <= obj["e"] + 0.001]
         if d > 0:
-            c = [t for t in ts if t > self.cur + 0.02]
+            c = [t for t in ts if t > cur + 0.02]
             t = c[0] if c else None
         else:
-            c = [t for t in ts if t < self.cur - 0.02]
+            c = [t for t in ts if t < cur - 0.02]
             t = c[-1] if c else None
         if t is None:
             return
         if self.playing:
             self._pause()
-        self._set_playhead_lt(self._clip_layout_start(self.sel) + (t - p["s"]) / p["speed"], fast=False)
+        if any(obj is o for o in self.ovls):
+            lt = obj["at"] + (t - obj["s"])
+        else:
+            lt = self._clip_layout_start(self.sel) + (t - obj["s"]) / obj["speed"]
+        self._set_playhead_lt(lt, fast=False)
         if self._insp:
             self._insp.sync(force=True)
+
+    # ---------------------------------------------------- наліпки / біти -- #
+    def _sticker_path(self, code):
+        d = os.path.join(tempfile.gettempdir(), "dac_stickers")
+        os.makedirs(d, exist_ok=True)
+        return os.path.join(d, f"{code}.png")
+
+    def _add_sticker(self, code):
+        """Наліпка = накладка-картинка (емодзі Noto 512 px) на плейхеді, 3 с."""
+        if self.busy or not self.order:
+            return
+        path = self._sticker_path(code)
+
+        def place():
+            if self._closed or not os.path.exists(path):
+                return
+            self._set_progress(None, "")
+            si = self._add_source(path, "image", {"duration": 0, "width": 512, "height": 512, "fps": 30})
+            self._push_undo()
+            o = {k: v for k, v in fx.PIECE_DEFAULTS.items()}
+            o.update({"src": si, "s": 0.0, "e": 3.0, "at": self._playhead_montage_t(),
+                      "zoom": 0.3, "nx": 0.0, "ny": 0.0, "mute": True, "op": 1.0, "sticker": code})
+            self.ovls.append(o)
+            self._select(("ovl", len(self.ovls) - 1))
+            self._tf_on = True
+            self._show_poster(self.cur)
+            self._redraw()
+            if self._insp:
+                self._insp.sync(force=True)
+        if os.path.exists(path) and os.path.getsize(path) > 200:
+            place()
+            return
+        self._set_progress(None, E("ed_sticker_dl"))
+
+        def work():
+            import urllib.request
+            okk = False
+            for u in fx.sticker_urls(code):
+                try:
+                    req = urllib.request.Request(u, headers={"User-Agent": "DiscordAutoCompress"})
+                    with urllib.request.urlopen(req, timeout=20) as r:
+                        data = r.read()
+                    if data[:8] == b"\x89PNG\r\n\x1a\n":
+                        with open(path + ".part", "wb") as fh:
+                            fh.write(data)
+                        os.replace(path + ".part", path)
+                        okk = True
+                        break
+                except Exception:
+                    continue
+            self._ui(place if okk else (lambda: self._set_progress(None, E("ed_sticker_fail"), C_RED)))
+        threading.Thread(target=work, daemon=True).start()
+
+    def _beats_detect(self, sn):
+        """Автобіти: сплески гучності (онсети) у звуці -> позначки на доріжці (як у CapCut)."""
+        if self.busy:
+            return
+        self._set_progress(None, E("ed_beats_busy"))
+
+        def work():
+            beats = []
+            try:
+                # гучність кожні 256 семплів рахує ffmpeg (швидко, програма не підвисає)
+                af = ("aformat=channel_layouts=mono,aresample=11025,asetnsamples=n=256:p=0,"
+                      "astats=metadata=1:reset=1:measure_overall=RMS_level:measure_perchannel=none,"
+                      "ametadata=print:key=lavfi.astats.Overall.RMS_level:file=-")
+                r = subprocess.run(["ffmpeg", "-v", "error", "-i", sn["path"], "-af", af, "-f", "null", "-"],
+                                   capture_output=True, text=True, creationflags=dc_core.NO_WINDOW)
+                en = []
+                for ln in r.stdout.splitlines():
+                    if "RMS_level=" in ln:
+                        v = ln.split("=", 1)[1].strip()
+                        try:
+                            db = float(v)
+                        except ValueError:
+                            db = -120.0
+                        en.append(10 ** (max(-120.0, db) / 10.0))
+                hop = 256
+                flux = [0.0] + [max(0.0, en[i] - en[i - 1]) for i in range(1, len(en))]
+                W = 43
+                pre = [0.0]
+                for v in flux:
+                    pre.append(pre[-1] + v)
+                last = -1e9
+                for i in range(len(flux)):
+                    lo, hi = max(0, i - W), min(len(flux), i + W)
+                    m = (pre[hi] - pre[lo]) / max(1, hi - lo)
+                    if flux[i] > m * 2.2 and flux[i] > 0 and flux[i] >= max(flux[max(0, i - 3):i + 4]):
+                        t = i * hop / 11025.0
+                        if t - last >= 0.28:
+                            beats.append(round(t, 3))
+                            last = t
+            except Exception:
+                beats = []
+
+            def fin():
+                self._set_progress(None, E("ed_beats_done", n=len(beats)) if beats else E("ed_beats_none"))
+                if beats:
+                    self._push_undo()
+                    sn["beats"] = beats
+                    self._redraw()
+            self._ui(fin)
+        threading.Thread(target=work, daemon=True).start()
+
+    def _beat_mark(self, sn):
+        """Позначка біта вручну там, де плейхед (якщо він над цим звуком)."""
+        mt = self._playhead_montage_t()
+        if not (sn["at"] <= mt <= sn["at"] + sn["dur"]):
+            return
+        self._push_undo()
+        ts = round(float(sn.get("s", 0.0)) + (mt - sn["at"]), 3)
+        sn["beats"] = sorted(set(list(sn.get("beats") or []) + [ts]))
+        self._redraw()
+
+    def _beats_clear(self, sn):
+        if sn.get("beats"):
+            self._push_undo()
+            sn["beats"] = []
+            self._redraw()
+
+    def _beat_times(self):
+        out = []
+        for sn in self.snds:
+            s0 = float(sn.get("s", 0.0))
+            for b in sn.get("beats") or []:
+                if s0 <= b <= s0 + sn["dur"]:
+                    out.append(sn["at"] + (b - s0))
+        return out
 
     # ------------------------------- стоп-кадр / реверс / видалити зліва-справа -- #
     def _freeze(self):
@@ -2517,6 +2819,7 @@ class VideoEditor(tk.Toplevel):
         self._redo.clear()
 
     def _apply_state(self, st):
+        self._msel = set()
         pieces, order, sel, snds, ovls = st[:5]
         self.texts = [dict(t) for t in (st[5] if len(st) > 5 else [])]
         if len(st) > 6 and tuple(st[6]) != (self._ratio, self._bgmode):
@@ -3220,6 +3523,8 @@ class VideoEditor(tk.Toplevel):
                     c.tag_lower(r, tid)
                 elif bb:
                     c.delete(tid)
+            if ix in self._msel and len(self._msel) > 1:
+                c.create_rectangle(cx1 + 2, y1 + 1, cx2 - 2, y2 - 1, outline=C_HANDLE, width=2)
             if sel:
                 self._draw_handle(c, cx1 + 1, True, self._active == "L", y1, y2)
                 self._draw_handle(c, cx2 - 1, False, self._active == "R", y1, y2)
@@ -3625,7 +3930,9 @@ class VideoEditor(tk.Toplevel):
                     c.create_line(xx, mid - h, xx, mid + h, fill="#2a0d45", width=1)
                     xx += 2
             mut = " 🔇" if o["mute"] else ""
-            self._block_label(c, x1, x2, W, (y1 + y2) / 2, f"🎭 {src['name']}{mut}", "#10121a")
+            ic = "☺" if o.get("sticker") else "🎭"
+            lay = f"[{i + 1}] " if len(self.ovls) > 1 else ""
+            self._block_label(c, x1, x2, W, (y1 + y2) / 2, f"{lay}{ic} {src['name']}{mut}", "#10121a")
             if sel:
                 c.create_polygon(host._rr_pts(x1, y1, x2, y2, 6), smooth=True, fill="",
                                  outline=C_HANDLE, width=2)
@@ -3684,6 +3991,12 @@ class VideoEditor(tk.Toplevel):
                     h = max(0.5, a * (mid - y1 - 2))
                     c.create_line(xx, mid - h, xx, mid + h, fill="#0d3d20", width=1)
                     xx += 2
+            s0b = float(sn.get("s", 0.0))
+            for bt in sn.get("beats") or []:
+                if s0b <= bt <= s0b + sn["dur"]:
+                    bx = x1 + (bt - s0b) * pps
+                    if LX <= bx <= W:
+                        c.create_oval(bx - 2.5, y2 - 7, bx + 2.5, y2 - 2, fill="#ffd23f", outline="")
             v = "" if sn["vol"] == 1.0 else f" · {fx.vol_label(sn['vol'])}"
             self._block_label(c, x1, x2, W, (y1 + y2) / 2, f"🎵 {sn['name']}{v}", "#071a0e")
             if sel:
@@ -3778,8 +4091,9 @@ class VideoEditor(tk.Toplevel):
             self.b_dr.set_state(st(inside and clip))
             self.b_freeze.set_state(st(vid and clip))
             self.b_rev.set_state(st(vid and clip))
-            self.b_kf.set_state(st(clip))
-            self.b_kf.set_on(clip and self._kf_at(p))
+            kobj, _kts = self._kf_target()
+            self.b_kf.set_state(st(kobj is not None))
+            self.b_kf.set_on(kobj is not None and self._kf_at())
             self.b_txt.set_state("disabled" if (self.busy or not self._font) else "normal")
         except (tk.TclError, AttributeError, IndexError):
             pass
@@ -3798,6 +4112,7 @@ class VideoEditor(tk.Toplevel):
         for i, t in enumerate(self.texts):
             if ("txt", i) != exclude:
                 pts += [t["at"], t["at"] + t["dur"]]
+        pts += self._beat_times()
         return pts
 
     def _snap(self, lt, pts, thr_px=8):
@@ -4134,6 +4449,16 @@ class VideoEditor(tk.Toplevel):
             self._ovl_del()
         elif self._sel_snd is not None and self._sel_snd < len(self.snds):
             self._del_snd(self._sel_snd)
+        elif len(self._live_msel()) > 1 and len(self.order) > len(self._live_msel()):
+            self._push_undo()
+            ms = self._live_msel()
+            self.order = [ix for ix in self.order if ix not in ms]
+            self._msel = set()
+            self.sel = min(self.sel, len(self.order) - 1)
+            p = self._sel_piece()
+            self.cur = min(max(self.cur, p["s"]), p["e"])
+            self._show_poster(self.cur)
+            self._redraw()
         elif len(self.order) > 1:
             self._remove()
         else:
@@ -4179,7 +4504,7 @@ class VideoEditor(tk.Toplevel):
             return self._txt_press(ev)
         if lane == "snd":
             return self._snd_press(ev)
-        return self._ph_start(ev)
+        return self._marq_start(ev)
 
     def _tl_motion(self, ev):
         self._nosnap = bool(ev.state & 0x20000)
@@ -4192,6 +4517,8 @@ class VideoEditor(tk.Toplevel):
         m = self._mode
         if m == "ph":
             self._ph_to(x)
+        elif m == "marq":
+            self._marq_motion(x, y)
         elif m == "trim":
             self._trim_motion(x)
         elif m == "clip":
@@ -4236,7 +4563,9 @@ class VideoEditor(tk.Toplevel):
             try: self.after_cancel(self._edge_after)
             except Exception: pass
             self._edge_after = None
-        if m == "trim":
+        if m == "marq":
+            self._marq_release()
+        elif m == "trim":
             self._drag = None
             if self._tip_t is not None:
                 self._schedule_tip_clear()
@@ -4259,6 +4588,70 @@ class VideoEditor(tk.Toplevel):
         self._redraw()
 
     # ---- плейхед (білий повзунок): тягнеться по лінійці та по доріжках ----
+    def _marq_start(self, ev):
+        """Порожнє місце доріжки: клік — плейхед туди; затиснути й тягнути — рамка вибору
+        кількох кліпів (як у CapCut)."""
+        if self.playing:
+            self._pause()
+        self._mode = "marq"
+        self._marq = {"x0": ev.x, "y0": ev.y, "x": ev.x, "y": ev.y, "moved": False,
+                      "add": bool(ev.state & 0x4) or bool(ev.state & 0x1)}
+
+    def _marq_motion(self, x, y):
+        m = getattr(self, "_marq", None)
+        if not m:
+            return
+        m["x"], m["y"] = x, y
+        if abs(x - m["x0"]) + abs(y - m["y0"]) > 5:
+            m["moved"] = True
+        if not m["moved"]:
+            return
+        c = self.tl
+        c.delete("marq")
+        c.create_rectangle(m["x0"], m["y0"], x, y, outline=C_HANDLE, dash=(4, 3), width=1,
+                           fill=C_HANDLE, stipple="gray12", tags="marq")
+        x1, x2 = sorted((m["x0"], x))
+        y1, y2 = sorted((m["y0"], y))
+        hit = set()
+        if y1 <= TL_Y + TLH and y2 >= TL_Y:
+            hit = {ix for _slot, ix, cx1, cx2 in self._clip_rects if cx2 >= x1 and cx1 <= x2}
+        base = set(m.get("base", set())) if m["add"] else set()
+        if "base" not in m:
+            m["base"] = set(self._msel)
+        self._msel = base | hit
+        for _slot, ix, cx1, cx2 in self._clip_rects:
+            if ix in self._msel:
+                c.create_rectangle(cx1 + 2, TL_Y + 1, cx2 - 2, TL_Y + TLH - 1, outline=C_HANDLE, width=2,
+                                   tags="marq")
+
+    def _marq_release(self):
+        m = getattr(self, "_marq", None)
+        self._marq = None
+        try:
+            self.tl.delete("marq")
+        except tk.TclError:
+            pass
+        if not m:
+            return
+        if not m["moved"]:                 # звичайний клік по порожньому — плейхед туди
+            if not m["add"]:
+                self._msel = set()
+            self._ph_to(m["x0"])
+            self._redraw()
+            return
+        live = [ix for ix in self.order if ix in self._msel]
+        if live:
+            self._select(None)
+            self.sel = self.order.index(live[0])
+            q = self._sel_piece()
+            self.cur = min(max(self.cur, q["s"]), q["e"])
+            self._show_poster(self.cur, fast=True)
+        if len(live) == 1:
+            self._msel = set()
+        self._redraw()
+        if len(live) > 1:
+            self._set_progress(None, E("ed_msel", n=len(live)))
+
     def _ph_start(self, ev):
         if self.playing:
             self._pause()
@@ -4294,9 +4687,30 @@ class VideoEditor(tk.Toplevel):
             self.sel_txt = None
             self._sel_snd = None
             self.sel_txt = None
-            return self._ph_start(ev)
+            return self._marq_start(ev)
         slot, ix, cx1, cx2 = hit
         p = self.pieces[ix]
+        ctrl, shift = bool(ev.state & 0x4), bool(ev.state & 0x1)
+        if ctrl or shift:                     # кілька кліпів: Ctrl — додати/прибрати, Shift — діапазон
+            if not self._msel:
+                self._msel = {self.order[self.sel]}
+            if shift:
+                a, b = sorted((self.sel, slot))
+                self._msel |= {self.order[k] for k in range(a, b + 1)}
+            elif ix in self._msel and len(self._msel) > 1:
+                self._msel.discard(ix)
+            else:
+                self._msel.add(ix)
+            self._select(None)
+            self.sel = slot if ix in self._msel else self.order.index(next(iter(self._msel)))
+            q = self._sel_piece()
+            self.cur = min(max(self.cur, q["s"]), q["e"])
+            self._show_poster(self.cur, fast=True)
+            self._redraw()
+            self._set_progress(None, E("ed_msel", n=len(self._msel)))
+            return
+        if ix not in self._msel:
+            self._msel = set()
         if slot != self.sel or self.sel_ovl is not None:
             self._tf_on = False
             self.video.delete("tf")
@@ -4384,7 +4798,7 @@ class VideoEditor(tk.Toplevel):
                 self._tf_on = False
                 self.video.delete("tf")
                 self._show_poster(self.cur)
-            return self._ph_start(ev)
+            return self._marq_start(ev)
         i, x1, x2 = hit
         if self.playing:
             self._pause()
@@ -4441,7 +4855,7 @@ class VideoEditor(tk.Toplevel):
         if i is None:
             self._sel_snd = None
             self.sel_txt = None
-            return self._ph_start(ev)
+            return self._marq_start(ev)
         self._sel_snd = i
         self.sel_txt = None
         self.sel_ovl = None
@@ -4603,7 +5017,7 @@ class VideoEditor(tk.Toplevel):
                 continue
             osrc = self.sources[o["src"]]
             seek = o["s"] + max(0.0, -a)
-            ovf, x, y = self._ovl_vf(o, cw, ch)
+            ovf, x, y = self._ovl_vf(o, cw, ch, toff=(a, a))
             fades = fx.fade_win(a, b, fx.g(o, "fin"), fx.g(o, "fout"), "v", alpha=True)
             mv = f"movie={fx.esc(osrc['path'])}"
             if osrc["kind"] == "video" and seek > 0.01:
@@ -5114,7 +5528,7 @@ class VideoEditor(tk.Toplevel):
                 self._select(None)
                 self._tf_on = False
                 self.video.delete("tf")
-            return self._ph_start(ev)
+            return self._marq_start(ev)
         i, x1, x2 = hit
         if self.playing:
             self._pause()
@@ -5213,6 +5627,19 @@ class VideoEditor(tk.Toplevel):
             self._redo_action()
         elif ctrl and kc == 68:
             self._duplicate()
+        elif ctrl and kc == 67:
+            self._copy()
+        elif ctrl and kc == 88:
+            self._copy(cut=True)
+        elif ctrl and kc == 86:
+            self._paste()
+        elif ctrl and kc == 65:
+            self._select(None)
+            self._msel = set(self.order)
+            self._redraw()
+            self._set_progress(None, E("ed_msel", n=len(self._msel)))
+        elif ctrl and kc in (219, 221):
+            self._ovl_layer(1 if kc == 221 else -1, to_end=shift)
         elif (ctrl and kc == 66) or (not ctrl and kc == 83):
             self._cut_here()
         elif ctrl and kc in (187, 107):
@@ -5503,7 +5930,7 @@ class VideoEditor(tk.Toplevel):
             else:
                 cmd += [*(self._hwdec_args(src) if hwdec else []),
                         "-ss", f"{o['s']:.3f}", "-t", f"{d:.3f}", "-i", src["path"]]
-            ovf, x, y = self._ovl_vf(o, cw, ch)
+            ovf, x, y = self._ovl_vf(o, cw, ch, toff=(0.0, at))
             fades = fx.fade_win(0.0, o["e"] - o["s"], fx.g(o, "fin"), fx.g(o, "fout"), "v", alpha=True)
             if fades:
                 ovf += ",format=rgba," + ",".join(fades)

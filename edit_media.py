@@ -39,8 +39,8 @@ _TR_ICON = {"fade": "◐", "fadeblack": "●", "fadewhite": "○", "slideleft": 
 
 class MediaPanel(tk.Frame):
     W = 300
-    CATS = [("media", "▣"), ("audio", "♪"), ("text", "T"), ("effects", "✦"), ("trans", "⧓"),
-            ("filters", "◑")]
+    CATS = [("media", "▣"), ("audio", "♪"), ("text", "T"), ("stickers", "☺"), ("effects", "✦"),
+            ("trans", "⧓"), ("filters", "◑")]
 
     def __init__(self, parent, ed, P, E):
         super().__init__(parent, bg=P["bg2"], width=self.W)
@@ -250,8 +250,37 @@ class MediaPanel(tk.Frame):
                 w.bind("<Button-1>", lambda e, i=i: ed._media_pick_snd(i))
 
     # ------------------------------------------------------------- Текст -- #
+    def _cat_stickers(self):
+        ed, E, P = self.ed, self.E, self.P
+        self._title(E("mp_stickers").upper())
+        g = self._grid()
+        for n, code in enumerate(fx.STICKERS):
+            ch = fx.sticker_char(code)
+            c = tk.Label(g, text=ch, bg=P["bg2"], fg=P["text"], font=("Segoe UI Emoji", 20), cursor="hand2",
+                         width=2)
+            c.grid(row=n // 6, column=n % 6, padx=2, pady=2)
+            c.bind("<Button-1>", lambda e, code=code: ed._add_sticker(code))
+            c.bind("<Enter>", lambda e, c=c: c.config(bg=_mix(P["bg2"], P["text"], 0.15)))
+            c.bind("<Leave>", lambda e, c=c: c.config(bg=P["bg2"]))
+        self._hint(E("mp_sticker_hint"))
+
     def _cat_text(self):
         ed, E, P = self.ed, self.E, self.P
+        self._title(E("mp_text_tpl").upper())
+        g0 = self._grid()
+        for n, (key, tpl) in enumerate(fx.TEXT_TEMPLATES):
+            def draw(c, w, h, tpl=tpl):
+                fam = {"impact": "Impact", "comic": "Comic Sans MS", "georgia": "Georgia", "consolas": "Consolas",
+                       "script": "Segoe Script", "verdana": "Verdana", "arial": "Arial"}.get(tpl.get("font"), P["font"])
+                f = (fam, 14, "bold")
+                x, y = w / 2, h / 2
+                if tpl.get("style") == "box":
+                    c.create_rectangle(x - 30, y - 13, x + 30, y + 13, fill=tpl.get("bgc", "#000000"), outline="")
+                else:
+                    for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1), (2, 2)):
+                        c.create_text(x + dx, y + dy, text="Abc", fill=tpl.get("stroke", "#000000"), font=f)
+                c.create_text(x, y, text="Abc", fill=tpl.get("color", "#ffffff"), font=f)
+            self._tile(g0, n, 3, draw, E("tpl_" + key), lambda tpl=tpl: ed._media_add_tpl(tpl))
         self._title(E("mp_text_styles").upper())
         presets = [("outline", "#ffffff", E("st_outline")), ("box", "#ffffff", E("st_box")),
                    ("shadow", "#ffffff", E("st_shadow")), ("outline", "#ffd23f", E("mp_txt_yellow")),

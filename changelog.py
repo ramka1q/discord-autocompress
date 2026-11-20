@@ -10,6 +10,28 @@ changelog.py — версія програми та список змін по �
 REPO_URL = "https://github.com/ramka1q/discord-autocompress"
 
 CHANGES = [
+    {"v": "3.5.0", "date": "2026-11-20 21:00", "items": [
+        {"icon": "T", "tab": None,
+         "uk": ("Текст як у CapCut", "Шаблони (Мем, Субтитри, Машинка, Неон, Геймінг…), 11 шрифтів, колір обведення й фону, анімації появи / зникнення / циклу: друкарська машинка, падіння, зсуви, пульс, хвиля."),
+         "ru": ("Текст как в CapCut", "Шаблоны (Мем, Субтитры, Машинка, Неон, Гейминг…), 11 шрифтов, цвет обводки и фона, анимации появления / исчезновения / цикла: печатная машинка, падение, сдвиги, пульс, волна."),
+         "en": ("CapCut-style text", "Templates (Meme, Subtitle, Typewriter, Neon, Gaming…), 11 fonts, stroke and background colors, In / Out / Loop animations: typewriter, drop, slides, heartbeat, wave.")},
+        {"icon": "☺", "tab": None,
+         "uk": ("Наліпки", "Вкладка «Наліпки»: 50 емодзі у високій якості. Наліпка — це накладка: тягай, масштабуй, став ключі й маски."),
+         "ru": ("Наклейки", "Вкладка «Наклейки»: 50 эмодзи в высоком качестве. Наклейка — это наложение: двигай, масштабируй, ставь ключи и маски."),
+         "en": ("Stickers", "Stickers tab: 50 high-quality emoji. A sticker is an overlay: move, scale, add keyframes and masks.")},
+        {"icon": "▭", "tab": None,
+         "uk": ("Кілька кліпів, копіювати / вставити", "Затисни мишку на порожньому місці доріжки й обведи кліпи рамкою (або Ctrl / Shift + клік, Ctrl+A). Ctrl+C / Ctrl+X / Ctrl+V — кліпи, накладки, тексти, звуки."),
+         "ru": ("Несколько клипов, копировать / вставить", "Зажми мышку на пустом месте дорожки и обведи клипы рамкой (или Ctrl / Shift + клик, Ctrl+A). Ctrl+C / Ctrl+X / Ctrl+V — клипы, наложения, тексты, звуки."),
+         "en": ("Multi-select, copy / paste", "Drag a box from an empty spot on the timeline (or Ctrl / Shift + click, Ctrl+A). Ctrl+C / Ctrl+X / Ctrl+V for clips, overlays, texts and sounds.")},
+        {"icon": "⧉", "tab": None,
+         "uk": ("Шари і ключі накладок", "Обирай, яке відео чи фото поверх: Наверх / Вище / Нижче / Вниз (або Ctrl+] / Ctrl+[). Накладки теж мають ключові кадри: масштаб, позиція, прозорість."),
+         "ru": ("Слои и ключи наложений", "Выбирай, какое видео или фото сверху: Наверх / Выше / Ниже / Вниз (или Ctrl+] / Ctrl+[). Наложения тоже имеют ключевые кадры: масштаб, позиция, прозрачность."),
+         "en": ("Layers and overlay keyframes", "Choose which video or photo is on top: To top / Up / Down / To bottom (or Ctrl+] / Ctrl+[). Overlays get keyframes too: scale, position, opacity.")},
+        {"icon": "🥁", "tab": None,
+         "uk": ("Біти музики", "У звуку: «Автобіти» знаходить удари, «Позначка» ставить вручну — кліпи й повзунок липнуть до бітів."),
+         "ru": ("Биты музыки", "У звука: «Автобиты» находит удары, «Отметка» ставит вручную — клипы и ползунок липнут к битам."),
+         "en": ("Music beats", "On a sound: Auto beats finds the hits, Mark adds one by hand — clips and the playhead snap to beats.")},
+    ]},
     {"v": "3.4.0", "date": "2026-11-20 18:00", "items": [
         {"icon": "◆", "tab": None,
          "uk": ("Ключові кадри", "Кнопка ◆ (або K): постав ключ, пересунь плейхед, зміни масштаб / позицію / поворот / непрозорість / гучність — рух між ключами плавний. [ і ] — до сусіднього ключа."),

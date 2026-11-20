@@ -82,8 +82,50 @@ _VFX = {
 TRANSITIONS = ["fade", "fadeblack", "fadewhite", "slideleft", "wipeleft", "smoothleft",
                "circleopen", "zoomin", "pixelize", "radial"]
 
-TEXT_COLORS = ["#ffffff", "#ffd23f", "#ff4d4d", "#4cc9ff", "#33c27f", "#ff7ad9", "#000000"]
-TEXT_STYLES = ["outline", "box", "shadow"]
+TEXT_COLORS = ["#ffffff", "#ffd23f", "#ff4d4d", "#4cc9ff", "#33c27f", "#ff7ad9", "#a970ff", "#ff9f1c",
+               "#000000"]
+TEXT_STYLES = ["outline", "box", "shadow", "plain"]
+# шаблони тексту (ліва панель «Текст»): шрифт, стиль, кольори, анімації
+TEXT_TEMPLATES = [
+    ("meme", {"font": "impact", "style": "outline", "color": "#ffffff", "stroke": "#000000", "size": 0.1,
+              "tin": {"type": "drop", "d": 0.5}}),
+    ("subtitle", {"font": "segoe", "style": "box", "color": "#ffffff", "bgc": "#000000", "size": 0.06,
+                  "ny": 0.38, "tin": {"type": "fade", "d": 0.2}, "tout": {"type": "fade", "d": 0.2}}),
+    ("typewriter", {"font": "consolas", "style": "box", "color": "#ffffff", "bgc": "#111111", "size": 0.07,
+                    "tin": {"type": "typewriter", "d": 1.2}}),
+    ("neon", {"font": "verdana", "style": "shadow", "color": "#ff7ad9", "stroke": "#4cc9ff", "size": 0.09,
+              "tloop": {"type": "heartbeat"}}),
+    ("gaming", {"font": "impact", "style": "outline", "color": "#ffd23f", "stroke": "#7a1fa2", "size": 0.11,
+                "tin": {"type": "slide_up", "d": 0.4}, "tloop": {"type": "shake"}}),
+    ("elegant", {"font": "georgia", "style": "shadow", "color": "#f5e6c8", "stroke": "#000000", "size": 0.08,
+                 "tin": {"type": "slide_up", "d": 0.8}, "tout": {"type": "fade", "d": 0.6}}),
+    ("comic", {"font": "comic", "style": "outline", "color": "#ffd23f", "stroke": "#d62828", "size": 0.09,
+               "tin": {"type": "drop", "d": 0.6}, "tloop": {"type": "wave"}}),
+    ("headline", {"font": "arial", "style": "box", "color": "#ffffff", "bgc": "#e53935", "size": 0.08,
+                  "ny": -0.34, "tin": {"type": "slide_right", "d": 0.5}}),
+    ("handwrite", {"font": "script", "style": "shadow", "color": "#ffffff", "stroke": "#000000", "size": 0.09,
+                   "tin": {"type": "fade", "d": 0.8}, "tloop": {"type": "float"}}),
+]
+
+# ---- наліпки: емодзі Noto (Google, OFL) 512×512 PNG, качаються при першому виборі
+STICKERS = ["1f602", "1f923", "1f60d", "1f60e", "1f62d", "1f621", "1f631", "1f914", "1f644", "1f480",
+            "1f525", "1f4af", "2764", "1f494", "2b50", "2728", "1f389", "1f44d", "1f44e", "1f44f",
+            "1f64f", "1f4aa", "1f440", "1f448", "1f449", "1f446", "1f447", "2705", "274c", "26a0",
+            "1f6a8", "1f4a5", "1f4a8", "1f4a9", "1f921", "1f47b", "1f480", "1f916", "1f3ae", "1f3c6",
+            "1f451", "1f48e", "1f4b8", "1f680", "1f30d", "1f319", "2600", "26a1", "1f308", "1f3b5"]
+STICKERS = list(dict.fromkeys(STICKERS))
+
+
+def sticker_urls(code):
+    return [f"https://cdn.jsdelivr.net/gh/googlefonts/noto-emoji@v2.047/png/512/emoji_u{code}.png",
+            f"https://fonts.gstatic.com/s/e/notoemoji/latest/{code}/512.png"]
+
+
+def sticker_char(code):
+    try:
+        return chr(int(code, 16))
+    except ValueError:
+        return "?"
 
 
 def g(p, key):
@@ -464,6 +506,9 @@ def find_font():
     return None
 
 
+_E3_T = "(1-pow(1-u,3))"
+
+
 def new_text(at, text="Text"):
     return {"text": text, "at": float(at), "dur": 3.0, "size": 0.085, "color": "#ffffff",
             "style": "outline", "nx": 0.0, "ny": 0.30, "zoom": 1.0, "fin": 0.25, "fout": 0.25}
@@ -487,33 +532,157 @@ def clean_text(s):
     return "\n".join(ln.rstrip() for ln in out.split("\n"))
 
 
-def drawtext(t, cw, ch, font, txtfile, t0=None, t1=None, alpha_mul=1.0):
+# ---- шрифти Windows (з кирилицею), рамка / фон тексту, анімації тексту ----
+FONTS = [("segoe", "segoeuib.ttf"), ("arial", "arialbd.ttf"), ("impact", "impact.ttf"),
+         ("comic", "comicbd.ttf"), ("times", "timesbd.ttf"), ("georgia", "georgiab.ttf"),
+         ("verdana", "verdanab.ttf"), ("trebuchet", "trebucbd.ttf"), ("consolas", "consolab.ttf"),
+         ("script", "segoesc.ttf"), ("print", "segoepr.ttf")]
+
+
+def font_path(name):
+    windir = os.environ.get("WINDIR", r"C:\Windows")
+    for k, fn in FONTS:
+        if k == name:
+            q = os.path.join(windir, "Fonts", fn)
+            return q if os.path.exists(q) else None
+    return None
+
+
+def fonts_available():
+    return [k for k, _ in FONTS if font_path(k)]
+
+
+# In / Out: u = прогрес 0..1;  Loop: T = секунди від початку тексту.
+# X / Y — зсув у частках кадру, A — множник прозорості. (Розмір шрифту в часі ffmpeg 8
+# не вміє — падає, тому лише рух і прозорість.)
+TEXT_IN = {
+    "fade": {"A": "u"},
+    "slide_up": {"Y": f"0.12*(1-{_E3_T})", "A": "min(1,u*2)"},
+    "slide_down": {"Y": f"-0.12*(1-{_E3_T})", "A": "min(1,u*2)"},
+    "slide_left": {"X": f"0.3*(1-{_E3_T})", "A": "min(1,u*2)"},
+    "slide_right": {"X": f"-0.3*(1-{_E3_T})", "A": "min(1,u*2)"},
+    "drop": {"Y": "-0.35*(1-u)*abs(cos(u*PI*1.5))", "A": "min(1,u*4)"},
+    "blink": {"A": "if(lt(u,0.25),0,if(lt(u,0.4),1,if(lt(u,0.55),0,1)))"},
+    "typewriter": {},
+}
+TEXT_OUT = {k: v for k, v in TEXT_IN.items() if k != "typewriter"}
+TEXT_LOOP = {
+    "float": {"Y": "0.015*sin(T*2.4)"},
+    "shake": {"X": "0.006*sin(T*47)", "Y": "0.005*cos(T*53)"},
+    "wave": {"X": "0.02*sin(T*3)"},
+    "blink": {"A": "if(lt(sin(T*PI*2),0),0.25,1)"},
+    "heartbeat": {"A": "0.55+0.45*abs(sin(T*PI*1.2))"},
+    "jitter": {"X": "0.004*sin(T*91)", "Y": "0.004*sin(T*77)"},
+}
+
+
+def _text_exprs(t, a, b):
+    """{X,Y,A: вираз від t} для анімацій тексту, що видно в [a, b]."""
+    out = {}
+
+    def put(k, e):
+        out[k] = e if k not in out else (f"({out[k]})*({e})" if k == "A" else f"({out[k]})+({e})")
+    for slot, table, rev in (("tin", TEXT_IN, False), ("tout", TEXT_OUT, True)):
+        an = t.get(slot)
+        if not an or an.get("type") not in table:
+            continue
+        d = max(0.05, min(float(an.get("d", 0.5)), max(0.05, b - a)))
+        u = f"clip(({num(b)}-t)/{num(d)},0,1)" if rev else f"clip((t-{num(a)})/{num(d)},0,1)"
+        for k, e in table[an["type"]].items():
+            put(k, "(" + e.replace("u", "(" + u + ")") + ")")
+    lp = t.get("tloop")
+    if lp and lp.get("type") in TEXT_LOOP:
+        for k, e in TEXT_LOOP[lp["type"]].items():
+            put(k, "(" + e.replace("T", f"(t-{num(a)})") + ")")
+    return out
+
+
+def _typewriter(t):
+    an = t.get("tin") or {}
+    return an.get("type") == "typewriter"
+
+
+def drawtext(t, cw, ch, font, txtfile, t0=None, t1=None, alpha_mul=1.0, local=None):
     """drawtext для тексту t на кадрі cw×ch. [t0, t1] — коли видно (вихідний час);
-    None — завжди (статичний кадр прев'ю, тоді alpha_mul = прозорість у цей момент)."""
+    None — завжди (статичний кадр прев'ю: alpha_mul = прозорість фейдів, local = секунда
+    тексту, щоб показати анімацію в цей момент)."""
     fs = text_px(t, ch)
+    font = font_path(t.get("font")) or font
     col = t.get("color", "#ffffff").lstrip("#")
-    parts = [f"fontfile={esc(font)}", f"textfile={esc(txtfile)}", "expansion=none",
-             f"fontsize={fs}", f"fontcolor=0x{col}", f"line_spacing={max(2, fs // 6)}",
-             f"x=(w-text_w)/2{float(t['nx']):+.4f}*w", f"y=(h-text_h)/2{float(t['ny']):+.4f}*h"]
+    stc = (t.get("stroke") or "#000000").lstrip("#")
+    dur = float(t.get("dur", 3.0))
+    if t0 is None:                       # статичний кадр: виразам підставляємо час числом
+        lt = 0.0 if local is None else float(local)
+        ex = {k: num(_py(v.replace("if(", "if("), t=lt)) for k, v in _text_exprs(t, 0.0, dur).items()}
+        win = (0.0, dur, lt)
+    else:
+        ex = _text_exprs(t, float(t0), float(t1))
+        win = None
+    X = f"+({ex['X']})*w" if "X" in ex else ""
+    Y = f"+({ex['Y']})*h" if "Y" in ex else ""
+    base = [f"fontfile={esc(font)}", "expansion=none",
+            f"fontsize={fs}", f"fontcolor=0x{col}", f"line_spacing={max(2, fs // 6)}",
+            f"x='(w-text_w)/2{float(t['nx']):+.4f}*w{X}'", f"y='(h-text_h)/2{float(t['ny']):+.4f}*h{Y}'"]
     st = t.get("style", "outline")
     if st == "box":
-        parts += ["box=1", "boxcolor=black@0.55", f"boxborderw={max(4, fs // 4)}"]
+        bc = (t.get("bgc") or "#000000").lstrip("#")
+        base += ["box=1", f"boxcolor=0x{bc}@{num(t.get('bga', 0.55))}", f"boxborderw={max(4, fs // 4)}"]
     elif st == "shadow":
         sh = max(1, fs // 16)
-        parts += [f"shadowx={sh}", f"shadowy={sh}", "shadowcolor=black@0.75"]
+        base += [f"shadowx={sh}", f"shadowy={sh}", f"shadowcolor=0x{stc}@0.75"]
+    elif st == "plain":
+        pass
     else:
-        parts += [f"borderw={max(2, fs // 13)}", "bordercolor=black@0.9"]
+        base += [f"borderw={max(2, fs // 13)}", f"bordercolor=0x{stc}@0.9"]
+    A = ex.get("A")
+    alpha = None
     if t0 is not None:
         a, b = float(t0), float(t1)
-        parts.append(f"enable='between(t,{num(a)},{num(b)})'")
         fi, fo = float(t.get("fin", 0)), float(t.get("fout", 0))
+        fe = None
         if fi > 0.01 or fo > 0.01:
             fi = max(fi, 0.001)
             fo = max(fo, 0.001)
-            parts.append(f"alpha='if(lt(t,{num(a)}),0,if(lt(t,{num(a + fi)}),(t-{num(a)})/{num(fi)},"
-                         f"if(lt(t,{num(b - fo)}),1,if(lt(t,{num(b)}),({num(b)}-t)/{num(fo)},0))))'")
-    elif alpha_mul < 0.999:
-        parts.append(f"alpha={num(max(0.0, alpha_mul))}")
+            fe = (f"if(lt(t,{num(a)}),0,if(lt(t,{num(a + fi)}),(t-{num(a)})/{num(fi)},"
+                  f"if(lt(t,{num(b - fo)}),1,if(lt(t,{num(b)}),({num(b)}-t)/{num(fo)},0))))")
+        if fe and A:
+            alpha = f"({fe})*clip({A},0,1)"
+        elif fe or A:
+            alpha = fe or f"clip({A},0,1)"
+    else:
+        m = alpha_mul * (max(0.0, min(1.0, float(A))) if A else 1.0)
+        if m < 0.999:
+            alpha = num(max(0.0, m))
+    if alpha:
+        base.append(f"alpha='{alpha}'")
+    # друкарська машинка: ряд drawtext із дедалі довшим початком тексту
+    full = clean_text(t["text"])
+    if _typewriter(t) and len(full) > 1:
+        d = max(0.1, min(float(t["tin"].get("d", 1.0)), dur))
+        G = min(len(full), 30)
+        outs = []
+        for i in range(1, G + 1):
+            k = int(math.ceil(len(full) * i / G))
+            pf = os.path.splitext(txtfile)[0] + f"_tw{i}.txt"
+            with open(pf, "w", encoding="utf-8", newline="\n") as fh:
+                fh.write(full[:k])
+            if t0 is not None:
+                a, b = float(t0), float(t1)
+                s0 = a + d * (i - 1) / G
+                s1 = (a + d * i / G) if i < G else b
+                en = f"enable='between(t,{num(s0)},{num(s1)})'"
+            else:
+                lt = win[2]
+                s0, s1 = d * (i - 1) / G, (d * i / G if i < G else win[1] + 1)
+                if not (s0 <= lt < s1 or (i == 1 and lt < 0)):
+                    continue
+                en = None
+            outs.append("drawtext=" + ":".join(base + [f"textfile={esc(pf)}"] + ([en] if en else [])))
+        if outs:
+            return ",".join(outs)
+    parts = base + [f"textfile={esc(txtfile)}"]
+    if t0 is not None:
+        parts.append(f"enable='between(t,{num(float(t0))},{num(float(t1))})'")
     return "drawtext=" + ":".join(parts)
 
 
@@ -576,8 +745,9 @@ def has_anim(p):
 # (тому розрізання / обрізка кліпа не зсувають ключі). Значення — абсолютні; між ключами
 # лінійно, до першого / після останнього — значення крайнього ключа (як у CapCut).
 # Словник і списки НЕ змінюємо на місці (undo тримає копії) — лише замінюємо.
-KF_KEYS = ("zoom", "nx", "ny", "ang", "opa", "vol")
-KF_DEF = {"zoom": 1.0, "nx": 0.0, "ny": 0.0, "ang": 0.0, "opa": 1.0, "vol": 1.0}
+KF_KEYS = ("zoom", "nx", "ny", "ang", "opa", "vol", "op")
+KF_DEF = {"zoom": 1.0, "nx": 0.0, "ny": 0.0, "ang": 0.0, "opa": 1.0, "vol": 1.0, "op": 1.0}
+OVL_KF_KEYS = ("zoom", "nx", "ny", "op")
 
 
 def has_kf(p, key=None):

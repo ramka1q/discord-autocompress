@@ -622,7 +622,7 @@ class Inspector(tk.Frame):
         """Ключові кадри: ◆ у точці плейхеда, ◀ ▶ — до сусіднього ключа, очистити."""
         E, ed, P = self.E, self.ed, self.P
         self._section(E("ins_kf"))
-        on = ed._kf_at(p)
+        on = ed._kf_at()
         self._row([("\u25c6 " + (E("ins_kf_del") if on else E("ins_kf_add")), ed._kf_toggle),
                    ("\u25c0", lambda: ed._kf_jump(-1)), ("\u25b6", lambda: ed._kf_jump(1)),
                    ("\u2715 " + E("ins_kf_clear"), ed._kf_clear)])
@@ -663,6 +663,13 @@ class Inspector(tk.Frame):
             self._section(E("ins_overlay"))
             self._slider(E("ins_opacity"), 0.0, 1.0, lambda: float(p.get("op", 1.0)),
                          self._setp(p, "op"), self._pct, 1.0)
+            if len(ed.ovls) > 1 and ed.sel_ovl is not None:
+                self._section(E("ins_layer", n=ed.sel_ovl + 1, m=len(ed.ovls)))
+                self._row([("\u2912 " + E("ins_layer_top"), lambda: ed._ovl_layer(1, True)),
+                           ("\u2191 " + E("ins_layer_up"), lambda: ed._ovl_layer(1)),
+                           ("\u2193 " + E("ins_layer_down"), lambda: ed._ovl_layer(-1)),
+                           ("\u2913 " + E("ins_layer_bottom"), lambda: ed._ovl_layer(-1, True))])
+            self._keyframes(p)
             self._keymask(p)
         self._crop(p)
         self._section(E("ins_fades"))
@@ -885,9 +892,33 @@ class Inspector(tk.Frame):
         box.bind("<FocusIn>", on_focus)
         box.bind("<KeyRelease>", on_key)
         box.bind("<<Modified>>", on_modified)
+        self._section(E("ins_font"))
+        self._chips([(f, E("font_" + f)) for f in fx.fonts_available()], lambda: t.get("font") or "segoe",
+                    self._setp(t, "font", str), per_row=4)
         self._section(E("ins_style"))
         self._chips([(s, E("st_" + s)) for s in fx.TEXT_STYLES], lambda: t.get("style", "outline"),
-                    self._setp(t, "style", str), per_row=3)
+                    self._setp(t, "style", str), per_row=4)
+        self._section(E("ins_stroke_col"))
+        sw2 = Swatches(self.body, P, fx.TEXT_COLORS, lambda: t.get("stroke") or "#000000", None, self.W - 16)
+
+        def set_stroke(c):
+            ed._push_undo()
+            t["stroke"] = c
+            ed._prop_changed()
+        sw2._setf = set_stroke
+        sw2.pack(padx=4)
+        self._section(E("ins_bg_col"))
+        sw3 = Swatches(self.body, P, fx.TEXT_COLORS, lambda: t.get("bgc") or "#000000", None, self.W - 16)
+
+        def set_bg(c):
+            ed._push_undo()
+            t["bgc"] = c
+            if t.get("style") != "box":
+                t["style"] = "box"
+            ed._prop_changed()
+            self.after_idle(lambda: self.sync(force=True))
+        sw3._setf = set_bg
+        sw3.pack(padx=4)
         self._section(E("ins_color"))
         sw = Swatches(self.body, P, fx.TEXT_COLORS, lambda: t.get("color", "#ffffff"), None, self.W - 16)
 
@@ -910,6 +941,23 @@ class Inspector(tk.Frame):
                     lambda v: (t.__setitem__("ny", float(v)), t.__setitem__("nx", 0.0)), per_row=3)
         self._section(E("ins_anim"))
         self._fades(t, t["dur"])
+        for slot, table, key in (("tin", fx.TEXT_IN, "ta_in"), ("tout", fx.TEXT_OUT, "ta_out"),
+                                 ("tloop", fx.TEXT_LOOP, "ta_loop")):
+            self._section(E(key))
+
+            def setter(v, slot=slot):
+                if v is None:
+                    t.pop(slot, None)
+                else:
+                    t[slot] = {"type": v, "d": float((t.get(slot) or {}).get("d", 0.6))}
+            self._chips([(None, E("tr_none"))] + [(k, E("tan_" + k)) for k in table],
+                        (lambda slot=slot: (t.get(slot) or {}).get("type")), setter, per_row=4)
+            if slot != "tloop":
+                def set_d(v, slot=slot):
+                    if t.get(slot):
+                        t[slot] = dict(t[slot], d=float(v))
+                self._slider(E("ins_anim_d"), 0.1, 3.0, (lambda slot=slot: float((t.get(slot) or {}).get("d", 0.6))),
+                             set_d, self._sec, 0.6)
         self._row([("📄 " + E("ins_dup"), ed._txt_dup), ("🗑", ed._txt_del)])
 
     def _build_snd(self, s):
@@ -920,5 +968,9 @@ class Inspector(tk.Frame):
         self._vol_slider(s, False, s)
         self._fades(s, s["dur"])
         self._afx(s, can_speed=False)
+        self._section(E("ins_beats"))
+        self._row([("\U0001f941 " + E("ins_beats_auto"), lambda: ed._beats_detect(s)),
+                   ("\uff0b " + E("ins_beat_mark"), lambda: ed._beat_mark(s)),
+                   ("\u2715", lambda: ed._beats_clear(s))])
         self._row([("▶ " + E("ins_listen"), lambda: ed._preview_sound(s)),
                    ("🗑", lambda: ed._del_snd(ed.snds.index(s)) if s in ed.snds else None)])
