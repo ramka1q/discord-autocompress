@@ -1054,15 +1054,26 @@ def _nav_and_show(bridge, hwnd, page, tab, gen=None):
         return
     nid = f"{page}-{time.monotonic():.4f}"
     bridge.set_vis("main", True)
+    acked = lambda: nid in (getattr(bridge, "nav_acks", None) or ())
+    stale = lambda: gen is not None and gen != _MAIN.get("gen")
+    # Щойно запущене вікно ще вантажить сторінку, а вона при старті пропускає старі події —
+    # тому «nav» повторюємо, поки сторінка не підтвердить (інакше після оновлення замість
+    # «Що нового» показувалось меню у вузькому вікні «Що нового»).
     bridge.emit("nav", page=page, tab=tab or "", id=nid)
-    t0 = time.monotonic()
-    while time.monotonic() - t0 < 3.0 and nid not in (getattr(bridge, "nav_acks", None) or ()):
-        if gen is not None and gen != _MAIN.get("gen"):
+    t0 = last = time.monotonic()
+    while time.monotonic() - t0 < 3.0 and not acked():
+        if stale():
             return
+        if time.monotonic() - last > 0.4:
+            bridge.emit("nav", page=page, tab=tab or "", id=nid)
+            last = time.monotonic()
         time.sleep(0.005)
-    if gen is not None and gen != _MAIN.get("gen"):
+    if stale():
         return
     _show_main(hwnd, page)
+    while time.monotonic() - t0 < 20.0 and not acked() and not stale():   # дуже повільний ПК
+        time.sleep(0.4)
+        bridge.emit("nav", page=page, tab=tab or "", id=nid)
 
 
 def open_page(watcher, page="menu", tab=None, gallery_hwnd=None):

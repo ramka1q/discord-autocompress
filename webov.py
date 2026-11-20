@@ -11,6 +11,7 @@ webov.py — вікно стиснення (оверлей над Discord) у в
 з'являється одразу, без очікування запуску браузера.
 """
 import ctypes
+from ctypes import wintypes
 import json
 import os
 import subprocess
@@ -65,12 +66,10 @@ def _style(hwnd):
         pass
 
 
-class _RECT(ctypes.Structure):
-    _fields_ = [("l", ctypes.c_long), ("t", ctypes.c_long), ("r", ctypes.c_long), ("b", ctypes.c_long)]
-
-
-class _PT(ctypes.Structure):
-    _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+# стандартні типи wintypes: discord_overlay оголошує GetWindowRect.argtypes саме з ними,
+# і свій RECT ctypes відкидав (ArgumentError 20 разів на секунду, рамка не рахувалась)
+_RECT = wintypes.RECT
+_PT = wintypes.POINT
 
 
 def _frame(hw):
@@ -80,9 +79,9 @@ def _frame(hw):
     user32.GetWindowRect(h, ctypes.byref(wr))
     user32.GetClientRect(h, ctypes.byref(cr))
     user32.ClientToScreen(h, ctypes.byref(pt))
-    dl, dt = pt.x - wr.l, pt.y - wr.t
-    dr = (wr.r - wr.l) - cr.r - dl
-    db = (wr.b - wr.t) - cr.b - dt
+    dl, dt = pt.x - wr.left, pt.y - wr.top
+    dr = (wr.right - wr.left) - cr.right - dl
+    db = (wr.bottom - wr.top) - cr.bottom - dt
     return max(0, dl), max(0, dt), max(0, dr), max(0, db)
 
 
