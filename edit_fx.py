@@ -234,6 +234,13 @@ def pre_vf(p):
     if f:
         out.append(f)
     br, ct, sat = float(g(p, "br")), float(g(p, "ct")), float(g(p, "sat"))
+    # колір, що змінюється ключами, ставить kf_color_vf / kf_color_static (абсолютно) — тут нейтральний
+    if kf_dyn(p, "br"):
+        br = 0.0
+    if kf_dyn(p, "ct"):
+        ct = 1.0
+    if kf_dyn(p, "sat"):
+        sat = 1.0
     if abs(br) > 1e-3 or abs(ct - 1) > 1e-3 or abs(sat - 1) > 1e-3:
         out.append(f"eq=brightness={num(br)}:contrast={num(ct)}:saturation={num(sat)}")
     return ",".join(out)
@@ -745,8 +752,10 @@ def has_anim(p):
 # (тому розрізання / обрізка кліпа не зсувають ключі). Значення — абсолютні; між ключами
 # лінійно, до першого / після останнього — значення крайнього ключа (як у CapCut).
 # Словник і списки НЕ змінюємо на місці (undo тримає копії) — лише замінюємо.
-KF_KEYS = ("zoom", "nx", "ny", "ang", "opa", "vol", "op")
-KF_DEF = {"zoom": 1.0, "nx": 0.0, "ny": 0.0, "ang": 0.0, "opa": 1.0, "vol": 1.0, "op": 1.0}
+KF_KEYS = ("zoom", "nx", "ny", "ang", "opa", "vol", "op", "br", "ct", "sat", "hue")
+KF_DEF = {"zoom": 1.0, "nx": 0.0, "ny": 0.0, "ang": 0.0, "opa": 1.0, "vol": 1.0, "op": 1.0,
+          "br": 0.0, "ct": 1.0, "sat": 1.0, "hue": 0.0}
+KF_COLOR = ("br", "ct", "sat", "hue")
 OVL_KF_KEYS = ("zoom", "nx", "ny", "op")
 
 
@@ -803,9 +812,10 @@ def kf_del_at(p, ts, eps=0.02):
 
 
 def kf_expr(p, key, tsx):
-    """Вираз ffmpeg: значення key в момент tsx (вираз секунди джерела)."""
+    """Вираз ffmpeg: значення key в момент tsx (вираз секунди джерела). None — якщо ключів
+    нема або значення в них однакові (тоді статичне значення кліпа вже рівно таке саме)."""
     pts = (p.get("kf") or {}).get(key) or []
-    if not pts:
+    if not pts or len({round(float(v), 6) for _t, v in pts}) < 2:
         return None
     e = num(pts[-1][1])
     for (t0, v0), (t1, v1) in reversed(list(zip(pts, pts[1:]))):
@@ -840,6 +850,43 @@ def _kf_params(p):
     return out
 
 
+def kf_dyn(p, key):
+    """Чи значення key справді змінюється ключами (≥2 різні значення)."""
+    pts = (p.get("kf") or {}).get(key) or []
+    return len({round(float(v), 6) for _t, v in pts}) >= 2
+
+
+def _color_parts(p, val):
+    eq, out = [], []
+    for key in KF_COLOR:
+        if not kf_dyn(p, key):
+            continue
+        v = val(key)
+        if key == "br":
+            eq.append(f"brightness='clip({v},-1,1)'")
+        elif key == "ct":
+            eq.append(f"contrast='clip({v},-2,2)'")
+        elif key == "sat":
+            eq.append(f"saturation='clip({v},0,3)'")
+        else:
+            out.append(f"hue=h='{v}'")
+    if eq:
+        out.insert(0, "eq=" + ":".join(eq) + ":eval=frame")
+    return ",".join(out)
+
+
+def kf_color_vf(p, off=0.0):
+    """Колір між ключами (яскравість / контраст / насиченість / тон) — плавно, кадр за кадром,
+    абсолютними значеннями (статичний pre_vf для цих властивостей нейтральний)."""
+    tsx = f"({num(p.get('s', 0.0))}+(t+{num(off)})*{num(p.get('speed', 1.0))})"
+    return _color_parts(p, lambda k: kf_expr(p, k, tsx))
+
+
+def kf_color_static(p, ts=None):
+    """Той самий колір як сталі числа (кадр прев'ю на паузі): у секунду ts або з поточних полів."""
+    return _color_parts(p, lambda k: num(kf_val(p, k, ts) if ts is not None else float(g(p, k) or 0.0)))
+
+
 def kf_vol_af(p, off=0.0):
     """Ключі гучності -> volume з виразом (множник відносно статичної гучності кліпа)."""
     if not p or not has_kf(p, "vol"):
@@ -848,7 +895,10 @@ def kf_vol_af(p, off=0.0):
     if vb <= 0.005:
         return []
     tsx = f"({num(p.get('s', 0.0))}+(t+{num(off)})*{num(p.get('speed', 1.0))})"
-    return [f"volume=volume='max(0,{kf_expr(p, 'vol', tsx)})/{num(vb)}':eval=frame"]
+    e = kf_expr(p, "vol", tsx)
+    if not e:
+        return []
+    return [f"volume=volume='max(0,{e})/{num(vb)}':eval=frame"]
 
 
 # ------------------------------------------------- накладки: хромакей / маска -- #
@@ -911,8 +961,9 @@ def anim_vf(p, cw, ch, fps, dur, off=0.0, uid=0):
     off — з якої секунди кліпа почалось відтворення (t у графі тоді рахується від 0).
     Повертає рядок для вставки в ланцюжок через кому (може містити ; і мітки) або ''."""
     ex = _expr_params(p, dur)
+    cv = kf_color_vf(p, off) if has_kf(p) else ""
     if not ex:
-        return ""
+        return cv
     if off:
         ex = {k: v.replace("(t)", f"(t+{num(off)})").replace("clip(t/", f"clip((t+{num(off)})/")
               .replace(f"clip(({num(dur)}-t)", f"clip(({num(dur)}-(t+{num(off)}))")
@@ -941,6 +992,8 @@ def anim_vf(p, cw, ch, fps, dur, off=0.0, uid=0):
         # eq: Y' = (Y-0.5)*c + 0.5 + b.  c = F, b = 0.5F-0.5 (+B)  ->  Y' = F*Y (+B у бік білого)
         out.append(f"eq=brightness={q(f'clip(({b})+0.5*({f})-0.5,-1,1)')}:"
                    f"contrast={q(f'clip({f},0,2)')}:saturation={q(f'clip({f},0,3)')}:eval=frame")
+    if cv:
+        out.append(cv)
     return ",".join(out)
 
 

@@ -98,8 +98,16 @@
   }
   window.MoonRayLight = rayLight;
 
-  let t0 = performance.now(), last = t0, lastGlow = 0;
+  let t0 = performance.now(), last = t0, lastGlow = 0, lastDraw = 0;
+  // монітор 180 Гц давав 180 кадрів/с (~25–35% процесора й відеокарти) — тримаємо до 60,
+  // а коли вікно неактивне (ти в редакторі / Discord / грі) — стоп на останньому кадрі
+  let focused = document.hasFocus();
+  window.addEventListener("focus", () => { focused = true; kick(); });
+  window.addEventListener("blur", () => { focused = false; });
   function frame(now) {
+    if (!(running && !document.hidden && focused)) { looping = false; return; }
+    if (now - lastDraw < 1000 / 60 - 2) { requestAnimationFrame(frame); return; }
+    lastDraw = now;
     const t = (now - t0) / 1000, dt = Math.min(0.05, (now - last) / 1000); last = now;
     bass = 0.5 + 0.5 * Math.sin(t * 2.1) * Math.sin(t * 0.7);
     ctx.globalCompositeOperation = "source-over";
@@ -160,11 +168,11 @@
         el.style.setProperty("--ray", rayLight(b.left + b.width / 2, b.top + b.height / 2).toFixed(2));
       }
     }
-    if (running && !document.hidden) requestAnimationFrame(frame); else looping = false;
+    if (running && !document.hidden && focused) requestAnimationFrame(frame); else looping = false;
   }
   let running = true, looping = true;
-  function kick() { if (running && !document.hidden && !looping) { looping = true; last = performance.now(); requestAnimationFrame(frame); } }
+  function kick() { if (running && !document.hidden && focused && !looping) { looping = true; last = performance.now(); requestAnimationFrame(frame); } }
   window.MoonRun = on => { running = !!on; kick(); };       // програма: вікно сховане -> пауза
   document.addEventListener("visibilitychange", kick);
-  requestAnimationFrame(frame);
+  requestAnimationFrame(t => { lastDraw = 0; focused = true; frame(t); focused = document.hasFocus(); });   // перший кадр — завжди
 })();

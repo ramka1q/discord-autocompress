@@ -827,7 +827,7 @@ class VideoEditor(tk.Toplevel):
         self.video.bind("<Button-1>", self._video_press)
         self.video.bind("<B1-Motion>", self._video_motion)
         self.video.bind("<ButtonRelease-1>", self._video_release)
-        self.video.bind("<Double-Button-1>", lambda e: self._tf_reset())
+        self.video.bind("<Double-Button-1>", self._video_double)
         self.after(60, lambda: self._toggle_insp(True))
 
         # гарячі клавіші — по КОДУ клавіші (працюють і на укр/рус розкладці)
@@ -1301,20 +1301,16 @@ class VideoEditor(tk.Toplevel):
         return [t for t in self.texts if t["at"] - 0.001 <= mt <= t["at"] + t["dur"] + 0.001
                 and t["text"].strip()]
 
-    def _run_poster(self):
-        self._prev_after = None
-        if self.playing or self._closed:
-            return
-        if self._poster_busy:              # кадр ще рендериться -> оновимо одразу після нього
-            self._poster_dirty = True
-            return
-        t = self._pending
+    def _compose_cmd(self, t, png, skip=None, tag="p"):
+        """ffmpeg-команда кадру прев'ю (кліп + накладки + тексти в момент t).
+        skip=("clip",)|("ovl", i)|("txt", i) — без цього шару (фон для живого перетягування)."""
         piece = dict(self._sel_piece())          # заморожений стан (фоновий потік)
         src = self._src(piece)
-        self._frame_idx ^= 1
-        png = self._frames[self._frame_idx]
         cw, ch = self._pcw, self._pch
         vf = self._transform_vf(piece, cw, ch)
+        cst = fx.kf_color_static(piece, t)       # колір із ключів у цей момент
+        if cst:
+            vf += "," + cst
         # фейд кліпа в цей момент -> кадр темнішає, як у готовому відео
         cd = (piece["e"] - piece["s"]) / piece["speed"]
         fa = fx.alpha_factor((t - piece["s"]) / piece["speed"], cd,
@@ -1322,20 +1318,24 @@ class VideoEditor(tk.Toplevel):
         if fa < 0.999:
             k = fx.num(fa)
             vf += f",colorchannelmixer=rr={k}:gg={k}:bb={k}"
-        # накладки й тексти, активні на поточному монтажному часі — постер = КОМПОЗИЦІЯ
         mt = self._playhead_montage_t()
-        active = [dict(o) for o in self.ovls
-                  if o["at"] - 0.001 <= mt <= o["at"] + (o["e"] - o["s"]) + 0.001]
-        texts = [dict(x) for x in self._active_texts(mt)]
-
+        active = [(i, dict(o)) for i, o in enumerate(self.ovls)
+                  if o["at"] - 0.001 <= mt <= o["at"] + (o["e"] - o["s"]) + 0.001 and skip != ("ovl", i)]
+        texts = [dict(x) for x in self._active_texts(mt)
+                 if not (skip and skip[0] == "txt" and skip[1] < len(self.texts) and self.texts[skip[1]] is x)]
         cmd = ["ffmpeg", "-y"]
-        if src["kind"] == "image":
-            cmd += ["-i", src["path"]]
+        if skip == ("clip",):
+            col = self._bgcol().replace("0x", "#") if self._bgcol() != "black" else "black"
+            cmd += ["-f", "lavfi", "-i", f"color=c={col}:s={cw}x{ch}:d=1"]
+            fc = ["[0:v]null[b0]"]
         else:
-            cmd += ["-ss", f"{t:.3f}", "-i", src["path"]]
-        fc = [f"[0:v]{vf}[b0]"]
+            if src["kind"] == "image":
+                cmd += ["-i", src["path"]]
+            else:
+                cmd += ["-ss", f"{t:.3f}", "-i", src["path"]]
+            fc = [f"[0:v]{vf}[b0]"]
         vin = "[b0]"
-        for j, o in enumerate(active):
+        for j, (_i, o) in enumerate(active):
             osrc = self.sources[o["src"]]
             if osrc["kind"] == "image":
                 cmd += ["-i", osrc["path"]]
@@ -1348,12 +1348,152 @@ class VideoEditor(tk.Toplevel):
             fc.append(f"{vin}[o{j}]overlay={x}:{y}[b{j + 1}]")
             vin = f"[b{j + 1}]"
         for k, tx in enumerate(texts):
-            tf = fx.write_text_file(tx, self._tmp, f"p{self._frame_idx}_{k}")
+            tf = fx.write_text_file(tx, self._tmp, f"{tag}_{k}")
             a = fx.alpha_factor(mt - tx["at"], tx["dur"], tx.get("fin", 0), tx.get("fout", 0))
             fc.append(f"{vin}{fx.drawtext(tx, cw, ch, self._font, tf, alpha_mul=a, local=mt - tx['at'])}[t{k}]")
             vin = f"[t{k}]"
-        cmd += ["-filter_complex", ";".join(fc), "-map", vin, "-frames:v", "1", png]
+        return cmd + ["-filter_complex", ";".join(fc), "-map", vin, "-frames:v", "1", png]
 
+    # ---------- живе перетягування на прев'ю: шари рухаються одразу (як у CapCut) ---------- #
+    def _drag_key(self):
+        k = self._sel_kind()
+        kind = ("clip",) if (k is None or k[0] == "snd") else k
+        obj = self._tf_target()
+        look = (fx.pre_vf(obj) if "text" not in obj else obj.get("text"),
+                fx.key_mask_vf(obj) if kind[0] == "ovl" else "")
+        others = repr([(o.get("zoom"), o.get("nx"), o.get("ny"), o.get("op"), o.get("src"))
+                       for i, o in enumerate(self.ovls) if kind != ("ovl", i)])
+        others += repr([(t.get("text"), t.get("nx"), t.get("ny"), t.get("size"), t.get("color"))
+                        for t in self.texts if t is not obj])
+        return (kind, id(obj), round(self.cur, 3), round(self._playhead_montage_t(), 3),
+                self._pcw, self._pch, self._bgmode, look, others,
+                repr(sorted((k, repr(v)) for k, v in self._sel_piece().items())) if kind != ("clip",) else "")
+
+    def _drag_prep(self):
+        """У фоні: (1) кадр БЕЗ вибраного шару, (2) сам шар у розмірі «вписано» (zoom 1).
+        Під час перетягування канвас лише рухає/масштабує ці картинки — без ffmpeg."""
+        if self.playing or self._closed or not self.order:
+            return
+        try:
+            key = self._drag_key()
+        except Exception:
+            return
+        cur = getattr(self, "_dl", None)
+        if cur and cur.get("key") == key and (cur.get("ready") or cur.get("busy")):
+            return
+        kind = key[0]
+        obj = self._tf_target()
+        n = getattr(self, "_dl_n", 0) + 1
+        self._dl_n = n
+        bg = os.path.join(self._tmp, f"dl_bg{n % 2}.png")
+        sp = os.path.join(self._tmp, f"dl_sp{n % 2}.png")
+        cmds = [self._compose_cmd(self.cur, bg, skip=kind, tag=f"dl{n % 2}")]
+        fit = None
+        if kind[0] in ("clip", "ovl"):
+            src = self.sources[obj["src"]]
+            if kind[0] == "clip":
+                iw, ih = fx.eff_dims(src["w"] or self._pcw, src["h"] or self._pch, obj)
+                ts = self.cur
+            else:
+                fw, fh = fx.crop_frac(obj)
+                iw, ih = max(2, int((src["w"] or self._pcw) * fw)), max(2, int((src["h"] or self._pch) * fh))
+                ts = obj["s"] + (self._playhead_montage_t() - obj["at"])
+            f0 = min(self._pcw / float(iw), self._pch / float(ih))
+            fit = (max(2, int(iw * f0 / 2) * 2), max(2, int(ih * f0 / 2) * 2))
+            chain = [fx.pre_vf(obj)] if fx.pre_vf(obj) else []
+            chain.append(f"scale={fit[0]}:{fit[1]}")
+            if kind[0] == "ovl":
+                km = fx.key_mask_vf(obj)
+                if km:
+                    chain.append(km)
+            chain.append("format=rgba")
+            c = ["ffmpeg", "-y"]
+            if src["kind"] != "image":
+                c += ["-ss", f"{max(0.0, ts):.3f}"]
+            cmds.append(c + ["-i", src["path"], "-vf", ",".join(chain), "-frames:v", "1", sp])
+        st = self._dl = {"key": key, "busy": True, "ready": False, "fit": fit, "imgs": {}}
+
+        def work():
+            ok = True
+            for c in cmds:
+                try:
+                    if subprocess.run(c, capture_output=True, creationflags=dc_core.NO_WINDOW).returncode != 0:
+                        ok = False
+                except Exception:
+                    ok = False
+
+            def fin():
+                if getattr(self, "_dl", None) is not st:
+                    return
+                st["busy"] = False
+                if not ok:
+                    return
+                try:
+                    st["bg"] = tk.PhotoImage(file=bg)
+                    st["sp"] = tk.PhotoImage(file=sp) if fit else None
+                    st["ready"] = True
+                except tk.TclError:
+                    pass
+            self._ui(fin)
+        threading.Thread(target=work, daemon=True).start()
+
+    @staticmethod
+    def _ratio_ab(f, lim=6):
+        best = (1, 1)
+        for a in range(1, lim + 1):
+            for b in range(1, lim + 1):
+                if abs(a / b - f) < abs(best[0] / best[1] - f):
+                    best = (a, b)
+        return best
+
+    def _drag_draw(self):
+        """Кадр під час перетягування: фон без шару + сам шар на новому місці / в новому розмірі."""
+        c = self.video
+        st = getattr(self, "_dl", None)
+        c.delete("drag")
+        if not st or not st.get("ready"):
+            return False
+        ox, oy = self._screen_origin()
+        c.create_image(ox, oy, image=st["bg"], anchor="nw", tags="drag")
+        obj = self._tf_target()
+        x1, y1, x2, y2 = self._rect_of(obj)
+        if st.get("sp") is not None:
+            w0 = st["sp"].width()
+            a, b = self._ratio_ab(max(0.05, (x2 - x1) / max(1.0, w0)), lim=5)
+            img = st["imgs"].get((a, b))
+            if img is None:
+                img = st["sp"].subsample(b, b).zoom(a, a) if (a, b) != (1, 1) else st["sp"]
+                st["imgs"][(a, b)] = img
+            c.create_image((x1 + x2) / 2, (y1 + y2) / 2, image=img, tags="drag")
+        elif "text" in obj:
+            fs = fx.text_px(obj, self._pch)
+            f = (FONT, -fs, "bold")
+            cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
+            for dx, dy in ((-2, 0), (2, 0), (0, -2), (0, 2)):
+                c.create_text(cx + dx, cy + dy, text=obj["text"], font=f, fill="#000000",
+                              justify="center", tags="drag")
+            c.create_text(cx, cy, text=obj["text"], font=f, fill=obj.get("color", "#ffffff"),
+                          justify="center", tags="drag")
+        # поля навколо кадру — як у CapCut: те, що за межами, видно лише трохи
+        CW, CH = self.VW + 2 * self.VPAD, self.VH + 2 * self.VPAD
+        for r in ((0, 0, CW, oy), (0, oy + self._pch, CW, CH), (0, oy, ox, oy + self._pch),
+                  (ox + self._pcw, oy, CW, oy + self._pch)):
+            c.create_rectangle(*r, fill=C_BG, stipple="gray75", outline="", tags="drag")
+        c.tag_raise("drag")
+        c.tag_raise("tf")
+        return True
+
+    def _run_poster(self):
+        self._prev_after = None
+        if self.playing or self._closed:
+            return
+        if self._poster_busy:              # кадр ще рендериться -> оновимо одразу після нього
+            self._poster_dirty = True
+            return
+        t = self._pending
+        self._frame_idx ^= 1
+        png = self._frames[self._frame_idx]
+        cmd = self._compose_cmd(t, png, tag=f"p{self._frame_idx}")
         self._poster_busy = True
 
         def work():
@@ -1380,6 +1520,8 @@ class VideoEditor(tk.Toplevel):
             return
         try:
             self._img = tk.PhotoImage(file=png)
+            if not self._tf_drag:
+                self.video.delete("drag")
             self.video.delete("frame")
             self.video.create_image(self.VPAD + self.VW // 2, self.VPAD + self.VH // 2,
                                     image=self._img, tags="frame")
@@ -1463,6 +1605,13 @@ class VideoEditor(tk.Toplevel):
         ty = min(CH - 9, max(10, y2 + 14))
         c.create_text(CW / 2, ty, text=E("ed_tf_hint", what=what),
                       fill=C_HANDLE, font=(FONT, 8), tags="tf")
+        if not self._tf_drag:
+            if getattr(self, "_dl_after", None):
+                try:
+                    self.after_cancel(self._dl_after)
+                except Exception:
+                    pass
+            self._dl_after = self.after(250, self._drag_prep)
 
     def _preview_pick(self, x, y):
         """Що під курсором на прев'ю: ('txt', i) / ('ovl', i) / None (сам кліп)."""
@@ -1513,11 +1662,10 @@ class VideoEditor(tk.Toplevel):
                     self._draw_tfbox()
                     self._redraw()
         p = self._tf_target()
-        if not self._tf_on:
+        if not self._tf_on:               # як у CapCut: натиснув — рамка з'явилась і одразу тягнеш
             self._tf_on = True
             self._tf_drag = None
             self._draw_tfbox()
-            return
         x1, y1, x2, y2 = self._tf_rect()
         cxm, cym = (x1 + x2) / 2, (y1 + y2) / 2
         corner = None
@@ -1527,6 +1675,8 @@ class VideoEditor(tk.Toplevel):
                 break
         base = {"x": ev.x, "y": ev.y, "zoom": p["zoom"], "nx": p["nx"], "ny": p["ny"],
                 "cx": cxm, "cy": cym, "moved": False}
+        self._scr_hide()
+        self._drag_prep()
         self._tf_pushed = False
         if corner:
             base["d0"] = max(8.0, ((ev.x - cxm) ** 2 + (ev.y - cym) ** 2) ** 0.5)
@@ -1570,13 +1720,28 @@ class VideoEditor(tk.Toplevel):
                                    dash=(4, 3), tags="tf")
         if self._insp and self._insp_on:
             self._insp.refresh_values()
-        self._show_poster(self.cur)        # кадр підтягнеться (дебаунс 110мс)
+        if not self._drag_draw():          # шари ще готуються -> просто зсуваємо поточний кадр
+            try:
+                bx, by = b.setdefault("img0", tuple(self.video.coords("frame") or (0, 0)))
+                if mode == "move" and bx:
+                    self.video.coords("frame", bx + ev.x - b["x"], by + ev.y - b["y"])
+            except tk.TclError:
+                pass
+
+    def _video_double(self, ev):
+        """Подвійний клік: якщо не потягнули — скинути масштаб/позицію; потягнули — це drag."""
+        self._video_press(ev)
+        if self._tf_drag:
+            self._tf_drag[1]["dbl"] = True
 
     def _video_release(self, ev):
         if not self._tf_drag:
             return
         mode, b = self._tf_drag
         self._tf_drag = None
+        if not b["moved"] and b.get("dbl"):
+            self.video.delete("drag")
+            return self._tf_reset()
         if not b["moved"]:
             if mode == "off":
                 self._tf_on = False        # клік поза об'єктом -> сховати рамку
@@ -1883,7 +2048,7 @@ class VideoEditor(tk.Toplevel):
     def _kf_keys(self, obj):
         if any(obj is o for o in self.ovls):
             return fx.OVL_KF_KEYS
-        keys = ["zoom", "nx", "ny", "ang", "opa"]
+        keys = ["zoom", "nx", "ny", "ang", "opa", "br", "ct", "sat", "hue"]
         src = self.sources[obj["src"]]
         if src["kind"] == "video" and src["has_audio"]:
             keys.append("vol")
@@ -5168,8 +5333,11 @@ class VideoEditor(tk.Toplevel):
             if fresh:
                 m.load(src["path"], start=t, paused=True)
                 self._scr_src = src["path"]
-            if key != self._scr_key:
+            if key != self._scr_key or fx.kf_color_static(p):
                 vf = self._transform_vf(p, self._pcw, self._pch)
+                cst = fx.kf_color_static(p, t)
+                if cst:
+                    vf += "," + cst
                 try:
                     m.set("vf", f"lavfi=[{vf}]")
                 except Exception:

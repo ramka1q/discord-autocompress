@@ -10,6 +10,20 @@ changelog.py — версія програми та список змін по �
 REPO_URL = "https://github.com/ramka1q/discord-autocompress"
 
 CHANGES = [
+    {"v": "3.5.4", "date": "2026-11-20 11:23", "items": [
+        {"icon": "✋", "tab": None,
+         "uk": ("Тягнути й масштабувати — одразу", "Відео, накладка чи текст на прев'ю тепер рухаються й змінюють розмір миттєво, як у CapCut (раніше — з великою затримкою або ніяк). Натиснув і тягнеш одразу; подвійний клік без руху — скинути."),
+         "ru": ("Тянуть и масштабировать — сразу", "Видео, наложение или текст на превью теперь двигаются и меняют размер мгновенно, как в CapCut (раньше — с большой задержкой или никак). Нажал и тянешь сразу; двойной клик без движения — сбросить."),
+         "en": ("Instant drag and scale", "Video, overlays and text on the preview now move and resize instantly, like in CapCut (before: big delay or not at all). Press and drag right away; double-click without moving resets.")},
+        {"icon": "🎨", "tab": None,
+         "uk": ("Колір за ключами", "Ключові кадри ◆ тепер плавно змінюють і колір: яскравість, контраст, насиченість, тон."),
+         "ru": ("Цвет по ключам", "Ключевые кадры ◆ теперь плавно меняют и цвет: яркость, контраст, насыщенность, тон."),
+         "en": ("Color keyframes", "◆ keyframes now animate color too: brightness, contrast, saturation and hue.")},
+        {"icon": "🌙", "tab": None,
+         "uk": ("Меню не вантажить ПК", "Анімація місяця — до 60 кадрів/с і зупиняється, коли вікно меню неактивне (раніше на моніторі 180 Гц Edge брав 20–35% процесора)."),
+         "ru": ("Меню не грузит ПК", "Анимация луны — до 60 кадров/с и останавливается, когда окно меню неактивно (раньше на мониторе 180 Гц Edge брал 20–35% процессора)."),
+         "en": ("Menu no longer loads the PC", "The moon animation is capped at 60 fps and stops when the menu window is inactive (before, on a 180 Hz monitor Edge used 20–35% CPU).")},
+    ]},
     {"v": "3.5.3", "date": "2026-11-20 10:58", "items": [
         {"icon": "🏷", "tab": None,
          "uk": ("Наша назва всюди", "На панелі завдань і в меню правої кнопки тепер «Discord Auto-Compress» з нашим значком, а не «Microsoft Edge». Сповіщення теж підписані назвою програми."),
