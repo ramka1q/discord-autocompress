@@ -197,9 +197,10 @@ def auto():
     """Викликається програмою на старті: оновлюється лише за наявності маркера .autoupdate."""
     if os.path.exists(MARKER):
         try:
-            run(quiet=True)
+            return _sync(True)[1]          # скільки файлів замінено (0 — уже свіже)
         except Exception:
             pass
+    return 0
 
 
 if __name__ == "__main__":

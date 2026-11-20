@@ -1611,14 +1611,52 @@ class Watcher:
         self.root.after(2500, self._prelaunch_overlay)
         if show_news:
             self.root.after(1400, self.show_whats_new)
+        self.root.after(3000, self._heal_watch)
 
-    @staticmethod
-    def _self_heal():
+    def _self_heal(self):
+        """Фонове оновлення на старті. Нові файли приходять, коли старий код уже
+        завантажений, — тож якщо змінилась ВЕРСІЯ, програма сама перезапускається
+        (коли нічого не стискає й редактор закритий). Інакше нова версія з'являлась
+        лише після ще одного ручного перезапуску."""
         try:
             import update
-            update.auto()
+            n = update.auto() or 0
         except Exception as e:
             dc_core.dlog("self-heal update failed: " + repr(e))
+            return
+        if not n:
+            return
+        try:
+            import changelog
+            import re
+            with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "changelog.py"),
+                      encoding="utf-8") as f:
+                m = re.search(r'\{"v":\s*"([^"]+)"', f.read())
+            if m and m.group(1) != changelog.VERSION:
+                dc_core.dlog(f"self-heal: {n} files, {changelog.VERSION} -> {m.group(1)}; restart when idle")
+                self._heal_restart = time.monotonic()
+        except Exception as e:
+            dc_core.dlog("self-heal version check failed: " + repr(e))
+
+    def _heal_watch(self, tries=0):
+        """Головний потік: чекаємо прапорець від _self_heal і перезапускаємось, коли вільно."""
+        if getattr(self, "_heal_restart", None) is None:
+            if tries < 120:                         # ~4 хв після старту
+                self.root.after(2000, lambda: self._heal_watch(tries + 1))
+            return
+        busy = bool(self.overlay_open)
+        try:
+            ed = sys.modules.get("editor")
+            if ed is not None:
+                busy = busy or any(isinstance(w, ed.VideoEditor) and w.winfo_exists()
+                                   for w in self.root.winfo_children())
+        except Exception:
+            pass
+        if busy:
+            self.root.after(5000, lambda: self._heal_watch(tries))
+            return
+        dc_core.dlog("self-heal: restarting into the new version")
+        self.restart_app()
 
     @staticmethod
     def _tk_error(exc, val, tb):
