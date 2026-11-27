@@ -101,9 +101,12 @@
   let t0 = performance.now(), last = t0, lastGlow = 0, lastDraw = 0;
   // монітор 180 Гц давав 180 кадрів/с (~25–35% процесора й відеокарти) — тримаємо до 60,
   // а коли вікно неактивне (ти в редакторі / Discord / грі) — стоп на останньому кадрі
-  let focused = document.hasFocus();
+  // ЛИШЕ меню / галерея / «Що нового»: вікно стиснення ніколи не активне (воно над Discord
+  // без фокусу), тож там анімація йде завжди, поки вікно видно
+  const isOverlay = () => location.hash.slice(1).split("/")[0] === "overlay";
+  let focused = isOverlay() || document.hasFocus();
   window.addEventListener("focus", () => { focused = true; kick(); });
-  window.addEventListener("blur", () => { focused = false; });
+  window.addEventListener("blur", () => { focused = isOverlay(); });
   function frame(now) {
     if (!(running && !document.hidden && focused)) { looping = false; return; }
     if (now - lastDraw < 1000 / 60 - 2) { requestAnimationFrame(frame); return; }
@@ -174,5 +177,5 @@
   function kick() { if (running && !document.hidden && focused && !looping) { looping = true; last = performance.now(); requestAnimationFrame(frame); } }
   window.MoonRun = on => { running = !!on; kick(); };       // програма: вікно сховане -> пауза
   document.addEventListener("visibilitychange", kick);
-  requestAnimationFrame(t => { lastDraw = 0; focused = true; frame(t); focused = document.hasFocus(); });   // перший кадр — завжди
+  requestAnimationFrame(t => { lastDraw = 0; focused = true; frame(t); focused = isOverlay() || document.hasFocus(); });   // перший кадр — завжди
 })();
