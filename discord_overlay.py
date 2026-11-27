@@ -1678,6 +1678,22 @@ class Watcher:
                       encoding="utf-8") as f:
                 m = re.search(r'\{"v":\s*"([^"]+)"', f.read())
             if m and m.group(1) != changelog.VERSION:
+                # ЗАПОБІЖНИК від вічного перезапуску: лаунчер у exe на старті бере файли з кешу
+                # GitHub (до ~5 хв після пушу там стара версія) і перезаписує щойно скачане — тоді
+                # кожен запуск знову «бачив нову версію» і перезапускався по колу. Тепер — не
+                # частіше ОДНОГО разу на версію за 15 хв; далі просто працюємо до наступного старту.
+                mark = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".heal_restart")
+                try:
+                    with open(mark, encoding="utf-8") as f:
+                        prev_v, prev_t = f.read().strip().split("|")
+                    recent = prev_v == m.group(1) and time.time() - float(prev_t) < 15 * 60
+                except (OSError, ValueError):
+                    recent = False
+                if recent:
+                    dc_core.dlog(f"self-heal: {changelog.VERSION} -> {m.group(1)} already restarted once; no loop")
+                    return
+                with open(mark, "w", encoding="utf-8") as f:
+                    f.write(f"{m.group(1)}|{time.time():.0f}")
                 dc_core.dlog(f"self-heal: {n} files, {changelog.VERSION} -> {m.group(1)}; restart when idle")
                 self._heal_restart = time.monotonic()
         except Exception as e:
