@@ -247,13 +247,21 @@ class Mirror:
         try:
             sc = scene(ov)
             js = json.dumps(sc, ensure_ascii=False, sort_keys=True)
+            now = time.monotonic()
             if js != self.last:
                 self.last = js
                 self.seq += 1
                 sc["seq"] = self.seq
                 self.b.emit("ov", scene=sc)
+                self.last_emit = now
                 if not self.shown and self.first_seq is None:
-                    self.first_seq, self.first_t = self.seq, time.monotonic()
+                    self.first_seq, self.first_t = self.seq, now
+            elif getattr(self.b, "ov_ack", 0) < self.seq and now - getattr(self, "last_emit", 0.0) > 0.4:
+                # сторінка ще не підтвердила цей екран (щойно запущене вікно пропускає події,
+                # що прийшли до її старту) — шлемо його ще раз, поки не намалює
+                sc["seq"] = self.seq
+                self.b.emit("ov", scene=sc)
+                self.last_emit = now
             # показуємо ЛИШЕ коли сторінка вже намалювала цей екран (вона відповідає «готово»),
             # або через 1.5 с, якщо відповіді чомусь нема
             ready = self.first_seq is not None and (

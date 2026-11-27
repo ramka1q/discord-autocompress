@@ -428,8 +428,10 @@ async function pollLoop() {
   for (;;) {
     try { const r = await api("/api/poll?since=" + LAST_EV); LAST_EV = r.last; fails = 0; r.events.forEach(onEvent); }
     catch (e) {
-      // програму закрили або перезапустили — це вікно вже нічим не керується: закриваємось
-      if (++fails >= 3) { window.close(); return; }
+      // програму закрили — це вікно вже нічим не керується: закриваємось. Але лише після ~40 с
+      // без відповіді: раніше 3 збої поспіль (важке стиснення, сон ПК) закривали вікно стиснення
+      // назавжди, і Ctrl+V показував запасне «криве» вікно або нічого
+      if (++fails >= 40) { window.close(); return; }
       await new Promise(res => setTimeout(res, 1000));
     }
   }

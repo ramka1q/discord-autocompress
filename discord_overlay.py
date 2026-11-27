@@ -321,19 +321,24 @@ class Overlay(tk.Toplevel):
                 import webov
                 import webui
                 if webov.window(wait=0.05):
+                    self._attach_web(watcher)
+                else:
+                    # веб-вікна нема (його закрив Edge / сон ПК): запускаємо і чекаємо до 4 с,
+                    # а не показуємо одразу запасне Tk-вікно (воно виглядало «криво»)
+                    webov.prelaunch(watcher)
+                    self._web_wait = time.monotonic()
                     self.attributes("-alpha", 0.0)
                     self.geometry(f"{self.W}x{self.H}+-32000+-32000")
-                    bridge, _port = webui.start(watcher)
-                    self._mirror = webov.Mirror(self, bridge)
-                else:
-                    webov.prelaunch(watcher)          # наступного разу вже буде веб
+                    dc_core.dlog("webov: window missing on paste -> launching, waiting")
         except Exception as e:
             dc_core.dlog("webov attach fail " + repr(e))
             self._mirror = None
 
         self._show_offer()
         self._load_meta()
-        if self._mirror is None:
+        if getattr(self, "_web_wait", None):
+            self.after(100, self._await_web)
+        elif self._mirror is None:
             self._intro()
 
         # оверлей живе «поверх Discord»: ховаємо його, коли Discord згорнули або
@@ -371,6 +376,39 @@ class Overlay(tk.Toplevel):
             self.after(0, lambda: None if self._closed else fn())
         except Exception:
             pass
+
+    def _attach_web(self, watcher):
+        import webov
+        import webui
+        self.attributes("-alpha", 0.0)
+        self.geometry(f"{self.W}x{self.H}+-32000+-32000")
+        bridge, _port = webui.start(watcher)
+        self._mirror = webov.Mirror(self, bridge)
+
+    def _await_web(self):
+        """Чекаємо, поки щойно запущене веб-вікно з'явиться; не вийшло за 6 с — Tk-вікно."""
+        if self._closed or not getattr(self, "_web_wait", None):
+            return
+        try:
+            import webov
+            if webov.window(wait=0.02):
+                t0 = self._web_wait
+                self._web_wait = None
+                self._attach_web(self.watcher)
+                dc_core.dlog("webov: window ready after %.1fs" % (time.monotonic() - t0))
+                return
+        except Exception as e:
+            dc_core.dlog("webov await fail " + repr(e))
+        if time.monotonic() - self._web_wait > 6.0:
+            self._web_wait = None
+            dc_core.dlog("webov: no web window in 6 s -> Tk overlay")
+            try:
+                self.geometry(f"{self.W}x{self.H}+{self._x}+{self._y + 18}")
+            except tk.TclError:
+                return
+            self._intro()
+            return
+        self.after(100, self._await_web)
 
     def _intro(self):
         """Поява: легкий виїзд знизу + проявлення."""
@@ -1613,7 +1651,9 @@ class Watcher:
         if open_settings:
             self.root.after(200, self.open_settings)
         # веб-вікно стиснення запускаємо заздалегідь (сховане) — після Ctrl+V воно з'явиться одразу
+        self.root.after(300, self._close_stale_web)
         self.root.after(2500, self._prelaunch_overlay)
+        self.root.after(15000, self._web_watchdog)
         if show_news:
             self.root.after(1400, self.show_whats_new)
         self.root.after(3000, self._heal_watch)
@@ -1790,6 +1830,32 @@ class Watcher:
             self.quit_app()
 
     # ---- меню налаштувань ----
+    def _close_stale_web(self):
+        """Залишки веб-вікон від попереднього запуску (після збою) — закриваємо, щоб нова копія
+        не «вчепилась» у старе вікно, яке говорить з уже мертвим сервером."""
+        try:
+            import webui
+            webui.close_all()
+        except Exception as e:
+            dc_core.dlog("close stale web fail " + repr(e))
+
+    def _web_watchdog(self):
+        """Кожні 10 с: сховане веб-вікно стиснення живе? Ні (Edge закрив, сон ПК) — тихо
+        запускаємо знову, щоб Ctrl+V завжди відкривав нормальне вікно одразу."""
+        try:
+            if (themes.palette(THEME).get("mono") and self.cfg.get("web_ui", True) is not False
+                    and not self.overlay_open):
+                import webov
+                st = webov._st
+                recent = time.monotonic() - float(st.get("launched") or 0.0) < 15.0
+                if not recent and not webov._find():
+                    dc_core.dlog("watchdog: overlay web window gone -> relaunch")
+                    webov.prelaunch(self)
+                    threading.Thread(target=lambda: webov.window(wait=20), daemon=True).start()
+        except Exception as e:
+            dc_core.dlog("watchdog fail " + repr(e))
+        self.root.after(10000, self._web_watchdog)
+
     def _prelaunch_overlay(self):
         try:
             if themes.palette(THEME).get("mono") and self.cfg.get("web_ui", True) is not False:
